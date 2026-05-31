@@ -1310,9 +1310,9 @@ def detect_backend() -> str | None:
 # batched call and return a complete ``{cid: name}`` map (#1097).
 
 _LABEL_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
-_LABEL_MAX_COMMUNITIES = 200   # cap LLM-named communities; tail stays placeholder
-_LABEL_TOP_K = 12              # node labels sampled per community for the prompt
-_LABEL_MAXLEN = 60             # truncate individual labels to keep the prompt small
+_LABEL_MAX_COMMUNITIES = 200  # cap LLM-named communities; tail stays placeholder
+_LABEL_TOP_K = 12  # node labels sampled per community for the prompt
+_LABEL_MAXLEN = 60  # truncate individual labels to keep the prompt small
 
 
 def _placeholder_community_labels(communities) -> dict[int, str]:
@@ -1353,7 +1353,7 @@ def _parse_label_response(text: str, labeled_cids: list[int]) -> dict[int, str]:
     if not cleaned.startswith("{"):
         start, end = cleaned.find("{"), cleaned.rfind("}")
         if start != -1 and end > start:
-            cleaned = cleaned[start:end + 1]
+            cleaned = cleaned[start : end + 1]
     data = json.loads(cleaned)
     if not isinstance(data, dict):
         raise ValueError("label response is not a JSON object")
@@ -1390,7 +1390,7 @@ def label_communities(
     prompt = (
         "You are naming clusters in a knowledge graph. For each community below, "
         "return a concise 2-5 word plain-language name describing what it is about "
-        "(e.g. \"Order Management\", \"Payment Flow\", \"Auth Middleware\"). "
+        '(e.g. "Order Management", "Payment Flow", "Auth Middleware"). '
         "Respond ONLY with a JSON object mapping the community id (as a string) to "
         "its name - no prose, no markdown fences.\n\n" + "\n".join(lines)
     )

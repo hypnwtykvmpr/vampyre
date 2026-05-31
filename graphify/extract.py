@@ -7742,8 +7742,9 @@ def _ts_walk_class_members(
             # reusable. Without this branch interface inheritance is dropped (#1095).
             for name in _ts_heritage_clause_entries(child, source):
                 facts.uses.append(
-                    _SymbolUseFact(path, class_nid, name, "inherits", "type",
-                                   child.start_point[0] + 1)
+                    _SymbolUseFact(
+                        path, class_nid, name, "inherits", "type", child.start_point[0] + 1
+                    )
                 )
 
     body = class_node.child_by_field_name("body")
@@ -12076,16 +12077,20 @@ def extract(
             sf = n.get("source_file")
             if not sf:
                 continue
+            resolved_sf: Path | None
             try:
-                entry = prefix_remap.get(Path(sf).resolve())
-            except Exception:
+                resolved_sf = Path(sf).resolve()
+            except (OSError, RuntimeError):
+                resolved_sf = None
+            if resolved_sf is None:
                 continue
+            entry = prefix_remap.get(resolved_sf)
             if entry is None:
                 continue
             old_pref, new_pref = entry
             nid = n.get("id", "")
             if nid.startswith(old_pref + "_"):
-                new_nid = new_pref + nid[len(old_pref):]
+                new_nid = new_pref + nid[len(old_pref) :]
                 if new_nid != nid:
                     sym_remap[nid] = new_nid
         if sym_remap:

@@ -2711,12 +2711,11 @@ def main() -> None:
             # auto-name communities with the configured backend rather than leave
             # "Community N" (#1097). Degrades to placeholders if no backend/on error.
             from graphify.llm import generate_community_labels
+
             print("Labeling communities...")
             # The final labels (LLM or placeholder fallback) are persisted to
             # .graphify_labels.json by the unconditional write below.
-            labels, _ = generate_community_labels(
-                G, communities, backend=label_backend, gods=gods
-            )
+            labels, _ = generate_community_labels(G, communities, backend=label_backend, gods=gods)
         questions = suggest_questions(G, communities, labels)
         tokens = {"input": 0, "output": 0}
         from graphify.export import _git_head as _gh

@@ -29,7 +29,11 @@ def _has_symbol_edge(
     symbol: str,
     relation: str = "imports",
 ) -> bool:
-    expected = (_file_node_id(Path(source)), _make_id(_file_stem(Path(target_file)), symbol), relation)
+    expected = (
+        _file_node_id(Path(source)),
+        _make_id(_file_stem(Path(target_file)), symbol),
+        relation,
+    )
     actual = {(edge["source"], edge["target"], edge["relation"]) for edge in result["edges"]}
     return expected in actual
 

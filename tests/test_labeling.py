@@ -3,6 +3,7 @@
 Backend calls are mocked - no network. Covers the happy path, partial replies,
 malformed replies, and the no-backend fallback.
 """
+
 import networkx as nx
 import pytest
 
@@ -42,11 +43,12 @@ def test_label_communities_happy_path(monkeypatch):
 
 def test_label_communities_partial_reply_fills_placeholder(monkeypatch):
     G, communities = _graph()
-    monkeypatch.setattr("graphify.llm._call_llm",
-                        lambda p, *, backend, max_tokens=200: '{"0": "Order Management"}')
+    monkeypatch.setattr(
+        "graphify.llm._call_llm", lambda p, *, backend, max_tokens=200: '{"0": "Order Management"}'
+    )
     labels = label_communities(G, communities, backend="gemini")
     assert labels[0] == "Order Management"
-    assert labels[1] == "Community 1"   # missing cid falls back
+    assert labels[1] == "Community 1"  # missing cid falls back
 
 
 def test_label_communities_strips_code_fences(monkeypatch):
@@ -61,16 +63,16 @@ def test_label_communities_strips_code_fences(monkeypatch):
 
 def test_label_communities_malformed_raises(monkeypatch):
     G, communities = _graph()
-    monkeypatch.setattr("graphify.llm._call_llm",
-                        lambda p, *, backend, max_tokens=200: "sorry, I cannot help")
+    monkeypatch.setattr(
+        "graphify.llm._call_llm", lambda p, *, backend, max_tokens=200: "sorry, I cannot help"
+    )
     with pytest.raises(Exception):
         label_communities(G, communities, backend="gemini")
 
 
 def test_generate_community_labels_degrades_on_error(monkeypatch):
     G, communities = _graph()
-    monkeypatch.setattr("graphify.llm._call_llm",
-                        lambda p, *, backend, max_tokens=200: "not json")
+    monkeypatch.setattr("graphify.llm._call_llm", lambda p, *, backend, max_tokens=200: "not json")
     labels, source = generate_community_labels(G, communities, backend="gemini", quiet=True)
     assert source == "placeholder"
     assert labels == {0: "Community 0", 1: "Community 1"}
@@ -86,8 +88,10 @@ def test_generate_community_labels_no_backend(monkeypatch):
 
 def test_generate_community_labels_success(monkeypatch):
     G, communities = _graph()
-    monkeypatch.setattr("graphify.llm._call_llm",
-                        lambda p, *, backend, max_tokens=200: '{"0":"Orders","1":"Payments"}')
+    monkeypatch.setattr(
+        "graphify.llm._call_llm",
+        lambda p, *, backend, max_tokens=200: '{"0":"Orders","1":"Payments"}',
+    )
     labels, source = generate_community_labels(G, communities, backend="gemini", quiet=True)
     assert source == "llm"
     assert labels == {0: "Orders", 1: "Payments"}
@@ -96,8 +100,9 @@ def test_generate_community_labels_success(monkeypatch):
 def test_gods_as_dicts_do_not_crash(monkeypatch):
     """god_nodes() returns list[dict] with an 'id' key, not bare ids."""
     G, communities = _graph()
-    monkeypatch.setattr("graphify.llm._call_llm",
-                        lambda p, *, backend, max_tokens=200: '{"0":"Orders","1":"Pay"}')
+    monkeypatch.setattr(
+        "graphify.llm._call_llm", lambda p, *, backend, max_tokens=200: '{"0":"Orders","1":"Pay"}'
+    )
     gods = [{"id": "order_repo", "label": "OrderRepository"}]
     labels = label_communities(G, communities, backend="gemini", gods=gods)
     assert labels == {0: "Orders", 1: "Pay"}
