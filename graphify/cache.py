@@ -31,7 +31,7 @@ _GRAPHIFY_OUT = os.environ.get("GRAPHIFY_OUT", "graphify-out")
 # bumping CACHE_SCHEMA_VERSION forces a clean rebuild for everyone, fulfilling
 # the design-doc clause "add profile/version invalidation where graph outputs
 # can differ".
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 2
 
 # Reserved metadata key stamped into each cache entry's JSON. Chosen with
 # dunder bracketing so it cannot collide with extraction payload keys (which are
