@@ -11,6 +11,7 @@ license = { file = "LICENSE" }
 keywords = ["claude", "claude-code", "codex", "opencode", "cursor", "gemini", "aider", "kiro", "pi", "devin", "knowledge-graph", "rag", "graphrag", "obsidian", "community-detection", "tree-sitter", "leiden", "llm"]
 requires-python = ">=3.10"
 dependencies = [
+    "defusedxml",
     "networkx",
     "datasketch",
     "rapidfuzz",
