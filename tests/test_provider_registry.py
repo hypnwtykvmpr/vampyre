@@ -1,4 +1,5 @@
 import json
+import sys
 
 
 def test_custom_provider_add_list_show_remove(tmp_path, monkeypatch):
@@ -129,3 +130,56 @@ def test_detect_backend_custom_provider_after_builtins(monkeypatch):
 
     result = llm.detect_backend()
     assert result == "myprovider"
+
+
+def test_provider_cli_dispatches_from_main(tmp_path, monkeypatch, capsys):
+    """Provider subcommand must be reachable through graphify.__main__.main."""
+    providers_file = tmp_path / "providers.json"
+    providers_file.write_text("{}", encoding="utf-8")
+
+    from graphify import llm
+    from graphify.__main__ import main
+
+    monkeypatch.setattr(
+        llm,
+        "_custom_providers_path",
+        lambda global_=True: providers_file if global_ else tmp_path / "local.json",
+    )
+    monkeypatch.setattr(llm, "BACKENDS", {**llm.BACKENDS})
+
+    def run_main_success() -> None:
+        try:
+            result = main()
+        except SystemExit as exc:
+            assert exc.code in (0, None)
+        else:
+            assert result is None
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "graphify",
+            "provider",
+            "add",
+            "localtest",
+            "--base-url",
+            "http://localhost:8000/v1",
+            "--default-model",
+            "local-model",
+            "--env-key",
+            "LOCALTEST_API_KEY",
+        ],
+    )
+    run_main_success()
+
+    added = capsys.readouterr()
+    assert "Provider 'localtest' added" in added.out
+    saved = json.loads(providers_file.read_text(encoding="utf-8"))
+    assert saved["localtest"]["base_url"] == "http://localhost:8000/v1"
+
+    monkeypatch.setattr(sys, "argv", ["graphify", "provider", "list"])
+    run_main_success()
+
+    listed = capsys.readouterr()
+    assert "localtest" in listed.out

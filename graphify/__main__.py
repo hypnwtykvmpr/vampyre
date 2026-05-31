@@ -2102,7 +2102,8 @@ def main() -> None:
         else:
             print("Usage: graphify antigravity [install|uninstall]", file=sys.stderr)
             sys.exit(1)
-        _provider_cmd(sys.argv[2:])
+    elif cmd == "provider":
+        return _provider_cmd(sys.argv[2:])
     elif cmd == "prs":
         from graphify.prs import cmd_prs
 
