@@ -1604,7 +1604,8 @@ def _dynamic_import_js(
         if resolved is None:
             break
         tgt_nid, _ = resolved
-        pair = (caller_nid, tgt_nid)
+        source_location = f"L{node.start_point[0] + 1}"
+        pair = (caller_nid, tgt_nid, source_location)
         if pair not in seen_dyn_pairs:
             seen_dyn_pairs.add(pair)
             edges.append(
@@ -1615,7 +1616,7 @@ def _dynamic_import_js(
                     "context": "import",
                     "confidence": "EXTRACTED",
                     "source_file": str_path,
-                    "source_location": f"L{node.start_point[0] + 1}",
+                    "source_location": source_location,
                     "weight": 1.0,
                 }
             )
@@ -3582,7 +3583,7 @@ def _extract_generic(path: Path, config: LanguageConfig) -> dict:
         label_to_nid_ci[normalised.lower()] = n["id"]
 
     seen_call_pairs: set[tuple[str, str, str]] = set()
-    seen_dyn_import_pairs: set[tuple[str, str]] = set()
+    seen_dyn_import_pairs: set[tuple[str, str, str]] = set()
     seen_static_ref_pairs: set[tuple[str, str, str]] = set()
     seen_helper_ref_pairs: set[tuple[str, str, str]] = set()
     seen_bind_pairs: set[tuple[str, str, str]] = set()

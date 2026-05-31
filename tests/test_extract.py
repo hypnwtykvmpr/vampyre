@@ -549,6 +549,50 @@ def test_cross_file_raw_call_survives_existing_non_call_same_pair(monkeypatch, t
     ]
 
 
+def test_dynamic_import_sites_survive_multigraph_storage_and_read_surface(tmp_path):
+    loader = tmp_path / "loader.ts"
+    widget = tmp_path / "widget.ts"
+    loader.write_text(
+        "export async function loadWidget() {\n"
+        "  await import('./widget');\n"
+        "  if (Math.random()) {\n"
+        "    await import('./widget');\n"
+        "  }\n"
+        "  await import('./widget'); await import('./widget');\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    widget.write_text("export const widget = 1;\n", encoding="utf-8")
+
+    result = extract([loader, widget], cache_root=tmp_path, parallel=False)
+    node_by_label = {node["label"]: node["id"] for node in result["nodes"]}
+    caller = node_by_label["loadWidget()"]
+    target = node_by_label["widget.ts"]
+    producer_imports = [
+        edge
+        for edge in result["edges"]
+        if edge["relation"] == "imports_from"
+        and edge["source"] == caller
+        and edge["target"] == target
+    ]
+
+    # Distinct lazy-load sites are useful occurrence facts; repeated imports on
+    # the same line remain one exact duplicate.
+    assert sorted(edge["source_location"] for edge in producer_imports) == ["L2", "L4", "L6"]
+
+    assert build_from_json(result).number_of_edges(caller, target) == 1
+
+    multigraph = build_from_json(result, multigraph=True, root=tmp_path)
+    assert multigraph.number_of_edges(caller, target) == 3
+
+    out = tmp_path / "graph.json"
+    assert to_json(multigraph, {}, str(out), force=True) is True
+    reloaded = load_graph(json.loads(out.read_text(encoding="utf-8")), require_capabilities=False)
+    records = edge_records_between(reloaded, caller, target, directed_only=True)
+    assert sorted(record["source_location"] for record in records) == ["L2", "L4", "L6"]
+    assert {record["relation"] for record in records} == {"imports_from"}
+
+
 def test_cross_file_calls_skip_ambiguous_duplicate_labels(tmp_path):
     """Unqualified cross-file calls must not guess between duplicate helper names."""
     caller = tmp_path / "caller.py"
