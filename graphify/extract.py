@@ -3571,7 +3571,7 @@ def _extract_generic(path: Path, config: LanguageConfig) -> dict:
         label_to_nid[normalised] = n["id"]
         label_to_nid_ci[normalised.lower()] = n["id"]
 
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
     seen_dyn_import_pairs: set[tuple[str, str]] = set()
     seen_static_ref_pairs: set[tuple[str, str, str]] = set()
     seen_helper_ref_pairs: set[tuple[str, str, str]] = set()
@@ -3725,10 +3725,10 @@ def _extract_generic(path: Path, config: LanguageConfig) -> dict:
             if callee_name and callee_name not in _LANGUAGE_BUILTIN_GLOBALS:
                 tgt_nid = label_to_nid.get(callee_name)
                 if tgt_nid and tgt_nid != caller_nid:
-                    pair = (caller_nid, tgt_nid)
+                    line = node.start_point[0] + 1
+                    pair = (caller_nid, tgt_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
-                        line = node.start_point[0] + 1
                         edges.append(
                             {
                                 "source": caller_nid,
@@ -6112,7 +6112,7 @@ def extract_go(path: Path) -> dict:
         normalised = raw.strip("()").lstrip(".")
         label_to_nid[normalised] = n["id"]
 
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
     raw_calls: list[dict] = []
 
     def walk_calls(node, caller_nid: str) -> None:
@@ -6137,10 +6137,10 @@ def extract_go(path: Path) -> dict:
             if callee_name and callee_name not in _LANGUAGE_BUILTIN_GLOBALS:
                 tgt_nid = label_to_nid.get(callee_name)
                 if tgt_nid and tgt_nid != caller_nid:
-                    pair = (caller_nid, tgt_nid)
+                    line = node.start_point[0] + 1
+                    pair = (caller_nid, tgt_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
-                        line = node.start_point[0] + 1
                         edges.append(
                             {
                                 "source": caller_nid,
@@ -6466,7 +6466,7 @@ def extract_rust(path: Path) -> dict:
         normalised = raw.strip("()").lstrip(".")
         label_to_nid[normalised] = n["id"]
 
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
     raw_calls: list[dict] = []
 
     def walk_calls(node, caller_nid: str) -> None:
@@ -6496,10 +6496,10 @@ def extract_rust(path: Path) -> dict:
             if callee_name and callee_name not in _LANGUAGE_BUILTIN_GLOBALS:
                 tgt_nid = label_to_nid.get(callee_name)
                 if tgt_nid and tgt_nid != caller_nid:
-                    pair = (caller_nid, tgt_nid)
+                    line = node.start_point[0] + 1
+                    pair = (caller_nid, tgt_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
-                        line = node.start_point[0] + 1
                         edges.append(
                             {
                                 "source": caller_nid,
@@ -6693,7 +6693,7 @@ def extract_zig(path: Path) -> dict:
 
     walk(root)
 
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
     raw_calls: list[dict] = []
 
     def walk_calls(node, caller_nid: str) -> None:
@@ -6709,14 +6709,15 @@ def extract_zig(path: Path) -> dict:
                     (n["id"] for n in nodes if n["label"] in (f"{callee}()", f".{callee}()")), None
                 )
                 if tgt_nid and tgt_nid != caller_nid:
-                    pair = (caller_nid, tgt_nid)
+                    line = node.start_point[0] + 1
+                    pair = (caller_nid, tgt_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
                         add_edge(
                             caller_nid,
                             tgt_nid,
                             "calls",
-                            node.start_point[0] + 1,
+                            line,
                             confidence="EXTRACTED",
                             weight=1.0,
                         )
@@ -6984,7 +6985,7 @@ def extract_powershell(path: Path) -> dict:
     walk(root)
 
     label_to_nid = {n["label"].strip("()").lstrip(".").lower(): n["id"] for n in nodes}
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
     raw_calls: list[dict] = []
 
     def walk_calls(node, caller_nid: str) -> None:
@@ -6997,14 +6998,15 @@ def extract_powershell(path: Path) -> dict:
                 if cmd_text.lower() not in _PS_SKIP:
                     tgt_nid = label_to_nid.get(cmd_text.lower())
                     if tgt_nid and tgt_nid != caller_nid:
-                        pair = (caller_nid, tgt_nid)
+                        line = node.start_point[0] + 1
+                        pair = (caller_nid, tgt_nid, f"L{line}")
                         if pair not in seen_call_pairs:
                             seen_call_pairs.add(pair)
                             add_edge(
                                 caller_nid,
                                 tgt_nid,
                                 "calls",
-                                node.start_point[0] + 1,
+                                line,
                                 confidence="EXTRACTED",
                                 weight=1.0,
                             )
@@ -8666,7 +8668,7 @@ def extract_objc(path: Path) -> dict:
 
     # Second pass: resolve calls inside method bodies
     all_method_nids = {n["id"] for n in nodes if n["id"] != file_nid}
-    seen_calls: set[tuple[str, str]] = set()
+    seen_calls: set[tuple[str, str, str]] = set()
     for caller_nid, body_node in method_bodies:
 
         def walk_calls(n) -> None:
@@ -8686,14 +8688,15 @@ def extract_objc(path: Path) -> dict:
                         method_name = "".join(sel)
                         for candidate in all_method_nids:
                             if candidate.endswith(_make_id("", method_name).lstrip("_")):
-                                pair = (caller_nid, candidate)
+                                line = n.start_point[0] + 1
+                                pair = (caller_nid, candidate, f"L{line}")
                                 if pair not in seen_calls and caller_nid != candidate:
                                     seen_calls.add(pair)
                                     add_edge(
                                         caller_nid,
                                         candidate,
                                         "calls",
-                                        body_node.start_point[0] + 1,
+                                        line,
                                         confidence="EXTRACTED",
                                         weight=1.0,
                                         context="call",
@@ -8861,7 +8864,7 @@ def extract_elixir(path: Path) -> dict:
         normalised = n["label"].strip("()").lstrip(".")
         label_to_nid[normalised] = n["id"]
 
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
     raw_calls: list[dict] = []
     _SKIP_KEYWORDS = frozenset(
         {
@@ -8920,14 +8923,15 @@ def extract_elixir(path: Path) -> dict:
         if callee_name and callee_name not in _LANGUAGE_BUILTIN_GLOBALS:
             tgt_nid = label_to_nid.get(callee_name)
             if tgt_nid and tgt_nid != caller_nid:
-                pair = (caller_nid, tgt_nid)
+                line = node.start_point[0] + 1
+                pair = (caller_nid, tgt_nid, f"L{line}")
                 if pair not in seen_call_pairs:
                     seen_call_pairs.add(pair)
                     add_edge(
                         caller_nid,
                         tgt_nid,
                         "calls",
-                        node.start_point[0] + 1,
+                        line,
                         confidence="EXTRACTED",
                         weight=1.0,
                         context="call",
@@ -9372,7 +9376,7 @@ def _extract_pascal_regex(path: Path) -> dict:
     nodes: list[dict] = []
     edges: list[dict] = []
     seen_ids: set[str] = set()
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
 
     def _add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
@@ -9501,11 +9505,11 @@ def _extract_pascal_regex(path: Path) -> dict:
             callee_nid = all_procs.get(callee_name)
             if not callee_nid or callee_nid == caller_nid:
                 continue
-            pair = (caller_nid, callee_nid)
+            call_line = caller_line + body_text.count("\n", 0, cm.start())
+            pair = (caller_nid, callee_nid, f"L{call_line}")
             if pair in seen_call_pairs:
                 continue
             seen_call_pairs.add(pair)
-            call_line = caller_line + body_text.count("\n", 0, cm.start())
             _add_edge(caller_nid, callee_nid, "calls", call_line, context="call")
 
     return {"nodes": nodes, "edges": edges, "input_tokens": 0, "output_tokens": 0}
@@ -9712,7 +9716,7 @@ def extract_pascal(path: Path) -> dict:
     all_procs: dict[str, str] = {
         n["label"].removesuffix("()").lower(): n["id"] for n in nodes if n["id"] != file_nid
     }
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
 
     def walk_calls(node, caller_nid: str) -> None:  # type: ignore[no-untyped-def]
         if node.type == "exprCall":
@@ -9724,14 +9728,15 @@ def extract_pascal(path: Path) -> dict:
             if callee_text:
                 callee_nid = all_procs.get(callee_text.lower())
                 if callee_nid and callee_nid != caller_nid:
-                    pair = (caller_nid, callee_nid)
+                    line = node.start_point[0] + 1
+                    pair = (caller_nid, callee_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
                         add_edge(
                             caller_nid,
                             callee_nid,
                             "calls",
-                            node.start_point[0] + 1,
+                            line,
                             context="call",
                         )
         elif node.type == "statement":
@@ -9742,14 +9747,15 @@ def extract_pascal(path: Path) -> dict:
                 callee_text = _read(named[0])
                 callee_nid = all_procs.get(callee_text.lower())
                 if callee_nid and callee_nid != caller_nid:
-                    pair = (caller_nid, callee_nid)
+                    line = node.start_point[0] + 1
+                    pair = (caller_nid, callee_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
                         add_edge(
                             caller_nid,
                             callee_nid,
                             "calls",
-                            node.start_point[0] + 1,
+                            line,
                             context="call",
                         )
         for child in node.children:
@@ -10258,14 +10264,15 @@ def extract_bash(path: Path) -> dict:
                     # function shadowing an external (`install`, `find`, etc.).
                     if name and name in defined_functions:
                         tgt = _make_id(stem, name)
-                        key = (func_nid, tgt)
+                        line = child.start_point[0] + 1
+                        key = (func_nid, tgt, f"L{line}")
                         if tgt and key not in seen_calls:
                             seen_calls.add(key)
                             add_edge(
                                 func_nid,
                                 tgt,
                                 "calls",
-                                child.start_point[0] + 1,
+                                line,
                                 confidence="EXTRACTED",
                                 context="call",
                             )
@@ -11208,14 +11215,14 @@ def extract_dm(path: Path) -> dict:
         if label.startswith("/"):
             path_to_nids.setdefault(label.lower(), []).append(n["id"])
 
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str, str]] = set()
     raw_calls: list[dict] = []
 
     def _emit_call(caller_nid: str, callee: str, line: int, is_member: bool) -> None:
         candidates = label_to_nids.get(callee.lower(), [])
         tgt_nid = candidates[0] if len(candidates) == 1 else None
         if tgt_nid and tgt_nid != caller_nid:
-            pair = (caller_nid, tgt_nid)
+            pair = (caller_nid, tgt_nid, "calls", f"L{line}")
             if pair in seen_call_pairs:
                 return
             seen_call_pairs.add(pair)
@@ -11273,7 +11280,8 @@ def extract_dm(path: Path) -> dict:
                 candidates = path_to_nids.get(target_text.lower(), [])
                 tgt_nid = candidates[0] if len(candidates) == 1 else None
                 if tgt_nid and tgt_nid != caller_nid:
-                    pair = (caller_nid, tgt_nid)
+                    line = body_node.start_point[0] + 1
+                    pair = (caller_nid, tgt_nid, "instantiates", f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
                         edges.append(
@@ -11284,7 +11292,7 @@ def extract_dm(path: Path) -> dict:
                                 "context": "call",
                                 "confidence": "EXTRACTED",
                                 "source_file": str_path,
-                                "source_location": f"L{body_node.start_point[0] + 1}",
+                                "source_location": f"L{line}",
                                 "weight": 1.0,
                             }
                         )

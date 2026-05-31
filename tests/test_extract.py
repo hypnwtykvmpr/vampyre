@@ -1,4 +1,7 @@
+import json
 from pathlib import Path
+from graphify.build import build_from_json
+from graphify.export import to_json
 from graphify.extract import (
     extract_python,
     extract,
@@ -8,6 +11,8 @@ from graphify.extract import (
     extract_json,
     _DISPATCH,
 )
+from graphify.graph_loader import load_graph
+from graphify.projections import edge_records_between
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -323,11 +328,98 @@ def test_method_calls_module_function():
     assert (src, tgt) in calls
 
 
-def test_calls_deduplication():
-    """Same caller→callee pair must appear only once even if called multiple times."""
+def test_call_edges_are_unique_per_source_target_and_location():
     result = extract_python(FIXTURES / "sample_calls.py")
-    call_pairs = [(e["source"], e["target"]) for e in result["edges"] if e["relation"] == "calls"]
-    assert len(call_pairs) == len(set(call_pairs)), "Duplicate calls edges found"
+    call_keys = [
+        (e["source"], e["target"], e["source_location"])
+        for e in result["edges"]
+        if e["relation"] == "calls"
+    ]
+    assert len(call_keys) == len(set(call_keys)), "Duplicate call-site edges found"
+
+
+def test_python_multisite_calls_survive_multigraph_storage_and_read_surface(tmp_path):
+    source = tmp_path / "multi_site.py"
+    source.write_text(
+        "def target():\n    return 1\n\ndef caller():\n    target()\n    target()\n",
+        encoding="utf-8",
+    )
+
+    result = extract_python(source)
+    node_by_label = {node["label"]: node["id"] for node in result["nodes"]}
+    caller = node_by_label["caller()"]
+    target = node_by_label["target()"]
+    producer_calls = [
+        edge
+        for edge in result["edges"]
+        if edge["relation"] == "calls" and edge["source"] == caller and edge["target"] == target
+    ]
+
+    assert [edge["source_location"] for edge in producer_calls] == ["L5", "L6"]
+
+    simple = build_from_json(result)
+    assert simple.number_of_edges(caller, target) == 1
+
+    # Exercise the existing PR 1-9 multigraph storage/read APIs with producer
+    # output from this PR: two emitted call sites must round-trip as two records.
+    multigraph = build_from_json(result, multigraph=True)
+    assert multigraph.number_of_edges(caller, target) == 2
+
+    out = tmp_path / "graph.json"
+    assert to_json(multigraph, {}, str(out), force=True) is True
+    reloaded = load_graph(json.loads(out.read_text(encoding="utf-8")), require_capabilities=False)
+    records = edge_records_between(reloaded, caller, target, directed_only=True)
+    assert [record["source_location"] for record in records] == ["L5", "L6"]
+    assert {record["relation"] for record in records} == {"calls"}
+
+
+def test_python_same_line_repeated_call_remains_exact_duplicate_suppressed(tmp_path):
+    source = tmp_path / "same_line.py"
+    source.write_text(
+        "def target():\n    return 1\n\ndef caller():\n    target(); target()\n",
+        encoding="utf-8",
+    )
+
+    result = extract_python(source)
+    node_by_label = {node["label"]: node["id"] for node in result["nodes"]}
+    caller = node_by_label["caller()"]
+    target = node_by_label["target()"]
+    producer_calls = [
+        edge
+        for edge in result["edges"]
+        if edge["relation"] == "calls" and edge["source"] == caller and edge["target"] == target
+    ]
+
+    assert [edge["source_location"] for edge in producer_calls] == ["L5"]
+    multigraph = build_from_json(result, multigraph=True)
+    assert multigraph.number_of_edges(caller, target) == 1
+
+
+def test_cross_file_multisite_calls_remain_pair_scoped_in_this_slice(tmp_path):
+    # Cross-file raw-call resolution still has a separate pair-scoped guard.
+    # This pins the PR 10 slice boundary so the next producer-widening slice can
+    # change it deliberately instead of accidentally.
+    caller_file = tmp_path / "caller.py"
+    helper_file = tmp_path / "helper.py"
+    caller_file.write_text(
+        "from helper import target\n\ndef run():\n    target()\n    target()\n",
+        encoding="utf-8",
+    )
+    helper_file.write_text("def target():\n    return 1\n", encoding="utf-8")
+
+    result = extract([caller_file, helper_file], cache_root=tmp_path)
+    node_by_id = {node["id"]: node for node in result["nodes"]}
+    resolved_calls = [
+        edge
+        for edge in result["edges"]
+        if edge["relation"] == "calls"
+        and node_by_id[edge["source"]]["label"] == "run()"
+        and node_by_id[edge["target"]]["label"] == "target()"
+    ]
+
+    assert [(edge["source_location"], edge["confidence"]) for edge in resolved_calls] == [
+        ("L4", "EXTRACTED")
+    ]
 
 
 def test_cross_file_calls_skip_ambiguous_duplicate_labels(tmp_path):
@@ -688,6 +780,26 @@ def test_extract_bash_calls_have_extracted_confidence():
         if e["relation"] == "calls":
             assert e["confidence"] == "EXTRACTED"
             assert e.get("context") == "call"
+
+
+def test_extract_bash_multisite_calls_are_keyed_by_source_location(tmp_path):
+    script = tmp_path / "calls.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\nbuild() { :; }\ndeploy() {\n  build\n  build\n  build; build\n}\n",
+        encoding="utf-8",
+    )
+
+    result = extract_bash(script)
+    node_by_id = {node["id"]: node for node in result["nodes"]}
+    build_calls = [
+        edge
+        for edge in result["edges"]
+        if edge["relation"] == "calls"
+        and node_by_id[edge["source"]]["label"] == "deploy()"
+        and node_by_id[edge["target"]]["label"] == "build()"
+    ]
+
+    assert [edge["source_location"] for edge in build_calls] == ["L4", "L5", "L6"]
 
 
 def test_extract_bash_emits_source_imports_from(tmp_path):

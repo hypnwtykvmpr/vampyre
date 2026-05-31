@@ -151,6 +151,32 @@ def test_go_call_edges_have_call_context():
     assert all(e.get("context") == "call" for e in call_edges)
 
 
+def test_go_multisite_calls_are_keyed_by_source_location(tmp_path):
+    source = tmp_path / "multi.go"
+    source.write_text(
+        "package main\n\n"
+        "func target() {}\n\n"
+        "func caller() {\n"
+        "    target()\n"
+        "    target()\n"
+        "    target(); target()\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = extract_go(source)
+    node_by_id = {node["id"]: node for node in result["nodes"]}
+    target_calls = [
+        edge
+        for edge in result["edges"]
+        if edge["relation"] == "calls"
+        and node_by_id[edge["source"]]["label"] == "caller()"
+        and node_by_id[edge["target"]]["label"] == "target()"
+    ]
+
+    assert [edge["source_location"] for edge in target_calls] == ["L6", "L7", "L8"]
+
+
 def test_go_no_dangling_edges():
     r = extract_go(FIXTURES / "sample.go")
     node_ids = {n["id"] for n in r["nodes"]}
