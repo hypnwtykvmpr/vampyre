@@ -12189,7 +12189,11 @@ def extract(
             sf_rel = sf_path
         nid_to_file_nid[n["id"]] = _file_node_id(sf_rel)
 
-    existing_pairs = {(e["source"], e["target"]) for e in all_edges}
+    existing_pairs = {
+        (str(e["source"]), str(e["target"]), str(e.get("relation", "")))
+        for e in all_edges
+        if e.get("source") and e.get("target")
+    }
     for rc in all_raw_calls:
         callee = rc.get("callee", "")
         if not callee:
@@ -12208,8 +12212,9 @@ def extract(
             continue
         tgt = candidates[0]
         caller = rc["caller_nid"]
-        if tgt != caller and (caller, tgt) not in existing_pairs:
-            existing_pairs.add((caller, tgt))
+        call_key = (caller, tgt, "calls")
+        if tgt != caller and call_key not in existing_pairs:
+            existing_pairs.add(call_key)
             # Promote to EXTRACTED when there's a direct import edge from the
             # caller's file pointing at either the callee symbol itself or the
             # file the callee lives in.

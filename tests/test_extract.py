@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import graphify.extract as extract_module
 from graphify.build import build_from_json
 from graphify.export import to_json
 from graphify.extract import (
@@ -421,6 +422,130 @@ def test_cross_file_multisite_calls_remain_pair_scoped_in_this_slice(tmp_path):
 
     assert [(edge["source_location"], edge["confidence"]) for edge in resolved_calls] == [
         ("L4", "EXTRACTED")
+    ]
+
+
+def test_cross_file_raw_call_survives_existing_non_call_same_pair(monkeypatch, tmp_path):
+    caller_path = tmp_path / "caller.fake"
+    helper_path = tmp_path / "helper.fake"
+    caller_path.write_text("caller fixture\n", encoding="utf-8")
+    helper_path.write_text("helper fixture\n", encoding="utf-8")
+
+    def fake_get_extractor(path: Path):
+        def fake_extract(current: Path):
+            if current == caller_path:
+                return {
+                    "nodes": [
+                        {
+                            "id": "caller",
+                            "label": "caller.fake",
+                            "type": "file",
+                            "source_file": str(caller_path),
+                        },
+                        {
+                            "id": "caller_run",
+                            "label": "run()",
+                            "type": "function",
+                            "source_file": str(caller_path),
+                        },
+                    ],
+                    "edges": [
+                        {
+                            "source": "caller",
+                            "target": "caller_run",
+                            "relation": "contains",
+                            "source_file": str(caller_path),
+                            "source_location": "L1",
+                            "confidence": "EXTRACTED",
+                        },
+                        {
+                            "source": "caller",
+                            "target": "helper_target",
+                            "relation": "imports",
+                            "source_file": str(caller_path),
+                            "source_location": "L1",
+                            "confidence": "EXTRACTED",
+                        },
+                        {
+                            "source": "caller_run",
+                            "target": "helper_target",
+                            "relation": "references",
+                            "source_file": str(caller_path),
+                            "source_location": "L3",
+                            "confidence": "EXTRACTED",
+                            "context": "type_reference",
+                        },
+                    ],
+                    "raw_calls": [
+                        {
+                            "caller_nid": "caller_run",
+                            "callee": "target",
+                            "source_file": str(caller_path),
+                            "source_location": "L4",
+                            "is_member_call": False,
+                        }
+                    ],
+                }
+            return {
+                "nodes": [
+                    {
+                        "id": "helper",
+                        "label": "helper.fake",
+                        "type": "file",
+                        "source_file": str(helper_path),
+                    },
+                    {
+                        "id": "helper_target",
+                        "label": "target()",
+                        "type": "function",
+                        "source_file": str(helper_path),
+                    },
+                ],
+                "edges": [
+                    {
+                        "source": "helper",
+                        "target": "helper_target",
+                        "relation": "contains",
+                        "source_file": str(helper_path),
+                        "source_location": "L1",
+                        "confidence": "EXTRACTED",
+                    }
+                ],
+                "raw_calls": [],
+            }
+
+        return fake_extract
+
+    monkeypatch.setattr(extract_module, "_get_extractor", fake_get_extractor)
+    result = extract([caller_path, helper_path], cache_root=tmp_path, parallel=False)
+    same_pair_edges = [
+        edge
+        for edge in result["edges"]
+        if edge["source"] == "caller_run" and edge["target"] == "helper_target"
+    ]
+
+    assert [
+        (edge["relation"], edge["source_location"], edge["confidence"]) for edge in same_pair_edges
+    ] == [
+        ("references", "L3", "EXTRACTED"),
+        ("calls", "L4", "EXTRACTED"),
+    ]
+
+    multigraph = build_from_json(result, multigraph=True)
+    assert multigraph.number_of_edges("caller_run", "helper_target") == 2
+
+    out = tmp_path / "graph.json"
+    assert to_json(multigraph, {}, str(out), force=True) is True
+    reloaded = load_graph(json.loads(out.read_text(encoding="utf-8")), require_capabilities=False)
+    records = edge_records_between(
+        reloaded,
+        "caller_run",
+        "helper_target",
+        directed_only=True,
+    )
+    assert sorted((record["relation"], record["source_location"]) for record in records) == [
+        ("calls", "L4"),
+        ("references", "L3"),
     ]
 
 
