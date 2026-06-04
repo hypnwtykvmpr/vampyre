@@ -11,6 +11,7 @@ license = { file = "LICENSE" }
 keywords = ["claude", "claude-code", "codex", "opencode", "kilo", "cursor", "gemini", "aider", "kiro", "pi", "devin", "knowledge-graph", "rag", "graphrag", "obsidian", "community-detection", "tree-sitter", "leiden", "llm"]
 requires-python = ">=3.10"
 dependencies = [
+    "defusedxml",
     "networkx>=3.4",
     "numpy>=1.21",
     "rapidfuzz>=3.0",
@@ -48,7 +49,7 @@ Repository = "https://github.com/safishamsi/graphify"
 Issues = "https://github.com/safishamsi/graphify/issues"
 
 [project.optional-dependencies]
-mcp = ["mcp"]
+mcp = ["mcp", "starlette>=1.0.1"]
 neo4j = ["neo4j"]
 falkordb = ["falkordb"]
 pdf = ["pypdf", "markdownify"]
@@ -70,9 +71,13 @@ sql = ["tree-sitter-sql"]
 # tree-sitter-dm (BYOND DreamMaker) ships only a Windows wheel, so on Linux/Mac it
 # must compile from source (needs a C toolchain + python3-dev). Keeping it optional
 # avoids breaking the default `uv tool install graphifyy` for everyone (#1104).
+# Safe to make optional: extract_dm() in graphify/extract.py lazily imports
+# tree_sitter_dm inside try/except ImportError and returns an empty result with a
+# "tree-sitter-dm not installed" note, so .dm/.dme files degrade gracefully (no
+# crash) when the extra is absent. Install graphifyy[dm] (or [all]) for DM parsing.
 dm = ["tree-sitter-dm"]
 terraform = ["tree-sitter-hcl"]
-all = ["mcp", "neo4j", "falkordb", "pypdf", "markdownify", "watchdog", "graspologic; python_version < '3.13'", "python-docx", "openpyxl", "faster-whisper; python_version >= '3.11'", "yt-dlp", "matplotlib", "numpy>=2.0; python_version >= '3.13'", "openai", "tiktoken", "boto3", "anthropic", "tree-sitter-sql", "jieba", "tree-sitter-dm", "tree-sitter-hcl"]
+all = ["mcp", "starlette>=1.0.1", "neo4j", "falkordb", "pypdf", "markdownify", "watchdog", "graspologic; python_version < '3.13'", "python-docx", "openpyxl", "faster-whisper; python_version >= '3.11'", "yt-dlp", "matplotlib", "numpy>=2.0; python_version >= '3.13'", "openai", "tiktoken", "boto3", "anthropic", "tree-sitter-sql", "jieba", "tree-sitter-dm", "tree-sitter-hcl"]
 
 [project.scripts]
 graphify = "graphify.__main__:main"
