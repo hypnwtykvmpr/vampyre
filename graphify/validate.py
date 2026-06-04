@@ -7,6 +7,14 @@ REQUIRED_NODE_FIELDS = {"id", "label", "file_type", "source_file"}
 REQUIRED_EDGE_FIELDS = {"source", "target", "relation", "confidence", "source_file"}
 
 
+def is_hashable(value: object) -> bool:
+    try:
+        hash(value)
+    except TypeError:
+        return False
+    return True
+
+
 def validate_extraction(data: dict) -> list[str]:
     """
     Validate an extraction JSON dict against the graphify schema.
