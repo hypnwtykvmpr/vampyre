@@ -176,3 +176,29 @@ def test_kind_mcp_query(tmp_path, monkeypatch):
 
     rec = json.loads(log_file.read_text())
     assert rec["kind"] == "mcp_query"
+
+
+# ---------------------------------------------------------------------------
+# fork policy: opt-in (off by default)
+# ---------------------------------------------------------------------------
+
+def test_optin_off_by_default(tmp_path, monkeypatch):
+    # With no GRAPHIFY_QUERY_LOG set, nothing is logged (fork opt-in policy).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("GRAPHIFY_QUERY_LOG", raising=False)
+    monkeypatch.delenv("GRAPHIFY_QUERY_LOG_DISABLE", raising=False)
+
+    log_query(kind="query", question="q", corpus="/g.json")
+
+    assert not (tmp_path / ".cache" / "graphify-queries.log").exists()
+
+
+def test_optin_truthy_uses_default_cache(tmp_path, monkeypatch):
+    # GRAPHIFY_QUERY_LOG=1 opts in to the default ~/.cache location.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("GRAPHIFY_QUERY_LOG", "1")
+    monkeypatch.delenv("GRAPHIFY_QUERY_LOG_DISABLE", raising=False)
+
+    log_query(kind="query", question="q", corpus="/g.json")
+
+    assert (tmp_path / ".cache" / "graphify-queries.log").exists()
