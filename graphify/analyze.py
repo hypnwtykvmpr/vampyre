@@ -4,6 +4,7 @@ from pathlib import Path
 import networkx as nx
 
 from graphify.build import edge_data
+from graphify.projections import distinct_neighbor_degree, project_for_community
 
 # Builtin/mock names that can appear as annotation-derived nodes in pre-existing
 # graphs. Excluded from god-node ranking so they don't displace real abstractions
@@ -75,7 +76,7 @@ def _is_file_node(G: nx.Graph, node_id: str) -> bool:
         return True
     # Module-level function stub: labeled 'function_name()' - only has a contains edge
     # These are real functions but structurally isolated by definition; not a gap worth flagging
-    if label.endswith("()") and G.degree(node_id) <= 1:
+    if label.endswith("()") and distinct_neighbor_degree(G, node_id) <= 1:
         return True
     return False
 
@@ -103,7 +104,7 @@ def god_nodes(G: nx.Graph, top_n: int = 10) -> list[dict]:
     File-level hub nodes are excluded: they accumulate import/contains edges
     mechanically and don't represent meaningful architectural abstractions.
     """
-    degree = dict(G.degree())
+    degree = {n: distinct_neighbor_degree(G, n) for n in G.nodes()}
     sorted_nodes = sorted(degree.items(), key=lambda x: x[1], reverse=True)
     result = []
     for node_id, deg in sorted_nodes:
@@ -254,8 +255,8 @@ def _surprise_score(
         reasons.append("semantically similar concepts with no structural link")
 
     # 5. Peripheral→hub: a low-degree node connecting to a high-degree one
-    deg_u = degrees[u] if degrees is not None else G.degree(u)
-    deg_v = degrees[v] if degrees is not None else G.degree(v)
+    deg_u = degrees[u] if degrees is not None else distinct_neighbor_degree(G, u)
+    deg_v = degrees[v] if degrees is not None else distinct_neighbor_degree(G, v)
     if min(deg_u, deg_v) <= 2 and max(deg_u, deg_v) >= 5:
         score += 1
         peripheral = G.nodes[u].get("label", u) if deg_u <= 2 else G.nodes[v].get("label", v)
@@ -280,7 +281,7 @@ def _cross_file_surprises(G: nx.Graph, communities: dict[int, list[str]], top_n:
     Each result includes a 'why' field explaining what makes it non-obvious.
     """
     node_community = _node_community_map(communities)
-    degrees = dict(G.degree())
+    degrees = {n: distinct_neighbor_degree(G, n) for n in G.nodes()}
     candidates = []
 
     for u, v, data in G.edges(data=True):
@@ -346,7 +347,10 @@ def _cross_community_surprises(
             return []
         if G.number_of_nodes() > 5000:
             return []
-        betweenness = nx.edge_betweenness_centrality(G)
+        # Project to simple graph so betweenness returns 2-tuple keys
+        # and parallel edges don't inflate centrality scores.
+        simple = project_for_community(G) if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)) else G
+        betweenness = nx.edge_betweenness_centrality(simple)
         top_edges = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)[:top_n]
         result = []
         for (u, v), score in top_edges:
@@ -471,7 +475,7 @@ def suggest_questions(
                 })
 
     # 3. God nodes with many INFERRED edges → verification questions
-    degree = dict(G.degree())
+    degree = {n: distinct_neighbor_degree(G, n) for n in G.nodes()}
     top_nodes = sorted(
         [(n, d) for n, d in degree.items() if not _is_file_node(G, n)],
         key=lambda x: x[1],
@@ -504,7 +508,7 @@ def suggest_questions(
     # 4. Isolated or weakly-connected nodes → exploration questions
     isolated = [
         n for n in G.nodes()
-        if G.degree(n) <= 1 and not _is_file_node(G, n) and not _is_concept_node(G, n)
+        if distinct_neighbor_degree(G, n) <= 1 and not _is_file_node(G, n) and not _is_concept_node(G, n)
     ]
     if isolated:
         labels = [G.nodes[n].get("label", n) for n in isolated[:3]]
