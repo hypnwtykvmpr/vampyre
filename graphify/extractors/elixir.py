@@ -165,7 +165,7 @@ def extract_elixir(path: Path) -> dict:
         normalised = n["label"].strip("()").lstrip(".")
         label_to_nid[normalised] = n["id"]
 
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
     raw_calls: list[dict] = []
     _SKIP_KEYWORDS = frozenset({
         "def", "defp", "defmodule", "defmacro", "defmacrop",
@@ -203,11 +203,12 @@ def extract_elixir(path: Path) -> dict:
         if callee_name and callee_name not in _LANGUAGE_BUILTIN_GLOBALS:
             tgt_nid = label_to_nid.get(callee_name)
             if tgt_nid and tgt_nid != caller_nid:
-                pair = (caller_nid, tgt_nid)
+                line = node.start_point[0] + 1
+                pair = (caller_nid, tgt_nid, f"L{line}")
                 if pair not in seen_call_pairs:
                     seen_call_pairs.add(pair)
                     add_edge(caller_nid, tgt_nid, "calls",
-                             node.start_point[0] + 1, confidence="EXTRACTED", weight=1.0,
+                             line, confidence="EXTRACTED", weight=1.0,
                              context="call")
             else:
                 raw_calls.append({

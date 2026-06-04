@@ -2,7 +2,12 @@ import json
 import os
 from collections import Counter
 from pathlib import Path
+import graphify.extract as extract_module
+from graphify.build import build_from_json
+from graphify.export import to_json
 from graphify.extract import extract_python, extract, collect_files, _make_id, extract_bash, extract_json, _DISPATCH
+from graphify.graph_loader import load_graph
+from graphify.projections import edge_records_between
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -1659,8 +1664,6 @@ def test_dart_child_node_ids_are_stem_based(tmp_path):
         )
 
 
-
-
 def test_separator_collision_paths_get_distinct_ids(tmp_path):
     """#1522: two distinct paths whose only difference is a separator-vs-punctuation
     swap (foo/bar_baz.py vs foo_bar/baz.py) normalize to the same stem; the
@@ -1692,3 +1695,349 @@ def test_non_colliding_path_id_is_not_salted(tmp_path):
     result = extract([p], cache_root=tmp_path)
     file_id = next(n["id"] for n in result["nodes"] if n.get("source_location") == "L1")
     assert file_id == make_id(_file_stem(Path("src/auth/session.py"))) == "src_auth_session"
+
+
+# ── Multigraph producer tests (forked additions) ─────────────────────────────
+
+
+def test_call_edges_are_unique_per_source_target_and_location():
+    result = extract_python(FIXTURES / "sample_calls.py")
+    call_keys = [
+        (e["source"], e["target"], e["source_location"])
+        for e in result["edges"]
+        if e["relation"] == "calls"
+    ]
+    assert len(call_keys) == len(set(call_keys)), "Duplicate call-site edges found"
+
+
+def test_python_multisite_calls_survive_multigraph_storage_and_read_surface(tmp_path):
+    source = tmp_path / "multi_site.py"
+    source.write_text(
+        "def target():\n    return 1\n\ndef caller():\n    target()\n    target()\n",
+        encoding="utf-8",
+    )
+
+    result = extract_python(source)
+    node_by_label = {node["label"]: node["id"] for node in result["nodes"]}
+    caller = node_by_label["caller()"]
+    target = node_by_label["target()"]
+    producer_calls = [
+        edge
+        for edge in result["edges"]
+        if edge["relation"] == "calls" and edge["source"] == caller and edge["target"] == target
+    ]
+
+    # Graph semantics do not require a read-order contract for same-pair parallels;
+    # the invariant is that each distinct call site survives producer dedup.
+    assert sorted(edge["source_location"] for edge in producer_calls) == ["L5", "L6"]
+
+    simple = build_from_json(result)
+    assert simple.number_of_edges(caller, target) == 1
+
+    # Exercise the existing PR 1-9 multigraph storage/read APIs with producer
+    # output from this PR: two emitted call sites must round-trip as two records.
+    multigraph = build_from_json(result, multigraph=True)
+    assert multigraph.number_of_edges(caller, target) == 2
+
+    out = tmp_path / "graph.json"
+    assert to_json(multigraph, {}, str(out), force=True) is True
+    reloaded = load_graph(json.loads(out.read_text(encoding="utf-8")), require_capabilities=False)
+    records = edge_records_between(reloaded, caller, target, directed_only=True)
+    assert sorted(record["source_location"] for record in records) == ["L5", "L6"]
+    assert {record["relation"] for record in records} == {"calls"}
+
+
+def test_python_same_line_repeated_call_remains_exact_duplicate_suppressed(tmp_path):
+    source = tmp_path / "same_line.py"
+    source.write_text(
+        "def target():\n    return 1\n\ndef caller():\n    target(); target()\n",
+        encoding="utf-8",
+    )
+
+    result = extract_python(source)
+    node_by_label = {node["label"]: node["id"] for node in result["nodes"]}
+    caller = node_by_label["caller()"]
+    target = node_by_label["target()"]
+    producer_calls = [
+        edge
+        for edge in result["edges"]
+        if edge["relation"] == "calls" and edge["source"] == caller and edge["target"] == target
+    ]
+
+    assert [edge["source_location"] for edge in producer_calls] == ["L5"]
+    multigraph = build_from_json(result, multigraph=True)
+    assert multigraph.number_of_edges(caller, target) == 1
+
+
+def test_cross_file_multisite_calls_remain_pair_scoped_in_this_slice(tmp_path):
+    # Cross-file raw-call resolution still has a separate pair-scoped guard.
+    # This pins the PR 10 slice boundary so the next producer-widening slice can
+    # change it deliberately instead of accidentally.
+    caller_file = tmp_path / "caller.py"
+    helper_file = tmp_path / "helper.py"
+    caller_file.write_text(
+        "from helper import target\n\ndef run():\n    target()\n    target()\n",
+        encoding="utf-8",
+    )
+    helper_file.write_text("def target():\n    return 1\n", encoding="utf-8")
+
+    result = extract([caller_file, helper_file], cache_root=tmp_path)
+    node_by_id = {node["id"]: node for node in result["nodes"]}
+    resolved_calls = [
+        edge
+        for edge in result["edges"]
+        if edge["relation"] == "calls"
+        and node_by_id[edge["source"]]["label"] == "run()"
+        and node_by_id[edge["target"]]["label"] == "target()"
+    ]
+
+    assert [(edge["source_location"], edge["confidence"]) for edge in resolved_calls] == [
+        ("L4", "EXTRACTED")
+    ]
+
+
+def test_cross_file_raw_call_survives_existing_non_call_same_pair(monkeypatch, tmp_path):
+    caller_path = tmp_path / "caller.fake"
+    helper_path = tmp_path / "helper.fake"
+    caller_path.write_text("caller fixture\n", encoding="utf-8")
+    helper_path.write_text("helper fixture\n", encoding="utf-8")
+
+    def fake_get_extractor(path: Path):
+        def fake_extract(current: Path):
+            if current == caller_path:
+                return {
+                    "nodes": [
+                        {
+                            "id": "caller",
+                            "label": "caller.fake",
+                            "type": "file",
+                            "source_file": str(caller_path),
+                        },
+                        {
+                            "id": "caller_run",
+                            "label": "run()",
+                            "type": "function",
+                            "source_file": str(caller_path),
+                        },
+                    ],
+                    "edges": [
+                        {
+                            "source": "caller",
+                            "target": "caller_run",
+                            "relation": "contains",
+                            "source_file": str(caller_path),
+                            "source_location": "L1",
+                            "confidence": "EXTRACTED",
+                        },
+                        {
+                            "source": "caller",
+                            "target": "helper_target",
+                            "relation": "imports",
+                            "source_file": str(caller_path),
+                            "source_location": "L1",
+                            "confidence": "EXTRACTED",
+                        },
+                        {
+                            "source": "caller_run",
+                            "target": "helper_target",
+                            "relation": "references",
+                            "source_file": str(caller_path),
+                            "source_location": "L3",
+                            "confidence": "EXTRACTED",
+                            "context": "type_reference",
+                        },
+                    ],
+                    "raw_calls": [
+                        {
+                            "caller_nid": "caller_run",
+                            "callee": "target",
+                            "source_file": str(caller_path),
+                            "source_location": "L4",
+                            "is_member_call": False,
+                        }
+                    ],
+                }
+            return {
+                "nodes": [
+                    {
+                        "id": "helper",
+                        "label": "helper.fake",
+                        "type": "file",
+                        "source_file": str(helper_path),
+                    },
+                    {
+                        "id": "helper_target",
+                        "label": "target()",
+                        "type": "function",
+                        "source_file": str(helper_path),
+                    },
+                ],
+                "edges": [
+                    {
+                        "source": "helper",
+                        "target": "helper_target",
+                        "relation": "contains",
+                        "source_file": str(helper_path),
+                        "source_location": "L1",
+                        "confidence": "EXTRACTED",
+                    }
+                ],
+                "raw_calls": [],
+            }
+
+        return fake_extract
+
+    monkeypatch.setattr(extract_module, "_get_extractor", fake_get_extractor)
+    result = extract([caller_path, helper_path], cache_root=tmp_path, parallel=False)
+    same_pair_edges = [
+        edge
+        for edge in result["edges"]
+        if edge["source"] == "caller_run" and edge["target"] == "helper_target"
+    ]
+
+    assert [
+        (edge["relation"], edge["source_location"], edge["confidence"]) for edge in same_pair_edges
+    ] == [
+        ("references", "L3", "EXTRACTED"),
+        ("calls", "L4", "EXTRACTED"),
+    ]
+
+    multigraph = build_from_json(result, multigraph=True)
+    assert multigraph.number_of_edges("caller_run", "helper_target") == 2
+
+    out = tmp_path / "graph.json"
+    assert to_json(multigraph, {}, str(out), force=True) is True
+    reloaded = load_graph(json.loads(out.read_text(encoding="utf-8")), require_capabilities=False)
+    records = edge_records_between(
+        reloaded,
+        "caller_run",
+        "helper_target",
+        directed_only=True,
+    )
+    assert sorted((record["relation"], record["source_location"]) for record in records) == [
+        ("calls", "L4"),
+        ("references", "L3"),
+    ]
+
+
+def test_dynamic_import_sites_survive_multigraph_storage_and_read_surface(tmp_path):
+    loader = tmp_path / "loader.ts"
+    widget = tmp_path / "widget.ts"
+    loader.write_text(
+        "export async function loadWidget() {\n"
+        "  await import('./widget');\n"
+        "  if (Math.random()) {\n"
+        "    await import('./widget');\n"
+        "  }\n"
+        "  await import('./widget'); await import('./widget');\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    widget.write_text("export const widget = 1;\n", encoding="utf-8")
+
+    result = extract([loader, widget], cache_root=tmp_path, parallel=False)
+    node_by_label = {node["label"]: node["id"] for node in result["nodes"]}
+    caller = node_by_label["loadWidget()"]
+    target = node_by_label["widget.ts"]
+    producer_imports = [
+        edge
+        for edge in result["edges"]
+        if edge["relation"] == "imports_from"
+        and edge["source"] == caller
+        and edge["target"] == target
+    ]
+
+    # Distinct lazy-load sites are useful occurrence facts; repeated imports on
+    # the same line remain one exact duplicate.
+    assert sorted(edge["source_location"] for edge in producer_imports) == ["L2", "L4", "L6"]
+
+    assert build_from_json(result).number_of_edges(caller, target) == 1
+
+    multigraph = build_from_json(result, multigraph=True, root=tmp_path)
+    assert multigraph.number_of_edges(caller, target) == 3
+
+    out = tmp_path / "graph.json"
+    assert to_json(multigraph, {}, str(out), force=True) is True
+    reloaded = load_graph(json.loads(out.read_text(encoding="utf-8")), require_capabilities=False)
+    records = edge_records_between(reloaded, caller, target, directed_only=True)
+    assert sorted(record["source_location"] for record in records) == ["L2", "L4", "L6"]
+    assert {record["relation"] for record in records} == {"imports_from"}
+
+
+def test_extract_parallel_returns_false_when_pool_unavailable(tmp_path, monkeypatch, capsys):
+    """ProcessPoolExecutor setup OSErrors must fall back to sequential extraction."""
+    import concurrent.futures
+    from graphify import extract as extract_mod
+
+    def raise_permission_error(*args, **kwargs):
+        raise PermissionError("semaphore probe denied")
+
+    monkeypatch.setattr(concurrent.futures, "ProcessPoolExecutor", raise_permission_error)
+
+    uncached = [(0, FIXTURES / "sample.py")]
+    per_file: list = [None]
+
+    ok = extract_mod._extract_parallel(uncached, per_file, tmp_path, 2, 1)
+
+    assert ok is False
+    out = capsys.readouterr().out
+    assert "parallel extraction unavailable" in out
+    assert "PermissionError" in out
+    assert "falling back to sequential" in out
+
+
+def test_extract_parallel_worker_warning_handles_sparse_file_indexes(tmp_path, monkeypatch, capsys):
+    """Worker-failure warnings must not index work_items by original file index."""
+    import concurrent.futures
+    from graphify import extract as extract_mod
+
+    class FakePool:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def submit(self, fn, item):
+            future: concurrent.futures.Future = concurrent.futures.Future()
+            future.set_exception(RuntimeError("simulated worker failure"))
+            return future
+
+    monkeypatch.setattr(concurrent.futures, "ProcessPoolExecutor", lambda *a, **kw: FakePool())
+
+    source = tmp_path / "late.py"
+    source.write_text("x = 1\n", encoding="utf-8")
+    uncached = [(3, source)]
+    per_file: list = [None, None, None, None]
+
+    ok = extract_mod._extract_parallel(uncached, per_file, tmp_path, 2, 4)
+
+    assert ok is True
+    err = capsys.readouterr().err
+    assert "late.py" in err
+    assert "simulated worker failure" in err
+
+
+def test_extract_bash_multisite_calls_are_keyed_by_source_location(tmp_path):
+    script = tmp_path / "calls.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\nbuild() { :; }\ndeploy() {\n  build\n  build\n  build; build\n}\n",
+        encoding="utf-8",
+    )
+
+    result = extract_bash(script)
+    node_by_id = {node["id"]: node for node in result["nodes"]}
+    build_calls = [
+        edge
+        for edge in result["edges"]
+        if edge["relation"] == "calls"
+        and node_by_id[edge["source"]]["label"] == "deploy()"
+        and node_by_id[edge["target"]]["label"] == "build()"
+    ]
+
+    # Bash call discovery can walk shell constructs through multiple paths; this
+    # assertion is about preserving the distinct source locations, not ordering.
+    assert sorted(edge["source_location"] for edge in build_calls) == ["L4", "L5", "L6"]

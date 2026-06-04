@@ -1916,7 +1916,8 @@ def _dynamic_import_js(node, source: bytes, caller_nid: str, str_path: str, edge
         if resolved is None:
             break
         tgt_nid, _ = resolved
-        pair = (caller_nid, tgt_nid)
+        source_location = f"L{node.start_point[0] + 1}"
+        pair = (caller_nid, tgt_nid, source_location)
         if pair not in seen_dyn_pairs:
             seen_dyn_pairs.add(pair)
             edges.append({
@@ -1926,7 +1927,7 @@ def _dynamic_import_js(node, source: bytes, caller_nid: str, str_path: str, edge
                 "context": "import",
                 "confidence": "EXTRACTED",
                 "source_file": str_path,
-                "source_location": f"L{node.start_point[0] + 1}",
+                "source_location": source_location,
                 "weight": 1.0,
             })
         break
@@ -4625,9 +4626,9 @@ def _extract_generic(
         label_to_nid[normalised] = n["id"]
         label_to_nid_ci[normalised.lower()] = n["id"]
 
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
     seen_indirect_pairs: set[tuple[str, str]] = set()  # Python indirect_call dedup
-    seen_dyn_import_pairs: set[tuple[str, str]] = set()
+    seen_dyn_import_pairs: set[tuple[str, str, str]] = set()
     seen_static_ref_pairs: set[tuple[str, str, str]] = set()
     seen_helper_ref_pairs: set[tuple[str, str, str]] = set()
     seen_bind_pairs: set[tuple[str, str, str]] = set()
@@ -4670,7 +4671,10 @@ def _extract_generic(
             return
         if ref_nid == scope_nid or ref_nid not in callable_def_nids:
             return  # self-ref, or a same-named LOCAL non-callable data node — no edge
-        if (scope_nid, ref_nid) in seen_call_pairs:
+        # seen_call_pairs is line-keyed 3-tuples (multigraph parallel calls), so
+        # probe by endpoint prefix: ANY direct call to this target suppresses the
+        # weaker indirect_call regardless of which call site produced it.
+        if any(p[0] == scope_nid and p[1] == ref_nid for p in seen_call_pairs):
             return  # already a direct call to this target
         if (scope_nid, ref_nid) in seen_indirect_pairs:
             return
@@ -5014,10 +5018,10 @@ def _extract_generic(
                 else:
                     tgt_nid = label_to_nid.get(callee_name)
                 if tgt_nid and tgt_nid != caller_nid:
-                    pair = (caller_nid, tgt_nid)
+                    line = node.start_point[0] + 1
+                    pair = (caller_nid, tgt_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
-                        line = node.start_point[0] + 1
                         edges.append({
                             "source": caller_nid,
                             "target": tgt_nid,
@@ -8267,7 +8271,7 @@ def extract_go(path: Path) -> dict:
         normalised = raw.strip("()").lstrip(".")
         label_to_nid[normalised] = n["id"]
 
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
     raw_calls: list[dict] = []
 
     def walk_calls(node, caller_nid: str) -> None:
@@ -8292,10 +8296,10 @@ def extract_go(path: Path) -> dict:
             if callee_name and callee_name not in _LANGUAGE_BUILTIN_GLOBALS:
                 tgt_nid = label_to_nid.get(callee_name)
                 if tgt_nid and tgt_nid != caller_nid:
-                    pair = (caller_nid, tgt_nid)
+                    line = node.start_point[0] + 1
+                    pair = (caller_nid, tgt_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
-                        line = node.start_point[0] + 1
                         edges.append({
                             "source": caller_nid,
                             "target": tgt_nid,
@@ -8627,7 +8631,7 @@ def extract_rust(path: Path) -> dict:
         normalised = raw.strip("()").lstrip(".")
         label_to_nid[normalised] = n["id"]
 
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
     raw_calls: list[dict] = []
 
     def walk_calls(node, caller_nid: str) -> None:
@@ -8657,10 +8661,10 @@ def extract_rust(path: Path) -> dict:
             if callee_name and callee_name not in _LANGUAGE_BUILTIN_GLOBALS:
                 tgt_nid = label_to_nid.get(callee_name)
                 if tgt_nid and tgt_nid != caller_nid:
-                    pair = (caller_nid, tgt_nid)
+                    line = node.start_point[0] + 1
+                    pair = (caller_nid, tgt_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
-                        line = node.start_point[0] + 1
                         edges.append({
                             "source": caller_nid,
                             "target": tgt_nid,
@@ -8976,7 +8980,7 @@ def extract_powershell(path: Path) -> dict:
     walk(root)
 
     label_to_nid = {n["label"].strip("()").lstrip(".").lower(): n["id"] for n in nodes}
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
     raw_calls: list[dict] = []
 
     def walk_calls(node, caller_nid: str) -> None:
@@ -8989,11 +8993,12 @@ def extract_powershell(path: Path) -> dict:
                 if cmd_text.lower() not in _PS_SKIP:
                     tgt_nid = label_to_nid.get(cmd_text.lower())
                     if tgt_nid and tgt_nid != caller_nid:
-                        pair = (caller_nid, tgt_nid)
+                        line = node.start_point[0] + 1
+                        pair = (caller_nid, tgt_nid, f"L{line}")
                         if pair not in seen_call_pairs:
                             seen_call_pairs.add(pair)
                             add_edge(caller_nid, tgt_nid, "calls",
-                                     node.start_point[0] + 1,
+                                     line,
                                      confidence="EXTRACTED", weight=1.0)
                     elif cmd_text:
                         raw_calls.append({
@@ -12245,7 +12250,10 @@ def extract_objc(path: Path) -> dict:
     class_method_nids: dict[str, set[str]] = {}
     for m_nid, _, container_nid in method_bodies:
         class_method_nids.setdefault(container_nid, set()).add(m_nid)
-    seen_calls: set[tuple[str, str]] = set()
+    # Mixed key shapes by design: the selector-call path dedups per call-site line
+    # (3-tuple, multigraph parallel calls); the property/@selector paths dedup per
+    # endpoint pair (2-tuple). Shapes never cross-match, so each path self-dedups.
+    seen_calls: set[tuple[str, ...]] = set()
     # #1556: per-file `var -> ClassName` table from local declarations in every
     # method body, so the cross-file resolver can type a `[f doThing]` receiver.
     for _m_nid, body_node, _container in method_bodies:
@@ -12292,10 +12300,11 @@ def extract_objc(path: Path) -> dict:
                     needle = _make_id("", method_name).lstrip("_")
                     for candidate in all_method_nids:
                         if candidate.endswith(needle):
-                            pair = (caller_nid, candidate)
+                            line = n.start_point[0] + 1
+                            pair = (caller_nid, candidate, f"L{line}")
                             if pair not in seen_calls and caller_nid != candidate:
                                 seen_calls.add(pair)
-                                add_edge(caller_nid, candidate, "calls", n.start_point[0] + 1,
+                                add_edge(caller_nid, candidate, "calls", line,
                                          confidence="EXTRACTED", weight=1.0, context="call")
                     # #1556: also emit a raw_call so the cross-file resolver can type
                     # the receiver and link to a method in ANOTHER file. A bare
@@ -12778,7 +12787,7 @@ def _extract_pascal_regex(path: Path) -> dict:
     nodes: list[dict] = []
     edges: list[dict] = []
     seen_ids: set[str] = set()
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
 
     def _add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
@@ -12905,11 +12914,11 @@ def _extract_pascal_regex(path: Path) -> dict:
             callee_nid = all_procs.get(callee_name)
             if not callee_nid or callee_nid == caller_nid:
                 continue
-            pair = (caller_nid, callee_nid)
+            call_line = caller_line + body_text.count("\n", 0, cm.start())
+            pair = (caller_nid, callee_nid, f"L{call_line}")
             if pair in seen_call_pairs:
                 continue
             seen_call_pairs.add(pair)
-            call_line = caller_line + body_text.count("\n", 0, cm.start())
             _add_edge(caller_nid, callee_nid, "calls", call_line, context="call")
 
     return {"nodes": nodes, "edges": edges, "input_tokens": 0, "output_tokens": 0}
@@ -13103,7 +13112,7 @@ def extract_pascal(path: Path) -> dict:
         n["label"].removesuffix("()").lower(): n["id"]
         for n in nodes if n["id"] != file_nid
     }
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
 
     def walk_calls(node, caller_nid: str) -> None:  # type: ignore[no-untyped-def]
         if node.type == "exprCall":
@@ -13115,12 +13124,13 @@ def extract_pascal(path: Path) -> dict:
             if callee_text:
                 callee_nid = all_procs.get(callee_text.lower())
                 if callee_nid and callee_nid != caller_nid:
-                    pair = (caller_nid, callee_nid)
+                    line = node.start_point[0] + 1
+                    pair = (caller_nid, callee_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
                         add_edge(
                             caller_nid, callee_nid, "calls",
-                            node.start_point[0] + 1, context="call",
+                            line, context="call",
                         )
         elif node.type == "statement":
             # Pascal bare procedure calls with no args: `Reset;`
@@ -13130,12 +13140,13 @@ def extract_pascal(path: Path) -> dict:
                 callee_text = _read(named[0])
                 callee_nid = all_procs.get(callee_text.lower())
                 if callee_nid and callee_nid != caller_nid:
-                    pair = (caller_nid, callee_nid)
+                    line = node.start_point[0] + 1
+                    pair = (caller_nid, callee_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
                         add_edge(
                             caller_nid, callee_nid, "calls",
-                            node.start_point[0] + 1, context="call",
+                            line, context="call",
                         )
         for child in node.children:
             walk_calls(child, caller_nid)
@@ -13586,11 +13597,12 @@ def extract_bash(path: Path) -> dict:
                     # function shadowing an external (`install`, `find`, etc.).
                     if name and name in defined_functions:
                         tgt = _make_id(stem, name)
-                        key = (func_nid, tgt)
+                        line = child.start_point[0] + 1
+                        key = (func_nid, tgt, f"L{line}")
                         if tgt and key not in seen_calls:
                             seen_calls.add(key)
                             add_edge(func_nid, tgt, "calls",
-                                     child.start_point[0] + 1,
+                                     line,
                                      confidence="EXTRACTED", context="call")
             walk_calls(child, func_nid, seen_calls)
 
@@ -14958,14 +14970,14 @@ def extract_dm(path: Path) -> dict:
         if label.startswith("/"):
             path_to_nids.setdefault(label.lower(), []).append(n["id"])
 
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str, str]] = set()
     raw_calls: list[dict] = []
 
     def _emit_call(caller_nid: str, callee: str, line: int, is_member: bool) -> None:
         candidates = label_to_nids.get(callee.lower(), [])
         tgt_nid = candidates[0] if len(candidates) == 1 else None
         if tgt_nid and tgt_nid != caller_nid:
-            pair = (caller_nid, tgt_nid)
+            pair = (caller_nid, tgt_nid, "calls", f"L{line}")
             if pair in seen_call_pairs:
                 return
             seen_call_pairs.add(pair)
@@ -15009,14 +15021,15 @@ def extract_dm(path: Path) -> dict:
                 candidates = path_to_nids.get(target_text.lower(), [])
                 tgt_nid = candidates[0] if len(candidates) == 1 else None
                 if tgt_nid and tgt_nid != caller_nid:
-                    pair = (caller_nid, tgt_nid)
+                    line = body_node.start_point[0] + 1
+                    pair = (caller_nid, tgt_nid, "instantiates", f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
                         edges.append({
                             "source": caller_nid, "target": tgt_nid,
                             "relation": "instantiates", "context": "call",
                             "confidence": "EXTRACTED", "source_file": str_path,
-                            "source_location": f"L{body_node.start_point[0] + 1}",
+                            "source_location": f"L{line}",
                             "weight": 1.0,
                         })
         for child in body_node.children:
@@ -15783,6 +15796,18 @@ def _extract_parallel(
             flush=True,
         )
         return False
+    except OSError as exc:
+        # Some restricted runtimes block the semaphore/system-limit probes that
+        # ProcessPoolExecutor performs while starting. That is recoverable for
+        # extraction: fall back to in-process sequential extraction instead of
+        # failing the whole pipeline.
+        print(
+            f"  warning: parallel extraction unavailable ({exc.__class__.__name__}: {exc}); "
+            "falling back to sequential. Pass parallel=False to extract() to skip the pool "
+            "entirely.",
+            flush=True,
+        )
+        return False
     if total_files >= _PROGRESS_INTERVAL:
         print(
             f"  AST extraction: {total_files}/{total_files} files (100%) [{max_workers} workers]",
@@ -16151,7 +16176,11 @@ def extract(
             sf_rel = sf_path
         nid_to_file_nid[n["id"]] = _file_node_id(sf_rel)
 
-    existing_pairs = {(e["source"], e["target"]) for e in all_edges}
+    existing_pairs = {
+        (str(e["source"]), str(e["target"]), str(e.get("relation", "")))
+        for e in all_edges
+        if e.get("source") and e.get("target")
+    }
     # Call-like pairs only, for the indirect_call dedup: an `imports` edge from a
     # file to the symbol it imports is EXPECTED and must not suppress an
     # indirect_call to that same symbol (JS/TS named imports create such an edge).
@@ -16256,8 +16285,9 @@ def extract(
                     "weight": 1.0,
                 })
             continue
-        if tgt != caller and (caller, tgt) not in existing_pairs:
-            existing_pairs.add((caller, tgt))
+        call_key = (caller, tgt, "calls")
+        if tgt != caller and call_key not in existing_pairs:
+            existing_pairs.add(call_key)
             # Promote to EXTRACTED when there's a direct import edge from the
             # caller's file pointing at either the callee symbol itself or the
             # file the callee lives in.

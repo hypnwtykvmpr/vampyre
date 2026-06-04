@@ -135,7 +135,7 @@ def extract_zig(path: Path) -> dict:
 
     walk(root)
 
-    seen_call_pairs: set[tuple[str, str]] = set()
+    seen_call_pairs: set[tuple[str, str, str]] = set()
     raw_calls: list[dict] = []
 
     def walk_calls(node, caller_nid: str) -> None:
@@ -150,11 +150,12 @@ def extract_zig(path: Path) -> dict:
                 tgt_nid = next((n["id"] for n in nodes if n["label"] in
                                 (f"{callee}()", f".{callee}()")), None)
                 if tgt_nid and tgt_nid != caller_nid:
-                    pair = (caller_nid, tgt_nid)
+                    line = node.start_point[0] + 1
+                    pair = (caller_nid, tgt_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
                         add_edge(caller_nid, tgt_nid, "calls",
-                                 node.start_point[0] + 1,
+                                 line,
                                  confidence="EXTRACTED", weight=1.0)
                 elif callee:
                     raw_calls.append({
