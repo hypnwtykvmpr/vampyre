@@ -5,7 +5,10 @@ import inspect
 import io
 import json
 import sys
+import warnings
 import networkx as nx
+
+from graphify.projections import project_for_community
 
 
 def _suppress_output():
@@ -17,6 +20,25 @@ def _suppress_output():
     the call prevents this without losing any graphify output.
     """
     return contextlib.redirect_stdout(io.StringIO())
+
+
+@contextlib.contextmanager
+def _suppress_graspologic_dependency_warnings():
+    """Suppress known optional-dependency deprecations emitted by graspologic imports."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"Please import `random` from the `scipy\.sparse` namespace.*",
+            category=DeprecationWarning,
+            module=r"hyppo\.independence\.hhg",
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message=r"The keyword argument 'nopython=False' was supplied.*",
+            category=Warning,
+            module=r"numba\.core\.decorators",
+        )
+        yield
 
 
 def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
@@ -45,7 +67,9 @@ def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
         stable.add_edge(src, tgt, **attrs)
 
     try:
-        from graspologic.partition import leiden
+        with _suppress_graspologic_dependency_warnings():
+            from graspologic.partition import leiden
+
         lsig = inspect.signature(leiden).parameters
         kwargs: dict = {}
         if "random_seed" in lsig:
@@ -59,12 +83,15 @@ def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
         old_stderr = sys.stderr
         try:
             sys.stderr = io.StringIO()
-            with _suppress_output():
+            with _suppress_graspologic_dependency_warnings(), _suppress_output():
                 result = leiden(stable, **kwargs)
         finally:
             sys.stderr = old_stderr
         return result
-    except ImportError:
+    # graspologic has shipped releases that fail to import on some Python
+    # versions with a SyntaxError (not only absence -> ImportError); treat both
+    # as 'leiden unavailable' and fall back to networkx Louvain below.
+    except (ImportError, SyntaxError):
         pass
 
     # Fallback: networkx louvain (available since networkx 2.7).
@@ -154,7 +181,11 @@ def cluster(
     """
     if G.number_of_nodes() == 0:
         return {}
-    if G.is_directed():
+    # Project multigraphs to simple undirected graph so parallel edges
+    # don't inflate Louvain/Leiden community detection.
+    if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)):
+        G = project_for_community(G)
+    elif G.is_directed():
         G = G.to_undirected()
     if G.number_of_edges() == 0:
         return {i: [n] for i, n in enumerate(sorted(G.nodes))}
@@ -260,6 +291,9 @@ def cohesion_score(G: nx.Graph, community_nodes: list[str]) -> float:
     if n <= 1:
         return 1.0
     subgraph = G.subgraph(community_nodes)
+    # Project multigraphs to simple graph so parallel edges don't inflate cohesion
+    if isinstance(subgraph, (nx.MultiGraph, nx.MultiDiGraph)):
+        subgraph = project_for_community(subgraph)
     actual = subgraph.number_of_edges()
     possible = n * (n - 1) / 2
     return actual / possible if possible > 0 else 0.0
