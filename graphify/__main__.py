@@ -91,6 +91,50 @@ def _enforce_graph_size_cap_or_exit(gp: Path) -> None:
         sys.exit(1)
 
 
+def _backup_merge_target(target: Path) -> "Path | None":
+    """Snapshot an existing merge target to a dated ``.bak`` sibling before overwrite.
+
+    Mirrors :func:`graphify.global_graph.backup_global_graph`'s dated-snapshot
+    contract, parameterized for an arbitrary merge output path (the merge-driver
+    writes to ``current``; ``merge-graphs`` writes to ``--out``). Neither of the
+    existing backup helpers fits here: ``export.backup_if_protected`` keys off a
+    ``graphify-out`` layout (semantic marker / curated labels) and
+    ``backup_global_graph`` is hard-wired to the global-graph path.
+
+    The backup is written next to *target* as ``<stem>.<YYYY-MM-DD>.bak``.
+    Idempotent within a day — identical content is not re-copied; a changed
+    target refreshes the same-day snapshot in place (one backup per day, always
+    the latest pre-overwrite state). Returns the backup path, or None when there
+    is nothing to back up (target absent) or backups are disabled via
+    ``GRAPHIFY_NO_BACKUP``. Never raises: a backup failure prints a warning and
+    returns None so it can never block the write it protects.
+    """
+    import hashlib
+    from datetime import date
+
+    if os.environ.get("GRAPHIFY_NO_BACKUP"):
+        return None
+    if not target.exists():
+        return None
+
+    today = date.today().isoformat()
+    backup_path = target.with_name(f"{target.stem}.{today}.bak")
+    try:
+        if backup_path.exists():
+            src_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+            bak_hash = hashlib.sha256(backup_path.read_bytes()).hexdigest()
+            if src_hash == bak_hash:
+                return backup_path  # identical content, nothing to do
+        shutil.copy2(target, backup_path)
+        return backup_path
+    except Exception as exc:
+        print(
+            f"[graphify merge] warning: backup failed ({exc}) — continuing with overwrite",
+            file=sys.stderr,
+        )
+        return None
+
+
 def _check_skill_version(skill_dst: Path) -> None:
     """Warn if the installed skill is from an older graphify version."""
     version_file = skill_dst.parent / ".graphify_version"
@@ -1961,7 +2005,7 @@ def main() -> None:
         print("    --extract-path PATH     extractor source for suppression scan")
         print("  clone <github-url>      clone a GitHub repo locally and print its path for /graphify")
         print("  merge-driver <base> <current> <other>  git merge driver: union-merge two graph.json files (set up via hook install)")
-        print("  merge-graphs <g1> <g2>  merge two or more graph.json files into one cross-repo graph")
+        print("  merge-graphs <g1> <g2> [--multigraph|--simple]  merge two or more graph.json files into one cross-repo graph")
         print("    --out <path>            output path (default: graphify-out/merged-graph.json)")
         print("    --branch <branch>       checkout a specific branch (default: repo default)")
         print("    --out <dir>             clone to a custom directory (default: ~/.graphify/repos/<owner>/<repo>)")
@@ -1971,6 +2015,7 @@ def main() -> None:
         print("    --dir <path>            target directory (default: ./raw)")
         print("  watch <path>            watch a folder and rebuild the graph on code changes")
         print("  update <path>           re-extract code files and update the graph (no LLM needed)")
+        print("                            (inherits the existing graph.json profile — a multigraph stays a multigraph)")
         print("    --force                 overwrite graph.json even if the rebuild has fewer nodes")
         print("                            (also: GRAPHIFY_FORCE=1 env var; use after refactors that delete code)")
         print("    --no-cluster            skip clustering, write raw extraction only")
@@ -2017,6 +2062,9 @@ def main() -> None:
         print("    --out DIR               output dir (default: <path>); writes <DIR>/graphify-out/")
         print("    --google-workspace      export .gdoc/.gsheet/.gslides shortcuts via gws before extraction")
         print("    --no-cluster            skip clustering, write raw extraction only")
+        print("    --multigraph            build a keyed MultiDiGraph (preserves parallel edges between the same pair)")
+        print("    --simple                force a simple graph even over an existing multigraph (lossy downgrade)")
+        print("                            (default: STICKY — inherit the existing graph.json profile)")
         print("    --global                also merge the resulting graph into the global graph")
         print("    --as <tag>              repo tag for --global (default: target directory name)")
         print("  global add <graph.json>  add/update a project graph in the global graph (~/.graphify/global-graph.json)")
@@ -2714,24 +2762,42 @@ def main() -> None:
         hops = len(path_nodes) - 1
         segments = []
         from graphify.build import edge_data
+        from graphify.projections import (
+            format_relationship_envelope,
+            relationship_envelope,
+        )
+
         for i in range(len(path_nodes) - 1):
             u, v = path_nodes[i], path_nodes[i + 1]
             # Check which direction the stored edge points.
             if G.has_edge(u, v):
-                edata = edge_data(G, u, v)
                 forward = True
+                src, tgt = u, v
             else:
-                edata = edge_data(G, v, u)
                 forward = False
-            rel = edata.get("relation", "")
-            conf = edata.get("confidence", "")
-            conf_str = f" [{conf}]" if conf else ""
+                src, tgt = v, u
+            # Bundle every parallel relationship on this hop so a MultiDiGraph
+            # never silently shows only the first edge (#PR5 go/no-go gate).
+            # directed_only=True isolates this hop's stored direction (src->tgt)
+            # so a reverse edge (tgt->src) never bleeds into the arrow's bundle.
+            env = relationship_envelope(G, src, tgt, directed_only=True)
+            if len(env["relations"]) > 1:
+                # Multiple parallel relations: render the capped bundle; the
+                # envelope omits per-relation confidence for stability.
+                rel_str = format_relationship_envelope(G, src, tgt, directed_only=True)
+            else:
+                # Single relation (always true for simple DiGraph/Graph): keep
+                # the historical "rel [CONFIDENCE]" form byte-for-byte stable.
+                edata = edge_data(G, src, tgt)
+                rel = edata.get("relation", "")
+                conf = edata.get("confidence", "")
+                rel_str = f"{rel} [{conf}]" if conf else rel
             if i == 0:
                 segments.append(G.nodes[u].get("label", u))
             if forward:
-                segments.append(f"--{rel}{conf_str}--> {G.nodes[v].get('label', v)}")
+                segments.append(f"--{rel_str}--> {G.nodes[v].get('label', v)}")
             else:
-                segments.append(f"<--{rel}{conf_str}-- {G.nodes[v].get('label', v)}")
+                segments.append(f"<--{rel_str}-- {G.nodes[v].get('label', v)}")
         print(f"Shortest path ({hops} hops):\n  " + " ".join(segments))
         from graphify import querylog
         querylog.log_query(
@@ -2783,19 +2849,42 @@ def main() -> None:
         print(f"  Community: {d.get('community', '')}")
         print(f"  Degree:    {G.degree(nid)}")
         from graphify.build import edge_data
-        connections: list[tuple[str, str, dict]] = []  # (direction, neighbor_id, edge_data)
+        from graphify.projections import (
+            format_relationship_envelope,
+            relationship_envelope,
+        )
+
+        # (direction, neighbor_id, edge_src, edge_tgt) — src/tgt preserve the
+        # stored edge direction so the relationship envelope reads the correct
+        # parallel-edge bundle for this neighbor.
+        connections: list[tuple[str, str, str, str]] = []
         for nb in G.successors(nid):
-            connections.append(("out", nb, edge_data(G, nid, nb)))
+            connections.append(("out", nb, nid, nb))
         for nb in G.predecessors(nid):
-            connections.append(("in", nb, edge_data(G, nb, nid)))
+            connections.append(("in", nb, nb, nid))
         if connections:
             print(f"\nConnections ({len(connections)}):")
             connections.sort(key=lambda c: G.degree(c[1]), reverse=True)
-            for direction, nb, edata in connections[:20]:
-                rel = edata.get("relation", "")
-                conf = edata.get("confidence", "")
+            for direction, nb, e_src, e_tgt in connections[:20]:
                 arrow = "-->" if direction == "out" else "<--"
-                print(f"  {arrow} {G.nodes[nb].get('label', nb)} [{rel}] [{conf}]")
+                # Bundle every parallel relationship to this neighbor so a
+                # MultiDiGraph never shows only the first edge (#PR5 gate).
+                # directed_only=True isolates this connection's stored direction
+                # (e_src->e_tgt) so an "out" arrow never merges the reverse "in"
+                # relations and vice versa.
+                env = relationship_envelope(G, e_src, e_tgt, directed_only=True)
+                if len(env["relations"]) > 1:
+                    rel_block = (
+                        f"[{format_relationship_envelope(G, e_src, e_tgt, directed_only=True)}]"
+                    )
+                else:
+                    # Single relation (always true for simple DiGraph/Graph):
+                    # keep the historical "[rel] [conf]" form byte-stable.
+                    edata = edge_data(G, e_src, e_tgt)
+                    rel = edata.get("relation", "")
+                    conf = edata.get("confidence", "")
+                    rel_block = f"[{rel}] [{conf}]"
+                print(f"  {arrow} {G.nodes[nb].get('label', nb)} {rel_block}")
             if len(connections) > 20:
                 print(f"  ... and {len(connections) - 20} more")
         from graphify import querylog
@@ -3116,6 +3205,16 @@ def main() -> None:
         if not watch_path.exists():
             print(f"error: path not found: {watch_path}", file=sys.stderr)
             sys.exit(1)
+
+        # PR 7 go/no-go gate: "no silent fallback to simple graph behavior."
+        # No special handling is needed here: watch._rebuild_code now inherits
+        # the saved graph.json profile (it reads the on-disk `multigraph` flag
+        # and rebuilds via build_from_json(multigraph=...), re-stamping
+        # multigraph/directed + graphify_profile on write). A multidigraph
+        # graph.json therefore round-trips through `graphify update` as a
+        # MultiDiGraph with its keyed parallel edges intact — never silently
+        # collapsed to a simple graph — and simple/digraph graphs update exactly
+        # as before.
         from graphify.watch import _rebuild_code
 
         print(f"Re-extracting code files in {watch_path} (no LLM needed)...")
@@ -3228,6 +3327,7 @@ def main() -> None:
         _MERGE_MAX_NODES = 100_000
         import networkx as _nx
         from networkx.readwrite import json_graph as _jg
+
         def _load_graph(p: str):
             path_obj = Path(p)
             try:
@@ -3243,50 +3343,148 @@ def main() -> None:
                 return _jg.node_link_graph(data, edges="links"), data
             except TypeError:
                 return _jg.node_link_graph(data), data
+
         try:
-            G_cur, _ = _load_graph(_current_path)
-            G_oth, _ = _load_graph(_other_path)
+            current_graph, current_data = _load_graph(_current_path)
+            other_graph, other_data = _load_graph(_other_path)
         except Exception as exc:
             print(f"[graphify merge-driver] error loading graphs: {exc}", file=sys.stderr)
             sys.exit(1)  # surface the conflict so git doesn't accept a corrupt merge
-        merged = _nx.compose(G_cur, G_oth)
-        if merged.number_of_nodes() > _MERGE_MAX_NODES:
+
+        # Class-safe union. Reuse the Phase A normalizer so a class mismatch
+        # (e.g. simple current + MultiDiGraph other) can never reach
+        # ``nx.compose`` raising NetworkXError. ``normalize_graphs_for_global``
+        # with no explicit target infers the target (multidigraph if either
+        # side is multi; else digraph if either directed; else simple) and
+        # returns BOTH inputs realized as that one class, in order.
+        from graphify.global_graph import (
+            GlobalGraphRecoveryError,
+            detect_pre_profile,
+            normalize_graphs_for_global,
+            refuse_pre_profile_upgrade,
+        )
+
+        try:
+            (current_norm, other_norm), target_type = normalize_graphs_for_global(
+                [current_graph, other_graph]
+            )
+        except Exception as exc:
+            print(f"[graphify merge-driver] error normalizing graphs: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        # Recovery refusal: refuse to UPGRADE a pre-profile input (one with no
+        # graphify_profile / multigraph / directed markers — possibly already a
+        # silently-collapsed simple graph) to a multidigraph target, since the
+        # lost parallel edges cannot be reconstructed in place. Leave both files
+        # unmutated. Only the irreversible multidigraph upgrade is refused;
+        # simple/digraph merges of a pre-profile graph proceed normally.
+        # Only the OVERWRITTEN file (current) is protected: an in-place
+        # multidigraph upgrade of a pre-profile current graph is irreversible.
+        # `other` is read-only (merged in, never rewritten), so its pre-profile
+        # status implies no unreconstructable in-place loss and must not block.
+        if target_type == "multidigraph":
+            try:
+                refuse_pre_profile_upgrade(
+                    current_data,
+                    target_type,
+                    graph_label="merge target graph",
+                    graph_path=_current_path,
+                    recovery_hint=(
+                        "Regenerate or recreate this graph.json from source before retrying "
+                        "the merge, or resolve the file manually from source-backed inputs"
+                    ),
+                )
+            except GlobalGraphRecoveryError as exc:
+                print(f"[graphify merge-driver] {exc}", file=sys.stderr)
+                sys.exit(1)
+            if detect_pre_profile(current_data):
+                # Defensive: detect_pre_profile is the same predicate
+                # refuse_pre_profile_upgrade uses, so the branch above
+                # already exited; this guards against future divergence.
+                print(
+                    f"[graphify merge-driver] refusing to upgrade pre-profile graph "
+                    f"{_current_path} to multidigraph",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+        # KEY-AWARE compose, mirroring graphify.global_graph.global_add: start
+        # from the normalized current graph and replay the normalized other
+        # graph. For a multidigraph target iterate ``edges(keys=True)`` and
+        # ``add_edge(u, v, key=key, ...)`` so parallel edges survive distinctly
+        # AND a repeated merge of the same inputs overwrites the same
+        # ``(u, v, key)`` slots instead of accumulating fresh auto-int keys —
+        # that keyless drift is exactly what makes a naive ``nx.compose`` merge
+        # non-idempotent. Simple/digraph targets keep one edge per pair.
+        merged_graph = current_norm
+        for _node, _ndata in other_norm.nodes(data=True):
+            merged_graph.add_node(_node, **_ndata)
+        if isinstance(other_norm, (_nx.MultiGraph, _nx.MultiDiGraph)):
+            for _u, _v, _key, _edata in other_norm.edges(keys=True, data=True):
+                merged_graph.add_edge(_u, _v, key=_key, **_edata)
+        else:
+            for _u, _v, _edata in other_norm.edges(data=True):
+                merged_graph.add_edge(_u, _v, **_edata)
+
+        if merged_graph.number_of_nodes() > _MERGE_MAX_NODES:
             print(
-                f"[graphify merge-driver] merged graph has {merged.number_of_nodes()} nodes, "
+                f"[graphify merge-driver] merged graph has {merged_graph.number_of_nodes()} nodes, "
                 f"exceeds {_MERGE_MAX_NODES}-node cap; aborting merge.",
                 file=sys.stderr,
             )
             sys.exit(1)
-        try:
-            out_data = _jg.node_link_data(merged, edges="links")
-        except TypeError:
-            out_data = _jg.node_link_data(merged)
-        Path(_current_path).write_text(json.dumps(out_data, indent=2), encoding="utf-8")
+
+        # Back up the existing target before the irreversible overwrite, then
+        # write via ``to_json`` so the graphify_profile (graph_type) is persisted
+        # and round-trips on the next load. ``force=True`` because a merge
+        # legitimately overwrites ``current`` (the shrink-guard would otherwise
+        # block a merge that drops nodes via dedup); ``communities={}`` because a
+        # merged graph is not (re)clustered here.
+        from graphify.export import to_json as _to_json
+
+        _backup_merge_target(Path(_current_path))
+        _to_json(merged_graph, {}, _current_path, force=True)
         sys.exit(0)
 
     elif cmd == "merge-graphs":
         # graphify merge-graphs graph1.json graph2.json ... --out merged.json
+        #   [--multigraph | --simple]
+        # Optional target flag controls the merged graph class. By DEFAULT the
+        # target is INFERRED (multidigraph if any input is multi; else digraph if
+        # any directed; else simple) so multigraph inputs never silently
+        # collapse. --simple forces a simple projection (the normalizer warns and
+        # collapses parallel edges — an explicit, audible choice); --multigraph
+        # forces a keyed multidigraph.
         args = sys.argv[2:]
         graph_paths: list[Path] = []
         out_path = Path(_GRAPHIFY_OUT) / "merged-graph.json"
+        explicit_target: str | None = None
         i = 0
         while i < len(args):
             if args[i] == "--out" and i + 1 < len(args):
                 out_path = Path(args[i + 1])
                 i += 2
+            elif args[i] == "--multigraph":
+                explicit_target = "multidigraph"
+                i += 1
+            elif args[i] == "--simple":
+                explicit_target = "simple"
+                i += 1
             else:
                 graph_paths.append(Path(args[i]))
                 i += 1
         if len(graph_paths) < 2:
             print(
-                "Usage: graphify merge-graphs <graph1.json> <graph2.json> [...] [--out merged.json]",
+                "Usage: graphify merge-graphs <graph1.json> <graph2.json> [...] "
+                "[--out merged.json] [--multigraph | --simple]",
                 file=sys.stderr,
             )
             sys.exit(1)
         import networkx as _nx
         from networkx.readwrite import json_graph as _jg
         from graphify.build import prefix_graph_for_global as _prefix
-        graphs = []
+
+        loaded_graphs = []
         for gp in graph_paths:
             if not gp.exists():
                 print(f"error: not found: {gp}", file=sys.stderr)
@@ -3298,22 +3496,62 @@ def main() -> None:
             if "links" not in data and "edges" in data:
                 data = dict(data, links=data["edges"])
             try:
-                G = _jg.node_link_graph(data, edges="links")
+                input_graph = _jg.node_link_graph(data, edges="links")
             except TypeError:
-                G = _jg.node_link_graph(data)
-            graphs.append(G)
-        merged = _nx.Graph()
-        for G, gp in zip(graphs, graph_paths):
+                input_graph = _jg.node_link_graph(data)
+            loaded_graphs.append(input_graph)
+        # Prefix every input for cross-repo isolation FIRST (relabel preserves
+        # multigraph keys), then normalize the whole batch to one common class
+        # via the Phase A helper. Replacing the old hard-coded ``_nx.Graph()``
+        # start removes the silent collapse: the resolved class is multidigraph
+        # if any input is multi (unless --simple is given, which warns + projects).
+        from graphify.global_graph import normalize_graphs_for_global
+
+        prefixed_graphs = []
+        for input_graph, gp in zip(loaded_graphs, graph_paths):
             repo_tag = gp.parent.parent.name  # graphify-out/../ → repo dir name
-            prefixed = _prefix(G, repo_tag)
-            merged = _nx.compose(merged, prefixed)
+            prefixed_graphs.append(_prefix(input_graph, repo_tag))
+
         try:
-            out_data = _jg.node_link_data(merged, edges="links")
-        except TypeError:
-            out_data = _jg.node_link_data(merged)
+            normalized_graphs, target_type = normalize_graphs_for_global(
+                prefixed_graphs, target_type=explicit_target
+            )
+        except Exception as exc:
+            print(f"[graphify merge-graphs] error normalizing graphs: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        # KEY-AWARE compose into the resolved class (mirrors global_add). For a
+        # multidigraph target replay ``edges(keys=True)`` so parallel edges keep
+        # distinct keys and a repeated merge of the same inputs overwrites the
+        # same ``(u, v, key)`` slots (idempotent) instead of drifting on fresh
+        # auto-int keys. Prefixing already isolates repos, so cross-graph node
+        # collisions cannot occur; same-class composition is safe.
+        target_cls = type(normalized_graphs[0]) if normalized_graphs else _nx.Graph
+        merged_graph = target_cls()
+        for ng in normalized_graphs:
+            merged_graph.graph.update(ng.graph)
+            for _node, _ndata in ng.nodes(data=True):
+                merged_graph.add_node(_node, **_ndata)
+            if isinstance(ng, (_nx.MultiGraph, _nx.MultiDiGraph)):
+                for _u, _v, _key, _edata in ng.edges(keys=True, data=True):
+                    merged_graph.add_edge(_u, _v, key=_key, **_edata)
+            else:
+                for _u, _v, _edata in ng.edges(data=True):
+                    merged_graph.add_edge(_u, _v, **_edata)
+
+        # Back up an existing target before overwrite, then write via ``to_json``
+        # so the graphify_profile (graph_type=target_type) persists and the class
+        # round-trips on reload. ``force=True``: merge-graphs deliberately
+        # (re)writes the merged output; ``communities={}``: not clustered here.
+        from graphify.export import to_json as _to_json
+
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(out_data, indent=2), encoding="utf-8")
-        print(f"Merged {len(graphs)} graphs -> {merged.number_of_nodes()} nodes, {merged.number_of_edges()} edges")
+        _backup_merge_target(out_path)
+        _to_json(merged_graph, {}, str(out_path), force=True)
+        print(
+            f"Merged {len(loaded_graphs)} graphs -> {merged_graph.number_of_nodes()} nodes, "
+            f"{merged_graph.number_of_edges()} edges ({target_type})"
+        )
         print(f"Written to: {out_path}")
 
     elif cmd == "clone":
@@ -3682,6 +3920,7 @@ def main() -> None:
             print(
                 "Usage: graphify extract <path> [--backend gemini|kimi|claude|openai|deepseek|ollama] "
                 "[--model M] [--mode deep] [--out DIR] [--google-workspace] [--no-cluster] "
+                "[--multigraph|--simple] "
                 "[--max-workers N] [--token-budget N] [--max-concurrency N] "
                 "[--api-timeout S]",
                 file=sys.stderr,
@@ -3702,6 +3941,13 @@ def main() -> None:
         google_workspace = False
         global_merge = False
         global_repo_tag: str | None = None
+        # Graph class selection (PR 9). None = STICKY: inherit the existing
+        # graphify-out/graph.json profile (multidigraph stays multidigraph,
+        # otherwise the historical simple/directed default). True = force a
+        # keyed MultiDiGraph (parallel edges). False = explicit downgrade to a
+        # simple graph even when the existing graph.json is a multigraph.
+        # --multigraph and --simple are mutually exclusive.
+        multigraph_flag: bool | None = None
         # Performance/tuning knobs (issue #792). None means "use library default".
         cli_max_workers: int | None = None
         cli_token_budget: int | None = None
@@ -3762,6 +4008,24 @@ def main() -> None:
                 google_workspace = True; i += 1
             elif a == "--global":
                 global_merge = True; i += 1
+            elif a == "--multigraph":
+                if multigraph_flag is False:
+                    print(
+                        "error: --multigraph and --simple are mutually exclusive",
+                        file=sys.stderr,
+                    )
+                    sys.exit(2)
+                multigraph_flag = True
+                i += 1
+            elif a == "--simple":
+                if multigraph_flag is True:
+                    print(
+                        "error: --multigraph and --simple are mutually exclusive",
+                        file=sys.stderr,
+                    )
+                    sys.exit(2)
+                multigraph_flag = False
+                i += 1
             elif a == "--as" and i + 1 < len(args):
                 global_repo_tag = args[i + 1]; i += 2
             elif a == "--max-workers" and i + 1 < len(args):
@@ -4098,20 +4362,160 @@ def main() -> None:
             for ftype, flist in files_by_type.items()
         }
 
+        # Resolve the effective graph class (PR 9 sticky profile). When neither
+        # --multigraph nor --simple is given the build must INHERIT the existing
+        # graph.json profile so a multigraph never silently downgrades to a
+        # simple graph on a default re-extract (mirrors watch._rebuild_code and
+        # build_merge's inherit-on-None contract). --multigraph forces multi,
+        # --simple forces a simple downgrade.
+        from graphify.watch import _existing_is_multigraph as _detect_multigraph
+
+        _existing_multigraph = False
+        if existing_graph_path.exists():
+            try:
+                _existing_data = json.loads(existing_graph_path.read_text(encoding="utf-8"))
+                _existing_multigraph = _detect_multigraph(_existing_data)
+            except Exception as exc:
+                print(
+                    f"[graphify extract] warning: could not inspect existing graph.json "
+                    f"profile ({exc}); treating as simple.",
+                    file=sys.stderr,
+                )
+        if multigraph_flag is None:
+            resolved_multigraph = _existing_multigraph
+        else:
+            resolved_multigraph = multigraph_flag
+
+        # Lossy-projection warning: an EXPLICIT --simple over an existing
+        # multigraph graph.json collapses keyed parallel edges. This is an
+        # intentional downgrade, so warn loudly (not silently) and proceed.
+        if multigraph_flag is False and _existing_multigraph:
+            print(
+                "[graphify extract] WARNING: --simple requested over an existing "
+                "multigraph graph.json; parallel edges between the same pair will be "
+                "collapsed onto a single edge (lossy downgrade). Omit --simple to "
+                "preserve them, or re-extract with --multigraph.",
+                file=sys.stderr,
+            )
+
+        # Capability gate: surface the MultiDiGraph capability probe failure as a
+        # clean CLI error (exit 1) instead of letting the RuntimeError raised deep
+        # inside build_from_json escape as a traceback. The probe is cheap and
+        # lru_cached, so running it up front costs nothing on the happy path.
+        if resolved_multigraph:
+            from graphify.multigraph_compat import require_multigraph_capabilities
+
+            try:
+                require_multigraph_capabilities()
+            except RuntimeError as exc:
+                print(str(exc), file=sys.stderr)
+                sys.exit(1)
+
+
         if no_cluster:
             # --no-cluster: dump the raw merged extraction as graph.json.
             # No NetworkX, no community detection, no analysis sidecar.
             from graphify.export import backup_if_protected as _backup
+
             _backup(graphify_out)
-            graph_json_path.write_text(
-                json.dumps(merged, indent=2), encoding="utf-8"
-            )
-            cost = _estimate_cost(
-                backend, merged["input_tokens"], merged["output_tokens"]
-            )
+            if incremental_mode:
+                # Incremental no-cluster scans are still deltas. If no files
+                # changed, ``merged`` is empty; writing it directly would erase
+                # the saved graph. Reuse build_merge so unchanged nodes/edges,
+                # deleted-file pruning, and sticky multigraph profile handling
+                # match the clustered path while still skipping clustering.
+                from graphify.build import build_merge as _nc_build_merge
+                from graphify.export import to_json as _nc_to_json
+
+                _nc_graph = _nc_build_merge(
+                    [merged],
+                    graph_path=existing_graph_path,
+                    prune_sources=deleted_files or None,
+                    dedup=True,
+                    dedup_llm_backend=backend if dedup_llm else None,
+                    root=target,
+                    multigraph=multigraph_flag,
+                )
+                # RISK 4 — Guard 1 signaling: to_json's empty-merge floor returns
+                # False (and PRESERVES the populated graph.json) when the merged
+                # graph has 0 nodes over a populated file. force=True bypasses the
+                # shrink guard (Guard 2), so under force the ONLY False return is
+                # that 0-node floor — never a legitimate non-zero shrink. Honor the
+                # refusal: do NOT fall through to the success line. A 0-node merge
+                # over a populated graph is an aborted extraction, so signal it
+                # (exit 1) instead of falsely reporting "wrote ... 0 nodes".
+                if not _nc_to_json(_nc_graph, {}, str(graph_json_path), force=True):
+                    print(
+                        "[graphify extract] extraction aborted: the merge produced an "
+                        "empty (0-node) graph; the previous graph.json was preserved.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                n_nodes = _nc_graph.number_of_nodes()
+                n_edges = _nc_graph.number_of_edges()
+            elif resolved_multigraph:
+                # A multigraph profile (sticky-inherited or explicit --multigraph)
+                # cannot be expressed by the raw-merged dump: parallel edges would
+                # be written without keys and the file would lack the multigraph
+                # flag + graphify_profile, silently collapsing on the next load.
+                # Build a keyed MultiDiGraph and serialize it via to_json (with no
+                # communities) so the no-cluster file still round-trips losslessly.
+                from graphify.build import build_from_json as _build_from_json
+                from graphify.export import to_json as _nc_to_json
+
+                _nc_graph = _build_from_json(merged, multigraph=True, root=target)
+                # RISK 4 — Guard 1 signaling (multigraph sibling): identical to the
+                # incremental site above. A non-incremental run can still see a
+                # populated graph.json on disk (graph.json present, manifest.json
+                # absent), so to_json's 0-node floor can refuse and preserve it.
+                # Honor the False return — exit 1 rather than print the misleading
+                # "wrote ... 0 nodes" success line. Under force=True the only False
+                # return is the 0-node floor, so a legitimate non-zero multigraph
+                # build (True) is completely unaffected.
+                if not _nc_to_json(_nc_graph, {}, str(graph_json_path), force=True):
+                    print(
+                        "[graphify extract] extraction aborted: the merge produced an "
+                        "empty (0-node) graph; the previous graph.json was preserved.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                n_nodes = _nc_graph.number_of_nodes()
+                n_edges = _nc_graph.number_of_edges()
+            else:
+                # Empty-merge floor (RISK 4 — Guard 3): this raw write is the one
+                # no-cluster path that does NOT route through to_json (Guard 1) or
+                # _check_shrink (Guard 2), so a 0-node ``merged`` here would silently
+                # overwrite a populated graph.json — the exact failed/aborted-
+                # extraction wipe the clustered sibling already blocks via its
+                # ``if G.number_of_nodes() == 0`` exit. Refuse the overwrite when the
+                # merged extraction is empty AND an existing graph.json on disk is
+                # populated. Read the existing node count defensively: any error
+                # (missing/corrupt file) is treated as 0 nodes so a fresh or
+                # unreadable target leaves the floor inert and the write proceeds
+                # exactly as before (no new exit on a legitimately-empty fresh run).
+                if len(merged.get("nodes", [])) == 0 and graph_json_path.exists():
+                    try:
+                        _existing_n = len(
+                            json.loads(graph_json_path.read_text(encoding="utf-8")).get("nodes", [])
+                        )
+                    except Exception:
+                        _existing_n = 0
+                    if _existing_n > 0:
+                        print(
+                            f"[graphify] ERROR: refusing to overwrite a populated "
+                            f"graph.json ({_existing_n} nodes) with an EMPTY (0-node) "
+                            f"graph - this is a failed/aborted extraction, not a real "
+                            f"result. The previous graph is preserved.",
+                            file=sys.stderr,
+                        )
+                        sys.exit(1)
+                graph_json_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+                n_nodes = len(merged["nodes"])
+                n_edges = len(merged["edges"])
+            cost = _estimate_cost(backend, merged["input_tokens"], merged["output_tokens"])
             print(
                 f"[graphify extract] wrote {graph_json_path} — "
-                f"{len(merged['nodes'])} nodes, {len(merged['edges'])} edges "
+                f"{n_nodes} nodes, {n_edges} edges "
                 f"(no clustering)"
             )
             if merged["input_tokens"] or merged["output_tokens"]:
@@ -4124,19 +4528,27 @@ def main() -> None:
             try:
                 _save_manifest(_manifest_files, manifest_path=str(manifest_path), kind="both", root=target)
             except Exception as exc:
-                print(f"[graphify extract] warning: could not write manifest: {exc}", file=sys.stderr)
+                print(
+                    f"[graphify extract] warning: could not write manifest: {exc}", file=sys.stderr
+                )
             if global_merge:
                 from graphify.global_graph import global_add as _global_add
+
                 _tag = global_repo_tag or target.name
                 try:
                     result = _global_add(graphify_out / "graph.json", _tag)
                     if result["skipped"]:
                         print(f"[graphify global] '{_tag}' unchanged since last add - skipped.")
                     else:
-                        print(f"[graphify global] '{_tag}' merged into global graph "
-                              f"(+{result['nodes_added']} nodes, -{result['nodes_removed']} pruned).")
+                        print(
+                            f"[graphify global] '{_tag}' merged into global graph "
+                            f"(+{result['nodes_added']} nodes, -{result['nodes_removed']} pruned)."
+                        )
                 except Exception as exc:
-                    print(f"[graphify global] warning: failed to merge into global graph: {exc}", file=sys.stderr)
+                    print(
+                        f"[graphify global] warning: failed to merge into global graph: {exc}",
+                        file=sys.stderr,
+                    )
             sys.exit(0)
 
         # Build graph + cluster + score + write.
@@ -4149,7 +4561,12 @@ def main() -> None:
         from graphify.export import to_json as _to_json
         from graphify.analyze import god_nodes as _god_nodes, surprising_connections as _surprising
         dedup_backend = backend if dedup_llm else None
+        dedup_backend = backend if dedup_llm else None
         if incremental_mode:
+            # Pass multigraph_flag straight through: None lets build_merge
+            # INHERIT the saved graph.json profile (the sticky default), while an
+            # explicit --multigraph/--simple overrides it (build_merge warns on
+            # an explicit override of the saved flag).
             G = _build_merge(
                 [merged],
                 graph_path=existing_graph_path,
@@ -4157,9 +4574,19 @@ def main() -> None:
                 dedup=True,
                 dedup_llm_backend=dedup_backend,
                 root=target,
+                multigraph=multigraph_flag,
             )
         else:
-            G = _build([merged], dedup=True, dedup_llm_backend=dedup_backend, root=target)
+            # Fresh build: no saved graph.json to inherit from, so the resolved
+            # value already collapses to the requested flag (or the historical
+            # simple default when no flag is given).
+            G = _build(
+                [merged],
+                dedup=True,
+                dedup_llm_backend=dedup_backend,
+                root=target,
+                multigraph=resolved_multigraph,
+            )
         if G.number_of_nodes() == 0:
             print(
                 "[graphify extract] graph is empty — extraction produced no nodes. "
