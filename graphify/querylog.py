@@ -13,12 +13,18 @@ _NODES_RE = re.compile(r"(\d+)\s+nodes?\s+found")
 
 
 def _log_path() -> Path | None:
+    # Fork privacy policy: query logging is OPT-IN (off by default). Upstream logs to
+    # ~/.cache/graphify-queries.log unless disabled; we flip it so nothing is recorded
+    # unless GRAPHIFY_QUERY_LOG is explicitly set -- to a file path, or to "1"/"true"/
+    # "yes" for the default ~/.cache location. GRAPHIFY_QUERY_LOG_DISABLE still wins.
     if os.environ.get("GRAPHIFY_QUERY_LOG_DISABLE", "").lower() in ("1", "true", "yes"):
         return None
     override = os.environ.get("GRAPHIFY_QUERY_LOG", "").strip()
-    if override:
-        return Path(override).expanduser()
-    return Path.home() / ".cache" / "graphify-queries.log"
+    if not override:
+        return None
+    if override.lower() in ("1", "true", "yes"):
+        return Path.home() / ".cache" / "graphify-queries.log"
+    return Path(override).expanduser()
 
 
 def _log_responses() -> bool:
