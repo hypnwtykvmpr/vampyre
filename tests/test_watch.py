@@ -1772,3 +1772,28 @@ def test_watch_clustered_delete_all_preserves_graph(tmp_path, monkeypatch):
     assert after_bytes == before_bytes, (
         "graph.json must be byte-for-byte untouched (clustered path)"
     )
+
+
+def test_update_cli_passes_no_viz_to_rebuild(tmp_path, monkeypatch):
+    """`graphify update --no-viz <path>` must parse the flag and forward
+    no_viz=True to _rebuild_code. Regression: the flag was dropped from the
+    update CLI arm even though watch._rebuild_code still accepts it."""
+    import sys as _sys
+    import graphify.watch as _watch
+    import graphify.__main__ as _main
+
+    (tmp_path / "x.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    captured: dict = {}
+
+    def _fake_rebuild(path, **kwargs):
+        captured["path"] = path
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(_watch, "_rebuild_code", _fake_rebuild)
+    monkeypatch.setattr(_sys, "argv", ["graphify", "update", "--no-viz", str(tmp_path)])
+    try:
+        _main.main()
+    except SystemExit as exc:  # must NOT be the unknown-option exit(2)
+        assert exc.code in (0, None), f"update --no-viz errored: exit {exc.code}"
+    assert captured.get("no_viz") is True
