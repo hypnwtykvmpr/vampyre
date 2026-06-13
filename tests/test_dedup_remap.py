@@ -514,21 +514,21 @@ def test_simple_graph_dedup_output_unchanged():
     G = build([extraction], dedup=True, directed=True)
     assert "graphify_multigraph_diagnostics" not in G.graph
 
-    # "GraphExtractor" and "graph_extractor" are near-duplicates — dedup merges them.
-    # _pick_winner prefers shorter ID, no chunk suffix -> "graphextractor" wins
-    # (both are same length=14; tiebreak is by sort, so the first is picked).
-    # Alternatively graph_extractor (15 chars) vs graphextractor (14 chars) -> graphextractor wins.
-    winner_candidates = {"graphextractor", "graph_extractor"}
+    # NOTE: upstream/v8 changed dedup since this fork's baseline. `_norm` now maps
+    # "_" to a space, so "graph_extractor" -> "graph extractor" while "GraphExtractor"
+    # -> "graphextractor". Those normalized forms differ, so their MinHash shingles no
+    # longer LSH-pair and the two separator-variants are NOT merged. Verified identical
+    # to pure upstream/v8 (also 4 nodes) — our multigraph code does not alter the default
+    # simple-graph path, which is the invariant this go/no-go test guards.
     surviving_nodes = set(G.nodes())
 
-    # After dedup: 3 nodes survive (one of the two graph-extractor variants + dataloader + networkanalyzer)
-    assert G.number_of_nodes() == 3, (
-        f"Expected 3 nodes after dedup, got {G.number_of_nodes()}: {sorted(surviving_nodes)}"
+    # All four nodes survive (the two graph-extractor variants no longer merge upstream).
+    assert G.number_of_nodes() == 4, (
+        f"Expected 4 nodes after dedup, got {G.number_of_nodes()}: {sorted(surviving_nodes)}"
     )
 
-    # The winner is the one that survived
-    winner = winner_candidates & surviving_nodes
-    assert len(winner) == 1, f"Expected exactly one winner from {winner_candidates}, got {winner}"
+    # Both separator-variants survive under current upstream dedup.
+    assert {"graphextractor", "graph_extractor"} <= surviving_nodes
 
     assert "dataloader" in surviving_nodes
     assert "networkanalyzer" in surviving_nodes
