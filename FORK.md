@@ -67,3 +67,23 @@ Upstream Graphify is the source project. Local fork changes should continue to b
 small, documented, and easy to rebase. When upstream changes touch the same files,
 compare both sides directly, preserve useful upstream behavior, and document any
 intentional divergence.
+
+## Upstream Sync Workflow (standing policy)
+
+Origin enforces branch protection: **force-pushes are rejected**. Because rebasing
+the fork stack onto a newer upstream rewrites commit SHAs, the rebased branch
+diverges from `origin` and a plain push is a non-fast-forward. Do **not** try to
+force it — reconcile so the push stays a fast-forward:
+
+1. `git fetch upstream` — if `upstream/v8` has not advanced, there is nothing to
+   rebase (only push any pending fork commits as a normal fast-forward).
+2. Rebase the fork's clean commit stack onto `upstream/v8` (replay only the fork
+   delta; drop any prior reconcile-merge commits). Hand-weave conflicts: keep
+   upstream's improvements AND the fork's multigraph/security delta.
+3. Re-apply post-stack fork commits (e.g. dependency security pins) and run the
+   full suite env-stripped — it must be **0 failures, 0 skips** (see `conftest.py`).
+4. Reconcile with origin so the push fast-forwards, never force:
+   `git merge -s ours origin/v8` records origin's tip as a parent while keeping the
+   rebased tree verbatim (`git diff <rebased-tip> HEAD` must be empty).
+5. `git push origin v8:v8 main:main` (fast-forward). Verify `origin == local`.
+6. Trim the temporary work branch.
