@@ -4770,7 +4770,11 @@ def main() -> None:
                 sys.exit(0)
 
             merged["nodes"] = _dedupe_nodes(merged["nodes"])
-            merged["edges"] = _dedupe_edges(merged["edges"])
+            # Multigraph output intentionally preserves parallel edges; dedupe_edges
+            # collapses by (source, target, relation), so run it only for simple
+            # graphs (#1317 determinism) — never on a multidigraph build.
+            if not resolved_multigraph:
+                merged["edges"] = _dedupe_edges(merged["edges"])
             # Backfill source_file from endpoint nodes — this raw path bypasses
             # build_from_json's backfill, and semantic edges sometimes omit it (#1279).
             _node_sf = {n.get("id"): n.get("source_file") for n in merged["nodes"]}

@@ -908,7 +908,12 @@ def _rebuild_code(
             candidate_graph_data = {
                 **{k: v for k, v in result.items() if k not in ("edges", "nodes")},
                 "nodes": _dedupe_nodes(result.get("nodes", [])),
-                "links": _dedupe_edges(result.get("edges", [])),
+                # Multigraph keeps parallel edges; only collapse for simple graphs (#1317).
+                "links": (
+                    result.get("edges", [])
+                    if _existing_is_multigraph(existing_graph_data)
+                    else _dedupe_edges(result.get("edges", []))
+                ),
             }
             # The no-cluster path writes raw merged extraction JSON directly (it
             # never goes through build_from_json/to_json), so it would otherwise
