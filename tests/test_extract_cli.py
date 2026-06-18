@@ -787,6 +787,15 @@ def test_extract_no_cluster_incremental_zero_merge_exits_nonzero_and_preserves_g
         kind="both",
     )
 
+    # Modify app.py AFTER the manifest is saved so the incremental scan detects a
+    # CHANGED file and proceeds to build_merge. Upstream's "no incremental changes
+    # detected" early-exit otherwise short-circuits with exit 0 before the merge,
+    # so the empty-merge guard under test would never run.
+    (corpus / "app.py").write_text(
+        (corpus / "app.py").read_text(encoding="utf-8") + "\n\ndef added():\n    return helper()\n",
+        encoding="utf-8",
+    )
+
     before = json.loads(graph_json.read_text(encoding="utf-8"))
     seeded_n = len(before.get("nodes", []))
     assert seeded_n == 3, "seed graph.json must start populated with 3 nodes"
