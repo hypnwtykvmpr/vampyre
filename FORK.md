@@ -70,20 +70,24 @@ intentional divergence.
 
 ## Upstream Sync Workflow (standing policy)
 
-Origin enforces branch protection: **force-pushes are rejected**. Because rebasing
-the fork stack onto a newer upstream rewrites commit SHAs, the rebased branch
-diverges from `origin` and a plain push is a non-fast-forward. Do **not** try to
-force it — reconcile so the push stays a fast-forward:
+Keep a **clean linear history**: rebase the fork stack onto the newer upstream and
+**force-push** the result. Origin does not block force-pushes (no branch
+protection; the only ruleset is Copilot review), so there is no need for the old
+`-s ours` reconcile-merge workaround — that only accumulated duplicate commits in
+ancestry. Flatten every sync instead.
 
-1. `git fetch upstream` — if `upstream/v8` has not advanced, there is nothing to
-   rebase (only push any pending fork commits as a normal fast-forward).
+1. `git fetch upstream` — if `upstream/v8` has not advanced, just fast-forward-push
+   any pending fork commits and stop.
 2. Rebase the fork's clean commit stack onto `upstream/v8` (replay only the fork
-   delta; drop any prior reconcile-merge commits). Hand-weave conflicts: keep
-   upstream's improvements AND the fork's multigraph/security delta.
-3. Re-apply post-stack fork commits (e.g. dependency security pins) and run the
-   full suite env-stripped — it must be **0 failures, 0 skips** (see `conftest.py`).
-4. Reconcile with origin so the push fast-forwards, never force:
-   `git merge -s ours origin/v8` records origin's tip as a parent while keeping the
-   rebased tree verbatim (`git diff <rebased-tip> HEAD` must be empty).
-5. `git push origin v8:v8 main:main` (fast-forward). Verify `origin == local`.
-6. Trim the temporary work branch.
+   delta — rebase the pre-merge tip, not a branch carrying old reconcile merges).
+   Hand-weave conflicts: keep upstream's improvements AND the fork's
+   multigraph/security delta. A commit that upstream has since merged (e.g. our
+   dependabot PR) will drop as empty — that is expected.
+3. Run the full suite env-stripped — it must be **0 failures, 0 skips** (the
+   fork's `conftest.py` treats skips as failures). Confirm `git diff` against the
+   prior deployed tree is empty unless an intentional change was made.
+4. Force-push the flattened linear history:
+   `git push --force-with-lease origin v8:v8 main:main`.
+   The agent's command guard blocks force-push, so a human runs this step (from a
+   normal terminal). Verify `origin == local` afterward.
+5. Trim the temporary work branch.
