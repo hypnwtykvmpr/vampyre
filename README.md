@@ -78,6 +78,26 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## Install
 
+> **🦇 This is the `vampyre` fork** of graphify — it adds opt-in **multigraph**
+> support (a keyed `MultiDiGraph` that preserves parallel edges between the same
+> pair of nodes, instead of collapsing them). To install **this fork from source**
+> (instead of the upstream PyPI package below):
+>
+> ```bash
+> git clone https://github.com/hypnwtykvmpr/vampyre
+> cd vampyre
+> uv tool install .      # install the `graphify` CLI from this fork
+> graphify install       # register the skill with your AI assistant
+> ```
+>
+> Then build a multigraph with `graphify extract . --multigraph` (or
+> `graphify update --force --multigraph` to force-rebuild an existing graph as a
+> multidigraph). `--simple` forces a plain graph; with neither flag the build
+> inherits the existing `graph.json` profile (a multigraph stays a multigraph).
+> See **[FORK.md](FORK.md)** for the full multigraph scope and the upstream-sync
+> workflow. Everything else in this README is upstream graphify documentation and
+> applies to the fork too.
+
 > **Official package:** The PyPI package is `graphifyy` (double-y). Other `graphify*` packages on PyPI are not affiliated. The CLI command is still `graphify`.
 
 **Step 1 — install the package:**
