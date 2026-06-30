@@ -232,6 +232,12 @@ def _emit_relationships(
         if key in seen_edges:
             continue
         seen_edges.add(key)
+        # NOTE (#1521): scip_ingest is currently test-only (no live extract/build/
+        # watch caller). If it is ever wired into the extract dispatch like
+        # manifest_ingest / mcp_ingest, stamp these edges with _origin="ast" (they
+        # are deterministic, AST-style structural edges) so the watch eviction
+        # treats them as re-suppliable; otherwise they ship un-stamped and fall to
+        # the endpoint heuristic. See the all_edges _origin stamp in extract.py.
         edges.append(
             {
                 "source": source_node_id,

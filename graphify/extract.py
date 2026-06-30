@@ -16345,6 +16345,14 @@ def extract(
     # even when its source file still exists (#1116).
     for n in all_nodes:
         n["_origin"] = "ast"
+    # Same AST-provenance tag on edges (mirrors the node stamp above). The
+    # incremental watch rebuild keys on this to distinguish AST-extracted edges
+    # (re-suppliable by a fresh AST pass) from semantic/LLM edges (which an
+    # AST-only rebuild can never re-create), preserving the latter (#1521). Every
+    # edge in all_edges is AST/deterministic at this point (per-file extractors,
+    # cross-file resolution, symbol-resolution facts, manifest/mcp ingest).
+    for e in all_edges:
+        e["_origin"] = "ast"
 
     return {
         "nodes": all_nodes,

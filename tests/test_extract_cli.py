@@ -186,6 +186,31 @@ def test_extract_codeonly_succeeds_without_api_key(monkeypatch, tmp_path):
     assert len(json.loads(graph.read_text()).get("nodes", [])) > 0
 
 
+def test_update_remap_routes_to_full_extract_and_stamps_ast(tmp_path):
+    """`graphify update --remap` re-dispatches to the full `extract` pipeline so
+    every edge is re-stamped with provenance (#1521). With no LLM key it degrades
+    to AST-only and every edge must carry _origin='ast'. Guards the new --remap
+    routing, that the extract edge-stamp reaches graph.json, and that --no-viz is
+    surfaced (not silently ignored) on the remap path."""
+    corpus = _make_code_corpus(tmp_path)
+    r = _run(["update", "--remap", "--no-viz", str(corpus)], corpus)
+    assert r.returncode == 0, f"update --remap should succeed: {r.stderr}"
+    assert "Re-mapping" in (r.stdout + r.stderr), (
+        "update --remap must route through the full-extract (remap) path, not AST-only"
+    )
+    assert "--no-viz is not applied with --remap" in (r.stdout + r.stderr), (
+        "--no-viz must be surfaced as a note on the remap path, not silently dropped"
+    )
+    graph = corpus / "graphify-out" / "graph.json"
+    assert graph.exists(), "remap must write graph.json"
+    data = json.loads(graph.read_text(encoding="utf-8"))
+    links = data.get("links", data.get("edges", []))
+    assert links, "expected AST edges from the code corpus"
+    assert all(e.get("_origin") == "ast" for e in links), (
+        "every edge must be stamped _origin='ast' after a remap re-extraction"
+    )
+
+
 def test_extract_out_keeps_project_root_clean(monkeypatch, tmp_path):
     """`extract --out DIR` routes every artifact to DIR/graphify-out/ and the
     scanned project must not grow a graphify-out/ (or anything else) beside

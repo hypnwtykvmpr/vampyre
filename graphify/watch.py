@@ -455,6 +455,12 @@ def _dedupe_rebuilt_edge_records(edges: list[dict]) -> list[dict]:
         comparable = dict(edge)
         comparable.pop("key", None)
         comparable.pop("confidence_score", None)
+        # _origin is provenance, not connectivity identity — exclude it so a fresh
+        # AST-stamped edge and a preserved legacy (un-stamped) edge for the same
+        # relationship still collapse on the first rebuild after edge stamping
+        # lands; otherwise tens of thousands of duplicate edge records inflate the
+        # graph until the second rebuild (#1521). Same rationale as popping key.
+        comparable.pop("_origin", None)
         return json.dumps(comparable, sort_keys=True, ensure_ascii=False, default=str)
 
     kept: list[dict] = []
@@ -893,16 +899,44 @@ def _rebuild_code(
                 for p in extract_targets:
                     for _root in (project_root, watch_root):
                         edge_evict_sources.add(_nsf(str(p), str(_root)) or str(p))
+                # #1521 hybrid scope. On a full rebuild `extract_targets` is EVERY
+                # code file, so the source_file eviction above would also drop
+                # semantic / LLM-inferred edges — but a CLI full rebuild is AST-only
+                # (the LLM pass is not re-run), so those edges are never re-supplied
+                # and would be silently lost forever (~15% of edges on the live
+                # graph). So on a full rebuild, only evict an edge the fresh AST pass
+                # can actually re-supply: one with no non-AST `_origin` marker whose
+                # BOTH endpoints are AST-origin nodes. A stale structural edge (a
+                # removed import between two surviving AST nodes) still evicts and
+                # re-appears only if it still exists; an edge marked non-AST, or
+                # touching a non-AST (document / rationale / concept / LLM) node, is
+                # preserved. Incremental mode is unchanged: the user edited that file,
+                # so its own edges go regardless of origin.
+                origin_by_id = {
+                    n["id"]: n.get("_origin") for n in existing.get("nodes", [])
+                }
+                def _is_ast_node(nid: object) -> bool:
+                    return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
+                def _edge_ast_resuppliable(e: dict) -> bool:
+                    origin = e.get("_origin")
+                    if origin is not None and origin != "ast":
+                        return False
+                    return _is_ast_node(e.get("source")) and _is_ast_node(e.get("target"))
                 def _edge_evicted(e: dict) -> bool:
                     if not edge_evict_sources:
                         return False
                     sf = e.get("source_file")
                     if not sf:
                         return False
-                    if sf in edge_evict_sources:
-                        return True
-                    norm = _nsf(sf, str(project_root))
-                    return bool(norm) and norm in edge_evict_sources
+                    sf_evicted = sf in edge_evict_sources
+                    if not sf_evicted:
+                        norm = _nsf(sf, str(project_root))
+                        sf_evicted = bool(norm) and norm in edge_evict_sources
+                    if not sf_evicted:
+                        return False
+                    if full_rebuild and not _edge_ast_resuppliable(e):
+                        return False
+                    return True
                 preserved_edges = [
                     e for e in existing.get("links", existing.get("edges", []))
                     if e.get("source") in all_ids and e.get("target") in all_ids

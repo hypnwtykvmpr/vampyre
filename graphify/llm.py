@@ -1893,6 +1893,14 @@ def extract_corpus_parallel(
 def _merge_into(merged: dict, result: dict) -> None:
     """Append a chunk result into the running merged accumulator."""
     merged["nodes"].extend(result.get("nodes", []))
+    # Tag semantic/LLM provenance on edges at the single merge choke point — every
+    # chunk result (incl. recursively split / retried chunks) flows through here.
+    # Mirrors the AST extractor's edge _origin stamp; the watch eviction preserves
+    # _origin != "ast" edges that an AST-only rebuild cannot re-supply (#1521).
+    # setdefault keeps any explicit tag a producer may already have set.
+    for _e in result.get("edges", []):
+        if isinstance(_e, dict):
+            _e.setdefault("_origin", "semantic")
     merged["edges"].extend(result.get("edges", []))
     merged["hyperedges"].extend(result.get("hyperedges", []))
     merged["input_tokens"] += result.get("input_tokens", 0)

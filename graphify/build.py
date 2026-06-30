@@ -144,6 +144,11 @@ def _norm_source_file(p: str | None, root: str | None = None) -> str | None:
     if not p:
         return p
     p = p.replace("\\", "/")
+    # Canonicalize './' and '..' segments so a stored source_file like './a.py' or
+    # 'pkg/../a.py' matches the canonical 'a.py' used in eviction/relativization
+    # sets (#1521 F2: a non-canonical path could otherwise let a stale edge escape
+    # eviction). normpath may reintroduce OS separators on Windows, so re-posix.
+    p = os.path.normpath(p).replace("\\", "/")
     if root and os.path.isabs(p):
         try:
             p = Path(p).relative_to(root).as_posix()

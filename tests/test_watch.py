@@ -1393,9 +1393,14 @@ def test_watch_multigraph_full_rebuild_preserves_profile_flag(tmp_path, monkeypa
 
     graph_path, a_id, b_id = _build_multigraph_repo(tmp_path)
     data = json.loads(graph_path.read_text(encoding="utf-8"))
-    # Three keyed parallel A->B edges contributed by amod.py (a file that is NOT
-    # changed, so the edges are preserved across the rebuild). amod.py/bmod.py
-    # define A/B, so both endpoints survive.
+    # Three keyed parallel A->B SEMANTIC edges (``_origin="semantic"``) sourced from
+    # amod.py. A full rebuild re-extracts amod.py, but the LLM/semantic pass is NOT
+    # re-run from the CLI, so the #1521 hybrid must PRESERVE these (an AST-only
+    # rebuild can never re-supply them) while the clustered rewrite still keeps the
+    # multidigraph profile + parallel records intact. (Pre-#1521 this test injected
+    # AST parallels and relied on preserve-everything-by-endpoint; #1521 evicts AST
+    # edges of re-extracted files, so the substrate is now the semantic layer the
+    # hybrid is designed to protect.)
     _set_links(
         graph_path,
         data,
@@ -1406,7 +1411,8 @@ def test_watch_multigraph_full_rebuild_preserves_profile_flag(tmp_path, monkeypa
                 "source": a_id,
                 "target": b_id,
                 "relation": "calls",
-                "confidence": "EXTRACTED",
+                "confidence": "INFERRED",
+                "_origin": "semantic",
                 "source_file": "amod.py",
                 "source_location": "L1",
                 "key": "mk1",
@@ -1415,7 +1421,8 @@ def test_watch_multigraph_full_rebuild_preserves_profile_flag(tmp_path, monkeypa
                 "source": a_id,
                 "target": b_id,
                 "relation": "imports",
-                "confidence": "EXTRACTED",
+                "confidence": "INFERRED",
+                "_origin": "semantic",
                 "source_file": "amod.py",
                 "source_location": "L2",
                 "key": "mk2",
@@ -1424,7 +1431,8 @@ def test_watch_multigraph_full_rebuild_preserves_profile_flag(tmp_path, monkeypa
                 "source": a_id,
                 "target": b_id,
                 "relation": "references",
-                "confidence": "EXTRACTED",
+                "confidence": "INFERRED",
+                "_origin": "semantic",
                 "source_file": "amod.py",
                 "source_location": "L3",
                 "key": "mk3",
@@ -1513,46 +1521,167 @@ def test_watch_no_cluster_full_rebuild_does_not_duplicate_links(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
-def test_watch_no_cluster_full_rebuild_keeps_distinct_keyed_parallels(tmp_path):
-    """Dedupe removes the fresh keyless duplicate, not the keyed parallels."""
-    from graphify.watch import _rebuild_code
+def test_watch_full_rebuild_preserves_real_call_site_parallels(tmp_path):
+    """A real multigraph corpus where one function calls another at THREE distinct
+    source locations yields three parallel call edges (distinct source_location ->
+    distinct stable keys). A full re-extracting rebuild must keep all three (the
+    fresh AST pass re-supplies them) and the production loader must reload them as a
+    MultiDiGraph with three parallel edges — NOT collapsed to one.
 
+    Replaces the old synthetic ``parallel-a``/``parallel-b`` injection test (#1521):
+    real call-site parallels are AST-AST edges, so the hybrid evicts them on the
+    full rebuild and the fresh AST pass re-emits them identically (dedupe collapses
+    the keyless duplicates)."""
+    from graphify.watch import _rebuild_code
+    from graphify.graph_loader import load_graph
+    import networkx as nx
+
+    _git_init(tmp_path)
+    # beta calls alpha at L5, L6, L7 -> three real call-site edges.
     (tmp_path / "app.py").write_text(
-        "def alpha():\n    return 1\n\ndef beta():\n    return alpha()\n",
+        "def alpha():\n"
+        "    return 1\n"
+        "\n"
+        "def beta():\n"
+        "    alpha()\n"
+        "    x = alpha()\n"
+        "    return alpha()\n",
         encoding="utf-8",
     )
 
     cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
-        assert _rebuild_code(tmp_path, no_cluster=True, acquire_lock=False)
+        # Initial build, then promote the on-disk graph to multigraph so the
+        # no-cluster rebuild keeps parallels instead of collapsing them.
+        assert _rebuild_code(tmp_path, no_cluster=True, acquire_lock=False) is True
         graph_path = tmp_path / "graphify-out" / "graph.json"
         data = json.loads(graph_path.read_text(encoding="utf-8"))
-        base_links = data["links"]
-        selected = dict(base_links[0])
-        selected_a = dict(selected, key="parallel-a")
-        selected_b = dict(selected, key="parallel-b")
-        data["links"] = [selected_a, selected_b]
         data["multigraph"] = True
         data["directed"] = True
         graph_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-        assert _rebuild_code(tmp_path, no_cluster=True, acquire_lock=False)
+        # Full re-extraction (changed_paths is None) re-extracts app.py and must
+        # re-supply all three parallels via the fresh AST pass.
+        assert _rebuild_code(tmp_path, no_cluster=True, acquire_lock=False) is True
         rebuilt = json.loads(graph_path.read_text(encoding="utf-8"))
     finally:
         os.chdir(cwd)
 
-    def same_relationship(edge: dict) -> bool:
-        comparable = dict(edge)
-        comparable.pop("key", None)
-        comparable.pop("confidence_score", None)
-        expected = dict(selected)
-        expected.pop("confidence_score", None)
-        return comparable == expected
+    def links(d):
+        return d.get("links", d.get("edges", []))
 
-    matching = [edge for edge in rebuilt["links"] if same_relationship(edge)]
-    assert {edge.get("key") for edge in matching} == {"parallel-a", "parallel-b"}
-    assert len(matching) == 2
+    a = next(n["id"] for n in rebuilt["nodes"] if n.get("label", "").startswith("alpha("))
+    b = next(n["id"] for n in rebuilt["nodes"] if n.get("label", "").startswith("beta("))
+    calls = [
+        e for e in links(rebuilt)
+        if e.get("source") == b and e.get("target") == a and e.get("relation") == "calls"
+    ]
+    assert len(calls) == 3, f"all three real call-site parallels must survive, got {len(calls)}"
+    assert {e.get("source_location") for e in calls} == {"L5", "L6", "L7"}
+
+    reloaded = load_graph(rebuilt)
+    assert isinstance(reloaded, nx.MultiDiGraph)
+    assert reloaded.number_of_edges(b, a) == 3, "reloaded MultiDiGraph must keep 3 parallels"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
+def test_watch_full_rebuild_prunes_removed_import_edge(tmp_path):
+    """A removed import between two surviving files must NOT linger as a phantom
+    stale edge on a full rebuild (the #1521 motivation). Both endpoint nodes still
+    exist, so endpoint-membership preservation alone would keep the dead edge;
+    source_file-scoped eviction must drop it. The import edge is an AST-AST edge,
+    so the #1521 hybrid still evicts it (only semantic / non-AST-touching edges are
+    spared)."""
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    _git_init(corpus)
+    (corpus / "a.py").write_text("import b\n\ndef use():\n    return b.thing\n", encoding="utf-8")
+    (corpus / "b.py").write_text("thing = 1\n", encoding="utf-8")
+
+    cwd = os.getcwd()
+    try:
+        os.chdir(corpus)
+        assert _rebuild_code(corpus, acquire_lock=False) is True
+        graph_path = corpus / "graphify-out" / "graph.json"
+        before = json.loads(graph_path.read_text(encoding="utf-8"))
+        before_links = before.get("links", before.get("edges", []))
+        assert any(e.get("relation") == "imports" for e in before_links), (
+            "the import edge must exist before removal"
+        )
+
+        # Remove the import; both a.py and b.py survive.
+        (corpus / "a.py").write_text("def use():\n    return 1\n", encoding="utf-8")
+        assert _rebuild_code(corpus, acquire_lock=False) is True
+        after = json.loads(graph_path.read_text(encoding="utf-8"))
+    finally:
+        os.chdir(cwd)
+
+    after_links = after.get("links", after.get("edges", []))
+    assert not any(e.get("relation") == "imports" for e in after_links), (
+        "removed import must not survive as a phantom stale edge on full rebuild"
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
+def test_watch_full_rebuild_preserves_semantic_edge(tmp_path):
+    """A full rebuild is AST-only (the LLM/semantic pass is NOT re-run from the
+    CLI), so a semantic / INFERRED (_origin != "ast") edge whose endpoints survive
+    must be PRESERVED across a full rebuild. #1521's blanket source_file eviction
+    over-evicts a *sourced* semantic edge (it is not re-supplied by the AST pass);
+    the hybrid scopes eviction to AST/structural edges only. The sourceless
+    semantic edge already survives today and guards the no-regression direction."""
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    _git_init(corpus)
+    (corpus / "a.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
+    (corpus / "b.py").write_text("def bar():\n    return 2\n", encoding="utf-8")
+
+    cwd = os.getcwd()
+    try:
+        os.chdir(corpus)
+        assert _rebuild_code(corpus, acquire_lock=False) is True
+        graph_path = corpus / "graphify-out" / "graph.json"
+        data = json.loads(graph_path.read_text(encoding="utf-8"))
+        foo = next(n["id"] for n in data["nodes"] if n.get("label", "").startswith("foo("))
+        bar = next(n["id"] for n in data["nodes"] if n.get("label", "").startswith("bar("))
+        links = data.get("links", data.get("edges", []))
+        # Sourced semantic edge — the AST pass will NOT re-emit it.
+        links.append({
+            "source": foo, "target": bar, "relation": "depends_on",
+            "confidence": "INFERRED", "_origin": "semantic", "source_file": "a.py",
+        })
+        # Sourceless semantic edge — must also survive.
+        links.append({
+            "source": foo, "target": bar, "relation": "relates_to",
+            "confidence": "INFERRED", "_origin": "semantic",
+        })
+        data["links"] = links
+        # Multigraph so the two semantic edges on the same foo->bar pair coexist as
+        # parallels — a simple DiGraph collapses them to one, masking the assertion.
+        # The fork's real semantic layer lives in a MultiDiGraph anyway.
+        data["multigraph"] = True
+        data["directed"] = True
+        graph_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+        # Full rebuild re-extracts a.py and b.py (AST only).
+        assert _rebuild_code(corpus, acquire_lock=False) is True
+        after = json.loads(graph_path.read_text(encoding="utf-8"))
+    finally:
+        os.chdir(cwd)
+
+    after_links = after.get("links", after.get("edges", []))
+    assert any(e.get("relation") == "relates_to" for e in after_links), (
+        "sourceless semantic edge must survive a full rebuild"
+    )
+    assert any(e.get("relation") == "depends_on" for e in after_links), (
+        "sourced semantic (_origin!=ast) edge must survive a full rebuild "
+        "(hybrid: scope eviction to AST/structural edges only)"
+    )
 
 
 # --- RISK 3: no-cluster compare must not flap on a legacy edges-keyed graph.json ---

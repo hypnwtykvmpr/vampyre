@@ -3793,6 +3793,7 @@ def main() -> None:
         force = os.environ.get("GRAPHIFY_FORCE", "").lower() in ("1", "true", "yes")
         no_cluster = False
         no_viz = False
+        remap = False
         args = sys.argv[2:]
         watch_arg: str | None = None
         for a in args:
@@ -3804,6 +3805,9 @@ def main() -> None:
                 continue
             if a == "--no-viz":
                 no_viz = True
+                continue
+            if a in ("--remap", "--rebuild"):
+                remap = True
                 continue
             if a.startswith("-"):
                 print(f"error: unknown update option: {a}", file=sys.stderr)
@@ -3825,6 +3829,49 @@ def main() -> None:
         if not watch_path.exists():
             print(f"error: path not found: {watch_path}", file=sys.stderr)
             sys.exit(1)
+
+        if remap:
+            # --remap (a.k.a. --rebuild): force a full AST + semantic-LLM
+            # re-extraction so EVERY edge is re-stamped with provenance at source
+            # (AST edges "ast", LLM edges "semantic"), migrating a pre-stamp graph
+            # to the authoritative edge-marker in one pass (#1521). Reuses the
+            # `extract` command's pipeline (which now stamps both passes) by
+            # re-dispatching in-process — consistent with this CLI's sys.argv-based
+            # command handling. Without --remap, `update` stays AST-only (no LLM)
+            # and still re-stamps AST edges via extract()'s edge stamp; semantic
+            # edges are preserved by the watch eviction until a --remap re-runs the
+            # LLM pass. If no LLM backend key is set, the extract pipeline degrades
+            # to AST-only (and still re-stamps AST edges) rather than failing.
+            if no_viz:
+                # `extract` always renders graph.html and has no --no-viz option;
+                # surface that the flag is not honored here rather than dropping it
+                # silently.
+                print(
+                    "note: --no-viz is not applied with --remap (a full "
+                    "re-extraction always writes graph.html)",
+                    file=sys.stderr,
+                )
+            print(
+                f"Re-mapping {watch_path}: full AST + semantic LLM re-extraction "
+                "to re-stamp edge provenance..."
+            )
+            # Pass an ABSOLUTE path so the inner `extract` dispatch never misreads a
+            # scan root whose name starts with '-' as a flag (extract treats a
+            # leading-'-' arg as "no path given"). watch_path.exists() was verified
+            # above, so resolve() is safe.
+            remap_argv = ["graphify", "extract", str(watch_path.resolve())]
+            if no_cluster:
+                remap_argv.append("--no-cluster")
+            # Restore the global sys.argv after the in-process re-dispatch so a
+            # caller that invokes main() in-process (the test suite, a future
+            # `sys.exit(main())` wrapper, or an atexit handler) never observes the
+            # temporarily-rewritten argv.
+            _saved_argv = sys.argv
+            try:
+                sys.argv = remap_argv
+                return main()
+            finally:
+                sys.argv = _saved_argv
 
         # PR 7 go/no-go gate: "no silent fallback to simple graph behavior."
         # No special handling is needed here: watch._rebuild_code now inherits
