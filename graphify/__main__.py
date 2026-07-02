@@ -5138,6 +5138,18 @@ def main() -> None:
             print(f"[graphify extract] Cargo: {len(cargo_result['nodes'])} nodes, "
                   f"{len(cargo_result['edges'])} edges")
 
+        # Stamp semantic provenance on every semantic-pipeline edge. Fresh
+        # chunks arrive already stamped (extract_corpus_parallel routes each
+        # chunk through llm._merge_into), but LEGACY semantic-cache entries —
+        # written before the stamp existed — merge in unstamped via
+        # check_semantic_cache, and an unstamped edge on a file the AST pass
+        # re-extracts (markdown is structurally extracted now) falls to the
+        # endpoint heuristic and is wrongly evicted on an AST-only full rebuild
+        # (#1521 doc-pipeline gap). setdefault keeps _merge_into's stamp or any
+        # future tertiary tag, so this is a no-op for already-stamped edges.
+        for _e in sem_result.get("edges", []):
+            if isinstance(_e, dict):
+                _e.setdefault("_origin", "semantic")
         # Merge AST + semantic + pg_result + cargo_result. Order matters for deduplication: passing AST
         # first means semantic node attributes win on collision (richer labels
         # for symbols also referenced in docs). Hyperedges only come from the

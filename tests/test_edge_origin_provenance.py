@@ -169,6 +169,59 @@ def test_unmarked_and_tertiary_origin_edges_load(tmp_path):
     assert isinstance(reloaded, nx.MultiDiGraph)
 
 
+# --- CLI semantic merge stamps cached edges (doc-pipeline gap) ---
+
+@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
+def test_cli_semantic_merge_stamps_cached_edges(tmp_path):
+    """Cached semantic edges bypass llm._merge_into (check_semantic_cache path),
+    so the CLI merge must stamp them _origin='semantic' itself. Unstamped, a doc
+    edge between two AST-resuppliable endpoints is wrongly evicted on an AST-only
+    full rebuild now that markdown is structurally extracted (#1521 doc gap).
+    """
+    from graphify.cache import save_semantic_cache
+
+    _git_init(tmp_path)
+    (tmp_path / "a.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "NOTES.md").write_text("# Notes\n\nalpha is documented here.\n", encoding="utf-8")
+    # Seed the semantic cache with UNSTAMPED nodes/edges (the pre-stamp cache
+    # format) so check_semantic_cache merges them without any LLM call.
+    save_semantic_cache(
+        nodes=[
+            {"id": "notes_doc", "label": "NOTES", "type": "document",
+             "source_file": "NOTES.md", "file_type": "document"},
+            {"id": "notes_topic", "label": "alpha docs", "type": "concept",
+             "source_file": "NOTES.md", "file_type": "document"},
+        ],
+        edges=[
+            {"source": "notes_doc", "target": "notes_topic", "relation": "references",
+             "source_file": "NOTES.md", "confidence": "EXTRACTED", "weight": 1.0},
+        ],
+        root=tmp_path,
+    )
+    env = {k: v for k, v in os.environ.items()
+           if not (k.endswith("_API_KEY") or k.startswith(("AWS_", "AZURE_", "OLLAMA")))}
+    # The CLI demands a key whenever doc files exist, BEFORE consulting the
+    # cache. The seeded cache hit means this dummy key is never used — a cache
+    # MISS would hit the backend with a bogus key and fail the returncode
+    # assertion loudly (which is what we want: the test's premise broke).
+    env["GEMINI_API_KEY"] = "dummy-never-used-cache-hit-expected"
+    proc = subprocess.run(
+        [sys.executable, "-m", "graphify", "extract", str(tmp_path), "--no-cluster"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=300,
+    )
+    assert proc.returncode == 0, f"extract failed:\n{proc.stdout}\n{proc.stderr}"
+    assert "semantic cache: 1 hit" in proc.stdout, (
+        f"expected a pure cache hit (no LLM call):\n{proc.stdout}\n{proc.stderr}"
+    )
+    data = json.loads((tmp_path / "graphify-out" / "graph.json").read_text(encoding="utf-8"))
+    links = data.get("links", data.get("edges", []))
+    sem = [e for e in links if e.get("source") == "notes_doc"]
+    assert sem, f"cached semantic edge must reach graph.json\n{proc.stdout}\n{proc.stderr}"
+    assert all(e.get("_origin") == "semantic" for e in sem), (
+        "cached semantic edges must be stamped _origin='semantic' by the CLI merge"
+    )
+
+
 # --- helper ---
 
 def _git_init(path: Path) -> None:
