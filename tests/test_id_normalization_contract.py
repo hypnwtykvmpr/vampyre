@@ -14,7 +14,10 @@ implementation and cannot diverge. These tests lock that contract: if a future
 change re-forks the normalization (a new local helper, an inlined regex, a
 dropped ``casefold``), they fail.
 """
+
+import random
 import re
+import string
 
 import pytest
 
@@ -25,20 +28,20 @@ from graphify.ids import make_id, normalize_id
 # Inputs that previously diverged or are easy to get wrong. The single-part form
 # of `_make_id` must equal `_normalize_id` for every one of these.
 CONTRACT_CASES = [
-    "Session_ValidateToken",      # casing
-    "session.validate-token",     # punctuation -> underscore
-    "foo__bar..baz",              # repeated separators collapse
-    "  Leading_Trailing__  ",     # strip stray underscores/space
-    "A/B\\C",                     # path separators both directions
-    "MixedCASE",                  # #811: casefold
-    "café",                       # composed accented Latin (NFKC)
-    "café",                 # decomposed e + combining acute -> same as 'café'
-    "日本語クラス",                  # #811: CJK letters survive, not collapsed
-    "Кириллица",                  # Cyrillic survives
-    "naïve_Über",                 # mixed accented Latin
-    "x_c1",                       # must NOT be treated as a chunk suffix here
-    "__dunder__",                 # leading/trailing underscores stripped
-    "tab\tnewline\nspace ",       # whitespace runs -> single underscore
+    "Session_ValidateToken",  # casing
+    "session.validate-token",  # punctuation -> underscore
+    "foo__bar..baz",  # repeated separators collapse
+    "  Leading_Trailing__  ",  # strip stray underscores/space
+    "A/B\\C",  # path separators both directions
+    "MixedCASE",  # #811: casefold
+    "café",  # composed accented Latin (NFKC)
+    "café",  # decomposed e + combining acute -> same as 'café'
+    "日本語クラス",  # #811: CJK letters survive, not collapsed
+    "Кириллица",  # Cyrillic survives
+    "naïve_Über",  # mixed accented Latin
+    "x_c1",  # must NOT be treated as a chunk suffix here
+    "__dunder__",  # leading/trailing underscores stripped
+    "tab\tnewline\nspace ",  # whitespace runs -> single underscore
 ]
 
 
@@ -63,8 +66,10 @@ def test_make_id_joins_then_normalizes():
     parts = ("auth", "session.py", "ValidateToken")
     assert make_id(*parts) == normalize_id("_".join(parts))
     # Documented spec example.
-    assert make_id("src/auth/session.py".split("/")[-2], "session", "ValidateToken") == \
-        "auth_session_validatetoken"
+    assert (
+        make_id("src/auth/session.py".split("/")[-2], "session", "ValidateToken")
+        == "auth_session_validatetoken"
+    )
 
 
 def test_unicode_identifiers_do_not_collapse_to_empty():
@@ -96,24 +101,34 @@ def test_both_callers_share_one_implementation():
     # of truth" leaks back into copy-pasted forks (#1378).
     from graphify.mcp_ingest import _make_id as _mcp_make_id
     from graphify.symbol_resolution import _bash_make_id
+
     for fn in (_make_id, _mcp_make_id, _bash_make_id):
         assert fn("Foo.Bar", "baz") == make_id("Foo.Bar", "baz")
         assert fn("Ångström", "Ⅳ") == make_id("Ångström", "Ⅳ")
 
 
-# Optional property-based fuzzing — hypothesis is a dev dependency. Skip cleanly
-# if it is unavailable so the deterministic cases above still run everywhere.
-hypothesis = pytest.importorskip("hypothesis")
-from hypothesis import given  # noqa: E402
-from hypothesis import strategies as st  # noqa: E402
+def _generated_normalization_inputs() -> list[str]:
+    """Return a reproducible mix of ASCII, separators, and Unicode identifiers."""
+    alphabet = list(
+        string.ascii_letters
+        + string.digits
+        + " _-./\\\t\n:#@$%&*()[]{}"
+        + "cafe\u0301naiveUberAngstrom"
+        + "日本語クラスКириллицаⅣ"
+    )
+    rng = random.Random(1378)
+    samples = ["", *CONTRACT_CASES]
+    for _ in range(512):
+        samples.append("".join(rng.choice(alphabet) for _ in range(rng.randrange(65))))
+    return samples
 
 
-@given(st.text())
-def test_property_make_id_equals_normalize_id(s):
-    assert _make_id(s) == _normalize_id(s)
+def test_generated_inputs_keep_all_id_producers_aligned():
+    for raw in _generated_normalization_inputs():
+        assert _make_id(raw) == _normalize_id(raw)
 
 
-@given(st.text())
-def test_property_normalize_id_idempotent(s):
-    once = normalize_id(s)
-    assert normalize_id(once) == once
+def test_generated_inputs_normalize_idempotently():
+    for raw in _generated_normalization_inputs():
+        once = normalize_id(raw)
+        assert normalize_id(once) == once

@@ -18,9 +18,11 @@ from graphify.projections import (
 )
 
 try:
-    import jieba as _jieba  # type: ignore[import-untyped]
+    from jieba3 import jieba3 as _ChineseTokenizer  # type: ignore[import-untyped]
 except ImportError:
-    _jieba = None
+    _chinese_tokenizer = None
+else:
+    _chinese_tokenizer = _ChineseTokenizer()
 
 
 def _load_graph(graph_path: str) -> nx.Graph:
@@ -38,6 +40,7 @@ def _load_graph(graph_path: str) -> nx.Graph:
         data = {**data, "directed": True}
         try:
             from graphify.build import graph_has_legacy_ids as _legacy
+
             if _legacy(data.get("nodes", [])):
                 print(
                     "[graphify] note: this graph uses the pre-#1504 node-ID scheme; "
@@ -55,6 +58,7 @@ def _load_graph(graph_path: str) -> nx.Graph:
         # when no sidecar exists, leaving un-annotated output byte-identical.
         try:
             from graphify.reflect import load_learning_overlay as _llo
+
             G.graph["_learning_overlay"] = _llo(resolved)
         except Exception:
             G.graph["_learning_overlay"] = {}
@@ -63,7 +67,9 @@ def _load_graph(graph_path: str) -> nx.Graph:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
     except json.JSONDecodeError as exc:
-        print(f"error: graph.json is corrupted ({exc}). Re-run /graphify to rebuild.", file=sys.stderr)
+        print(
+            f"error: graph.json is corrupted ({exc}). Re-run /graphify to rebuild.", file=sys.stderr
+        )
         sys.exit(1)
 
 
@@ -79,6 +85,7 @@ def _communities_from_graph(G: nx.Graph) -> dict[int, list[str]]:
 
 def _strip_diacritics(text: str | None) -> str:
     import unicodedata
+
     if not isinstance(text, str):
         text = "" if text is None else str(text)
     nfkd = unicodedata.normalize("NFKD", text)
@@ -96,10 +103,10 @@ def _has_chinese(text: str) -> bool:
 
 def _segment_chinese(text: str) -> list[str]:
     """Segment Chinese text and keep the original term for exact matching."""
-    if _jieba is not None:
-        segments = [w for w in _jieba.cut(text) if len(w.strip()) > 0]
+    if _chinese_tokenizer is not None:
+        segments = [w for w in _chinese_tokenizer.cut_text(text) if len(w.strip()) > 0]
     else:
-        segments = [text[i:i + 2] for i in range(len(text) - 1)] or [text]
+        segments = [text[i : i + 2] for i in range(len(text) - 1)] or [text]
     if len(text) > 1 and text not in segments:
         segments.append(text)
     return segments
@@ -119,15 +126,68 @@ def _is_searchable(term: str) -> bool:
 # to query terms only — node text is never filtered, so a symbol literally named
 # `work` stays findable via explain/path. `work`/`works`/`working` are included
 # because "how does X work" / "how X works" is the most common question phrasing.
-_QUERY_STOPWORDS = frozenset({
-    "how", "what", "why", "when", "where", "which", "who", "whom", "whose",
-    "does", "did", "is", "are", "was", "were", "be", "been", "being",
-    "can", "could", "should", "would", "will", "shall", "may", "might", "must",
-    "has", "have", "had", "the", "and", "but", "not", "for", "from", "with",
-    "without", "into", "onto", "off", "that", "this", "these", "those", "there",
-    "here", "its", "their", "them", "they", "about", "any", "all", "some",
-    "work", "works", "working",
-})
+_QUERY_STOPWORDS = frozenset(
+    {
+        "how",
+        "what",
+        "why",
+        "when",
+        "where",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "does",
+        "did",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "can",
+        "could",
+        "should",
+        "would",
+        "will",
+        "shall",
+        "may",
+        "might",
+        "must",
+        "has",
+        "have",
+        "had",
+        "the",
+        "and",
+        "but",
+        "not",
+        "for",
+        "from",
+        "with",
+        "without",
+        "into",
+        "onto",
+        "off",
+        "that",
+        "this",
+        "these",
+        "those",
+        "there",
+        "here",
+        "its",
+        "their",
+        "them",
+        "they",
+        "about",
+        "any",
+        "all",
+        "some",
+        "work",
+        "works",
+        "working",
+    }
+)
 
 
 def _query_terms(question: str) -> list[str]:
@@ -186,7 +246,7 @@ def _trigrams(text: str) -> set[str]:
     """Character trigrams of `text`; for <3-char text the whole string is the key."""
     if len(text) < 3:
         return {text} if text else set()
-    return {text[i:i + 3] for i in range(len(text) - 2)}
+    return {text[i : i + 3] for i in range(len(text) - 2)}
 
 
 def _node_search_text(data: dict, nid: str) -> str:
@@ -236,7 +296,9 @@ def _get_trigram_index(G: nx.Graph) -> dict:
     return idx
 
 
-def _trigram_candidates(G: nx.Graph, needles: list[str], *, guard_frac: float = 0.10) -> list[str] | None:
+def _trigram_candidates(
+    G: nx.Graph, needles: list[str], *, guard_frac: float = 0.10
+) -> list[str] | None:
     """Node IDs whose text could contain any `needle` as a substring, via the
     trigram index — a *superset* the caller then re-scores with the exact predicates.
 
@@ -303,7 +365,8 @@ def _score_nodes(G: nx.Graph, terms: list[str]) -> list[tuple[float, str]]:
     # non-candidate node always scores 0. (IDF above stays a whole-graph statistic.)
     candidate_ids = _trigram_candidates(G, norm_terms + ([joined] if joined else []))
     node_iter = (
-        G.nodes(data=True) if candidate_ids is None
+        G.nodes(data=True)
+        if candidate_ids is None
         else ((nid, G.nodes[nid]) for nid in candidate_ids)
     )
     for nid, data in node_iter:
@@ -353,7 +416,9 @@ def _score_nodes(G: nx.Graph, terms: list[str]) -> list[tuple[float, str]]:
     return scored
 
 
-def _pick_seeds(scored: list[tuple[float, str]], max_k: int = 3, gap_ratio: float = 0.2) -> list[str]:
+def _pick_seeds(
+    scored: list[tuple[float, str]], max_k: int = 3, gap_ratio: float = 0.2
+) -> list[str]:
     """Select BFS seed nodes, stopping when score drops too far below the top.
 
     Prevents high-frequency noise terms (error, exception) from stealing seed
@@ -448,7 +513,9 @@ def _infer_context_filters(question: str) -> list[str]:
     return inferred
 
 
-def _resolve_context_filters(question: str, explicit_filters: list[str] | None = None) -> tuple[list[str], str | None]:
+def _resolve_context_filters(
+    question: str, explicit_filters: list[str] | None = None
+) -> tuple[list[str], str | None]:
     normalized = _normalize_context_filters(explicit_filters)
     if normalized:
         return normalized, "explicit"
@@ -640,7 +707,11 @@ def _query_graph_text(
         return "No matching nodes found."
     resolved_filters, filter_source = _resolve_context_filters(question, context_filters)
     traversal_graph = _filter_graph_by_context(G, resolved_filters)
-    nodes, edges = _dfs(traversal_graph, start_nodes, depth) if mode == "dfs" else _bfs(traversal_graph, start_nodes, depth)
+    nodes, edges = (
+        _dfs(traversal_graph, start_nodes, depth)
+        if mode == "dfs"
+        else _bfs(traversal_graph, start_nodes, depth)
+    )
     header_parts = [
         f"Traversal: {mode.upper()} depth={depth}",
         f"Start: {[G.nodes[n].get('label', n) for n in start_nodes]}",
@@ -670,7 +741,8 @@ def _find_node(G: nx.Graph, label: str) -> list[str]:
     # ordering — and thus matches[0] — is byte-identical to the full scan).
     candidate_ids = _trigram_candidates(G, [term])
     node_iter = (
-        G.nodes(data=True) if candidate_ids is None
+        G.nodes(data=True)
+        if candidate_ids is None
         else ((nid, G.nodes[nid]) for nid in candidate_ids)
     )
     for nid, d in node_iter:
@@ -699,8 +771,7 @@ def _find_node(G: nx.Graph, label: str) -> list[str]:
             nid
             for nid in source_exact
             if str(G.nodes[nid].get("source_location", "")) == "L1"
-            and _strip_diacritics(str(G.nodes[nid].get("label") or "")).lower()
-            == query_basename
+            and _strip_diacritics(str(G.nodes[nid].get("label") or "")).lower() == query_basename
         ]
         if len(preferred) == 1:
             source_exact = preferred + [nid for nid in source_exact if nid != preferred[0]]
@@ -984,11 +1055,26 @@ def _build_server(graph_path: str):
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "question": {"type": "string", "description": "Natural language question or keyword search"},
-                        "mode": {"type": "string", "enum": ["bfs", "dfs"], "default": "bfs",
-                                 "description": "bfs=broad context, dfs=trace a specific path"},
-                        "depth": {"type": "integer", "default": 3, "description": "Traversal depth (1-6)"},
-                        "token_budget": {"type": "integer", "default": 2000, "description": "Max output tokens"},
+                        "question": {
+                            "type": "string",
+                            "description": "Natural language question or keyword search",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["bfs", "dfs"],
+                            "default": "bfs",
+                            "description": "bfs=broad context, dfs=trace a specific path",
+                        },
+                        "depth": {
+                            "type": "integer",
+                            "default": 3,
+                            "description": "Traversal depth (1-6)",
+                        },
+                        "token_budget": {
+                            "type": "integer",
+                            "default": 2000,
+                            "description": "Max output tokens",
+                        },
                         "context_filter": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -1003,7 +1089,9 @@ def _build_server(graph_path: str):
                 description="Get full details for a specific node by label or ID.",
                 inputSchema={
                     "type": "object",
-                    "properties": {"label": {"type": "string", "description": "Node label or ID to look up"}},
+                    "properties": {
+                        "label": {"type": "string", "description": "Node label or ID to look up"}
+                    },
                     "required": ["label"],
                 },
             ),
@@ -1014,7 +1102,10 @@ def _build_server(graph_path: str):
                     "type": "object",
                     "properties": {
                         "label": {"type": "string"},
-                        "relation_filter": {"type": "string", "description": "Optional: filter by relation type"},
+                        "relation_filter": {
+                            "type": "string",
+                            "description": "Optional: filter by relation type",
+                        },
                     },
                     "required": ["label"],
                 },
@@ -1024,14 +1115,22 @@ def _build_server(graph_path: str):
                 description="Get all nodes in a community by community ID.",
                 inputSchema={
                     "type": "object",
-                    "properties": {"community_id": {"type": "integer", "description": "Community ID (0-indexed by size)"}},
+                    "properties": {
+                        "community_id": {
+                            "type": "integer",
+                            "description": "Community ID (0-indexed by size)",
+                        }
+                    },
                     "required": ["community_id"],
                 },
             ),
             types.Tool(
                 name="god_nodes",
                 description="Return the most connected nodes - the core abstractions of the knowledge graph.",
-                inputSchema={"type": "object", "properties": {"top_n": {"type": "integer", "default": 10}}},
+                inputSchema={
+                    "type": "object",
+                    "properties": {"top_n": {"type": "integer", "default": 10}},
+                },
             ),
             types.Tool(
                 name="graph_stats",
@@ -1044,9 +1143,19 @@ def _build_server(graph_path: str):
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "source": {"type": "string", "description": "Source concept label or keyword"},
-                        "target": {"type": "string", "description": "Target concept label or keyword"},
-                        "max_hops": {"type": "integer", "default": 8, "description": "Maximum hops to consider"},
+                        "source": {
+                            "type": "string",
+                            "description": "Source concept label or keyword",
+                        },
+                        "target": {
+                            "type": "string",
+                            "description": "Target concept label or keyword",
+                        },
+                        "max_hops": {
+                            "type": "integer",
+                            "default": 8,
+                            "description": "Maximum hops to consider",
+                        },
                     },
                     "required": ["source", "target"],
                 },
@@ -1061,8 +1170,14 @@ def _build_server(graph_path: str):
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "base": {"type": "string", "description": "Base branch to filter PRs by (auto-detected if omitted)"},
-                        "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."},
+                        "base": {
+                            "type": "string",
+                            "description": "Base branch to filter PRs by (auto-detected if omitted)",
+                        },
+                        "repo": {
+                            "type": "string",
+                            "description": "GitHub repo (owner/repo). Defaults to current repo.",
+                        },
                     },
                 },
             ),
@@ -1077,7 +1192,10 @@ def _build_server(graph_path: str):
                     "type": "object",
                     "properties": {
                         "pr_number": {"type": "integer", "description": "PR number to analyse"},
-                        "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."},
+                        "repo": {
+                            "type": "string",
+                            "description": "GitHub repo (owner/repo). Defaults to current repo.",
+                        },
                     },
                     "required": ["pr_number"],
                 },
@@ -1092,8 +1210,14 @@ def _build_server(graph_path: str):
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "base": {"type": "string", "description": "Base branch to filter PRs by (auto-detected if omitted)"},
-                        "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."},
+                        "base": {
+                            "type": "string",
+                            "description": "Base branch to filter PRs by (auto-detected if omitted)",
+                        },
+                        "repo": {
+                            "type": "string",
+                            "description": "GitHub repo (owner/repo). Defaults to current repo.",
+                        },
                     },
                 },
             ),
@@ -1116,6 +1240,7 @@ def _build_server(graph_path: str):
     def _tool_query_graph(arguments: dict) -> str:
         import time as _time
         from graphify import querylog
+
         question = arguments["question"]
         mode = arguments.get("mode", "bfs")
         depth = min(int(arguments.get("depth", 3)), 6)
@@ -1144,20 +1269,25 @@ def _build_server(graph_path: str):
 
     def _tool_get_node(arguments: dict) -> str:
         label = arguments["label"].lower()
-        matches = [(nid, d) for nid, d in G.nodes(data=True)
-                   if label in (d.get("label") or "").lower() or label == nid.lower()]
+        matches = [
+            (nid, d)
+            for nid, d in G.nodes(data=True)
+            if label in (d.get("label") or "").lower() or label == nid.lower()
+        ]
         if not matches:
             return f"No node matching '{label}' found."
         nid, d = matches[0]
         # Sanitise every LLM-derived field before concatenation (F-010).
-        return "\n".join([
-            f"Node: {sanitize_label(d.get('label', nid))}",
-            f"  ID: {sanitize_label(nid)}",
-            f"  Source: {sanitize_label(str(d.get('source_file', '')))} {sanitize_label(str(d.get('source_location', '')))}",
-            f"  Type: {sanitize_label(str(d.get('file_type', '')))}",
-            f"  Community: {sanitize_label(str(d.get('community_name') or d.get('community', '')))}",
-            f"  Degree: {G.degree(nid)}",
-        ])
+        return "\n".join(
+            [
+                f"Node: {sanitize_label(d.get('label', nid))}",
+                f"  ID: {sanitize_label(nid)}",
+                f"  Source: {sanitize_label(str(d.get('source_file', '')))} {sanitize_label(str(d.get('source_location', '')))}",
+                f"  Type: {sanitize_label(str(d.get('file_type', '')))}",
+                f"  Community: {sanitize_label(str(d.get('community_name') or d.get('community', '')))}",
+                f"  Degree: {G.degree(nid)}",
+            ]
+        )
 
     def _tool_get_neighbors(arguments: dict) -> str:
         return _neighbors_text(
@@ -1184,6 +1314,7 @@ def _build_server(graph_path: str):
 
     def _tool_god_nodes(arguments: dict) -> str:
         from graphify.analyze import god_nodes as _god_nodes
+
         nodes = _god_nodes(G, top_n=int(arguments.get("top_n", 10)))
         lines = ["God nodes (most connected):"]
         lines += [f"  {i}. {n['label']} - {n['degree']} edges" for i, n in enumerate(nodes, 1)]
@@ -1196,9 +1327,9 @@ def _build_server(graph_path: str):
             f"Nodes: {G.number_of_nodes()}\n"
             f"Edges: {G.number_of_edges()}\n"
             f"Communities: {len(communities)}\n"
-            f"EXTRACTED: {round(confs.count('EXTRACTED')/total*100)}%\n"
-            f"INFERRED: {round(confs.count('INFERRED')/total*100)}%\n"
-            f"AMBIGUOUS: {round(confs.count('AMBIGUOUS')/total*100)}%\n"
+            f"EXTRACTED: {round(confs.count('EXTRACTED') / total * 100)}%\n"
+            f"INFERRED: {round(confs.count('INFERRED') / total * 100)}%\n"
+            f"AMBIGUOUS: {round(confs.count('AMBIGUOUS') / total * 100)}%\n"
         )
 
     def _tool_shortest_path(arguments: dict) -> str:
@@ -1211,6 +1342,7 @@ def _build_server(graph_path: str):
 
     def _tool_list_prs(arguments: dict) -> str:
         from graphify.prs import fetch_prs, fetch_worktrees, format_prs_text, _detect_default_branch
+
         repo = arguments.get("repo") or None
         base = arguments.get("base") or _detect_default_branch(repo)
         try:
@@ -1224,11 +1356,17 @@ def _build_server(graph_path: str):
 
     def _tool_get_pr_impact(arguments: dict) -> str:
         from graphify.prs import fetch_pr_files, compute_pr_impact, _gh, _parse_ci
+
         number = int(arguments["pr_number"])
         repo = arguments.get("repo") or None
         # Use gh pr view directly — works for any base branch, not just the default
-        view_args = ["pr", "view", str(number), "--json",
-                     "title,headRefName,baseRefName,author,isDraft,reviewDecision,statusCheckRollup,updatedAt"]
+        view_args = [
+            "pr",
+            "view",
+            str(number),
+            "--json",
+            "title,headRefName,baseRefName,author,isDraft,reviewDecision,statusCheckRollup,updatedAt",
+        ]
         if repo:
             view_args += ["--repo", repo]
         pr_data = _gh(*view_args)
@@ -1254,7 +1392,15 @@ def _build_server(graph_path: str):
 
     def _tool_triage_prs(arguments: dict) -> str:
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        from graphify.prs import fetch_prs, fetch_worktrees, fetch_pr_files, compute_pr_impact, _STATUS_ORDER, _detect_default_branch
+        from graphify.prs import (
+            fetch_prs,
+            fetch_worktrees,
+            fetch_pr_files,
+            compute_pr_impact,
+            _STATUS_ORDER,
+            _detect_default_branch,
+        )
+
         repo = arguments.get("repo") or None
         base = arguments.get("base") or _detect_default_branch(repo)
         try:
@@ -1264,7 +1410,9 @@ def _build_server(graph_path: str):
         worktrees = fetch_worktrees()
         for pr in prs:
             pr.worktree_path = worktrees.get(pr.branch)
-        actionable = [p for p in prs if p.base_branch == base and p.status not in ("WRONG-BASE", "STALE")]
+        actionable = [
+            p for p in prs if p.base_branch == base and p.status not in ("WRONG-BASE", "STALE")
+        ]
         if not actionable:
             return f"No actionable PRs targeting {base}."
         # Fetch diffs concurrently then compute graph impact using in-memory G
@@ -1285,7 +1433,10 @@ def _build_server(graph_path: str):
             "Rank these by review priority. Higher blast_radius = more graph communities affected = higher merge risk.\n"
         )
         lines = [header]
-        for p in sorted(actionable, key=lambda x: (_STATUS_ORDER.index(x.status) if x.status in _STATUS_ORDER else 99)):
+        for p in sorted(
+            actionable,
+            key=lambda x: _STATUS_ORDER.index(x.status) if x.status in _STATUS_ORDER else 99,
+        ):
             impact = f"  blast_radius={p.blast_radius}" if p.blast_radius else ""
             wt = f"  worktree={p.worktree_path}" if p.worktree_path else ""
             lines.append(
@@ -1311,7 +1462,10 @@ def _build_server(graph_path: str):
         labels_path = Path(active_graph_path).parent / ".graphify_labels.json"
         if labels_path.exists():
             try:
-                return {int(k): v for k, v in json.loads(labels_path.read_text(encoding="utf-8")).items()}
+                return {
+                    int(k): v
+                    for k, v in json.loads(labels_path.read_text(encoding="utf-8")).items()
+                }
             except Exception:
                 pass
         return {cid: f"Community {cid}" for cid in communities}
@@ -1319,12 +1473,42 @@ def _build_server(graph_path: str):
     @server.list_resources()
     async def list_resources() -> list[types.Resource]:
         return [
-            types.Resource(uri=AnyUrl("graphify://report"), name="Graph Report", description="Full GRAPH_REPORT.md", mimeType="text/markdown"),
-            types.Resource(uri=AnyUrl("graphify://stats"), name="Graph Stats", description="Node/edge/community counts and confidence breakdown", mimeType="text/plain"),
-            types.Resource(uri=AnyUrl("graphify://god-nodes"), name="God Nodes", description="Top 10 most-connected nodes", mimeType="text/plain"),
-            types.Resource(uri=AnyUrl("graphify://surprises"), name="Surprising Connections", description="Cross-community surprising connections", mimeType="text/plain"),
-            types.Resource(uri=AnyUrl("graphify://audit"), name="Confidence Audit", description="EXTRACTED/INFERRED/AMBIGUOUS edge breakdown", mimeType="text/plain"),
-            types.Resource(uri=AnyUrl("graphify://questions"), name="Suggested Questions", description="Suggested questions for this codebase", mimeType="text/plain"),
+            types.Resource(
+                uri=AnyUrl("graphify://report"),
+                name="Graph Report",
+                description="Full GRAPH_REPORT.md",
+                mimeType="text/markdown",
+            ),
+            types.Resource(
+                uri=AnyUrl("graphify://stats"),
+                name="Graph Stats",
+                description="Node/edge/community counts and confidence breakdown",
+                mimeType="text/plain",
+            ),
+            types.Resource(
+                uri=AnyUrl("graphify://god-nodes"),
+                name="God Nodes",
+                description="Top 10 most-connected nodes",
+                mimeType="text/plain",
+            ),
+            types.Resource(
+                uri=AnyUrl("graphify://surprises"),
+                name="Surprising Connections",
+                description="Cross-community surprising connections",
+                mimeType="text/plain",
+            ),
+            types.Resource(
+                uri=AnyUrl("graphify://audit"),
+                name="Confidence Audit",
+                description="EXTRACTED/INFERRED/AMBIGUOUS edge breakdown",
+                mimeType="text/plain",
+            ),
+            types.Resource(
+                uri=AnyUrl("graphify://questions"),
+                name="Suggested Questions",
+                description="Suggested questions for this codebase",
+                mimeType="text/plain",
+            ),
         ]
 
     @server.read_resource()
@@ -1343,12 +1527,15 @@ def _build_server(graph_path: str):
         if uri_str == "graphify://surprises":
             try:
                 from graphify.analyze import surprising_connections
+
                 surprises = surprising_connections(G, communities, top_n=10)
                 if not surprises:
                     return "No surprising connections found."
                 lines = ["Surprising cross-community connections:"]
                 for s in surprises:
-                    lines.append(f"  {s.get('source', '')} <-> {s.get('target', '')} [{s.get('relation', '')}]")
+                    lines.append(
+                        f"  {s.get('source', '')} <-> {s.get('target', '')} [{s.get('relation', '')}]"
+                    )
                 return "\n".join(lines)
             except Exception as exc:
                 return f"Could not compute surprising connections: {exc}"
@@ -1357,13 +1544,14 @@ def _build_server(graph_path: str):
             total = len(confs) or 1
             return (
                 f"Total edges: {total}\n"
-                f"EXTRACTED: {confs.count('EXTRACTED')} ({round(confs.count('EXTRACTED')/total*100)}%)\n"
-                f"INFERRED: {confs.count('INFERRED')} ({round(confs.count('INFERRED')/total*100)}%)\n"
-                f"AMBIGUOUS: {confs.count('AMBIGUOUS')} ({round(confs.count('AMBIGUOUS')/total*100)}%)\n"
+                f"EXTRACTED: {confs.count('EXTRACTED')} ({round(confs.count('EXTRACTED') / total * 100)}%)\n"
+                f"INFERRED: {confs.count('INFERRED')} ({round(confs.count('INFERRED') / total * 100)}%)\n"
+                f"AMBIGUOUS: {confs.count('AMBIGUOUS')} ({round(confs.count('AMBIGUOUS') / total * 100)}%)\n"
             )
         if uri_str == "graphify://questions":
             try:
                 from graphify.analyze import suggest_questions
+
                 community_labels = _load_community_labels()
                 questions = suggest_questions(G, communities, community_labels, top_n=10)
                 if not questions:
@@ -1448,6 +1636,7 @@ class _ApiKeyMiddleware:
             await self.app(scope, receive, send)
             return
         import hmac
+
         headers = dict(scope.get("headers") or [])
         provided = headers.get(b"x-api-key")
         if provided is None:
@@ -1458,14 +1647,16 @@ class _ApiKeyMiddleware:
         # Constant-time compare; reject when no key was supplied at all.
         if provided is None or not hmac.compare_digest(provided, self._expected):
             body = b'{"error": "unauthorized"}'
-            await send({
-                "type": "http.response.start",
-                "status": 401,
-                "headers": [
-                    (b"content-type", b"application/json"),
-                    (b"content-length", str(len(body)).encode("ascii")),
-                ],
-            })
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(body)).encode("ascii")),
+                    ],
+                }
+            )
             await send({"type": "http.response.body", "body": body})
             return
         await self.app(scope, receive, send)
@@ -1503,7 +1694,7 @@ def _build_http_app(
         from mcp.server.transport_security import TransportSecuritySettings
     except ImportError as e:
         raise ImportError(
-            'HTTP transport needs the mcp extra (mcp + starlette + uvicorn). '
+            "HTTP transport needs the mcp extra (mcp + starlette + uvicorn). "
             'Run: pip install "graphifyy[mcp]"'
         ) from e
 
@@ -1525,7 +1716,9 @@ def _build_http_app(
         security = TransportSecuritySettings(allowed_hosts=sorted(allowed))
 
     # The SDK rejects a non-positive timeout and forbids one in stateless mode.
-    idle_timeout = None if (stateless or not session_timeout or session_timeout <= 0) else session_timeout
+    idle_timeout = (
+        None if (stateless or not session_timeout or session_timeout <= 0) else session_timeout
+    )
 
     manager = StreamableHTTPSessionManager(
         app=server,
@@ -1580,7 +1773,7 @@ def serve_http(
         import uvicorn
     except ImportError as e:
         raise ImportError(
-            'HTTP transport needs the mcp extra (mcp + starlette + uvicorn). '
+            "HTTP transport needs the mcp extra (mcp + starlette + uvicorn). "
             'Run: pip install "graphifyy[mcp]"'
         ) from e
 

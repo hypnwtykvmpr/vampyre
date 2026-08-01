@@ -19,6 +19,7 @@ from graphify.detect import (
 
 # Single source of truth in graphify.paths (#1423); re-exported as _GRAPHIFY_OUT.
 from graphify.paths import GRAPHIFY_OUT as _GRAPHIFY_OUT
+
 _PENDING_FILENAME = ".pending_changes"
 _PENDING_DRAIN_MAX_PASSES = 20
 
@@ -527,16 +528,20 @@ def _existing_is_multigraph(graph_data: dict) -> bool:
     survive the write, but the next ``load_graph`` collapses them to one edge
     per pair (the PR 7 go/no-go violation).
 
-    The top-level ``multigraph: true`` boolean is authoritative (it is what
-    ``load_graph`` keys on). A serialized ``graphify_profile.graph_type ==
-    "multidigraph"`` is accepted as a secondary signal for graphs written by a
-    profile-stamping writer that, for any reason, lacked the top-level flag —
-    belt-and-suspenders so a multigraph is never misread as simple.
+    The top-level ``multigraph`` boolean is authoritative WHENEVER IT IS PRESENT,
+    exactly as ``load_graph`` treats it — including an explicit ``false``. A
+    serialized ``graphify_profile.graph_type == "multidigraph"`` is consulted
+    only when the top-level flag is ABSENT, rescuing a graph whose
+    profile-stamping writer omitted it so a multigraph is never misread as
+    simple. Letting a stale profile override an explicit ``multigraph: false``
+    would make this helper disagree with the loader on the same file — the
+    rebuild would emit a MultiDiGraph for a payload every reader loads as a
+    DiGraph.
     """
     if not isinstance(graph_data, dict):
         return False
-    if graph_data.get("multigraph") is True:
-        return True
+    if "multigraph" in graph_data:
+        return graph_data["multigraph"] is True
     graph_meta = graph_data.get("graph")
     if isinstance(graph_meta, dict):
         from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
@@ -603,14 +608,14 @@ def _check_shrink(
         return True
     if rebuilt_sources is not None:
         from graphify.build import _norm_source_file
+
         new_ids = {n.get("id") for n in new_nodes}
         lost = [n for n in existing_nodes if n.get("id") not in new_ids]
 
         def _accounted(n: dict) -> bool:
             sf = n.get("source_file")
-            return (not sf
-                    or sf in rebuilt_sources
-                    or _norm_source_file(sf) in rebuilt_sources)
+            return not sf or sf in rebuilt_sources or _norm_source_file(sf) in rebuilt_sources
+
         if all(_accounted(n) for n in lost):
             return True
     if tmp is not None:
@@ -631,6 +636,25 @@ def _report_for_compare(report_text: str) -> str:
 
 def _json_text(data: dict) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
+
+def _missing_local_source(source_file: object, *roots: Path) -> bool:
+    """Return whether a path-like local source is absent from every scan root."""
+    if not isinstance(source_file, str) or not source_file.strip():
+        return False
+    source = source_file.strip()
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", source):
+        return False
+    # A Windows absolute path cannot be proven stale from a non-Windows host.
+    if os.name != "nt" and re.match(r"^[A-Za-z]:[\\/]", source):
+        return False
+
+    path = Path(source).expanduser()
+    known_extensions = CODE_EXTENSIONS | DOC_EXTENSIONS | PAPER_EXTENSIONS | IMAGE_EXTENSIONS
+    if not path.is_absolute() and path.suffix.lower() not in known_extensions:
+        return False
+    candidates = [path] if path.is_absolute() else [root / path for root in roots]
+    return bool(candidates) and not any(candidate.exists() for candidate in candidates)
 
 
 def _rebuild_code(
@@ -758,6 +782,7 @@ def _rebuild_code(
         # extract only changed-and-still-existing files. Deleted paths are
         # tracked separately so their stale nodes can be evicted below.
         deleted_paths: set[str] = set()
+
         def _add_deleted_source(path: Path) -> None:
             for root in (project_root, watch_root):
                 deleted_paths.add(_nsf(str(path), str(root)) or str(path))
@@ -772,7 +797,9 @@ def _rebuild_code(
                     change_root=change_root,
                     watch_root=watch_root,
                 )
-                tracked = next((cand for cand in candidates if cand.exists() and cand in code_set), None)
+                tracked = next(
+                    (cand for cand in candidates if cand.exists() and cand in code_set), None
+                )
                 if tracked is not None:
                     if tracked not in wanted:
                         wanted.append(tracked)
@@ -780,7 +807,8 @@ def _rebuild_code(
 
                 existing_in_root = next(
                     (
-                        cand for cand in candidates
+                        cand
+                        for cand in candidates
                         if cand.exists() and _is_relative_to(cand, watch_root)
                     ),
                     None,
@@ -844,21 +872,36 @@ def _rebuild_code(
                 else:
                     # Full re-extraction: reconcile against current code files to
                     # evict nodes from files deleted since the last run (#1007).
+                    # This must include semantic document sources: an AST-only
+                    # rebuild does not re-run their producer, but preserving a
+                    # record whose local source is gone keeps invalid graph data
+                    # forever and can leave dangling hyperedges.
                     _root_str = str(project_root)
                     current_sources = {
                         _nsf(str(p.relative_to(project_root)), _root_str)
                         for p in code_files
                         if p.is_relative_to(project_root)
                     }
-                    for n in existing.get("nodes", []):
-                        sf = n.get("source_file")
+                    sourced_records = (
+                        list(existing.get("nodes", []))
+                        + list(existing.get("links", existing.get("edges", [])))
+                        + list(existing.get("hyperedges", []))
+                    )
+                    for record in sourced_records:
+                        if not isinstance(record, dict):
+                            continue
+                        sf = record.get("source_file")
                         if not sf:
                             continue
                         source_file = str(sf)
-                        if Path(source_file).suffix.lower() not in _CODE_EXTENSIONS:
-                            continue
                         norm = _nsf(source_file, _root_str) or source_file
-                        if norm not in current_sources:
+                        stale_code_source = (
+                            Path(source_file).suffix.lower() in _CODE_EXTENSIONS
+                            and norm not in current_sources
+                        )
+                        if stale_code_source or _missing_local_source(
+                            source_file, project_root, watch_root
+                        ):
                             evict_sources.add(source_file)
                             evict_sources.add(norm)
                             deleted_paths.add(norm)
@@ -871,13 +914,19 @@ def _rebuild_code(
                 # nodes lack the "_origin" marker, so they are never dropped here —
                 # only by the deleted-file eviction in evict_sources above.
                 full_rebuild = changed_paths is None
-                preserved_nodes = [
-                    n
-                    for n in existing.get("nodes", [])
-                    if n["id"] not in new_ast_ids
-                    and not (full_rebuild and n.get("_origin") == "ast")
-                    and (not evict_sources or n.get("source_file") not in evict_sources)
-                ]
+                preserved_nodes: list[dict] = []
+                for node in existing.get("nodes", []):
+                    if node["id"] in new_ast_ids:
+                        continue
+                    if full_rebuild and node.get("_origin") == "ast":
+                        continue
+                    if evict_sources and node.get("source_file") in evict_sources:
+                        continue
+                    if not node.get("label"):
+                        label = node.get("name") or node.get("id")
+                        if label:
+                            node = {**node, "label": str(label)}
+                    preserved_nodes.append(node)
                 all_ids = new_ast_ids | {n["id"] for n in preserved_nodes}
                 # An edge is OWNED by the file it was extracted from (its
                 # source_file). When that file is re-extracted, its prior edges must
@@ -912,16 +961,17 @@ def _rebuild_code(
                 # touching a non-AST (document / rationale / concept / LLM) node, is
                 # preserved. Incremental mode is unchanged: the user edited that file,
                 # so its own edges go regardless of origin.
-                origin_by_id = {
-                    n["id"]: n.get("_origin") for n in existing.get("nodes", [])
-                }
+                origin_by_id = {n["id"]: n.get("_origin") for n in existing.get("nodes", [])}
+
                 def _is_ast_node(nid: object) -> bool:
                     return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
+
                 def _edge_ast_resuppliable(e: dict) -> bool:
                     origin = e.get("_origin")
                     if origin is not None and origin != "ast":
                         return False
                     return _is_ast_node(e.get("source")) and _is_ast_node(e.get("target"))
+
                 def _edge_evicted(e: dict) -> bool:
                     if not edge_evict_sources:
                         return False
@@ -937,15 +987,55 @@ def _rebuild_code(
                     if full_rebuild and not _edge_ast_resuppliable(e):
                         return False
                     return True
+
                 preserved_edges = [
-                    e for e in existing.get("links", existing.get("edges", []))
-                    if e.get("source") in all_ids and e.get("target") in all_ids
+                    e
+                    for e in existing.get("links", existing.get("edges", []))
+                    if e.get("source") in all_ids
+                    and e.get("target") in all_ids
                     and not _edge_evicted(e)
                 ]
+                preserved_hyperedges: list[dict] = []
+                for hyperedge in existing.get("hyperedges", []):
+                    if not isinstance(hyperedge, dict):
+                        continue
+                    sf = hyperedge.get("source_file")
+                    norm_sf = _nsf(str(sf), str(project_root)) if sf else None
+                    if sf in evict_sources or (norm_sf and norm_sf in evict_sources):
+                        continue
+                    members = hyperedge.get("nodes")
+                    if not isinstance(members, list):
+                        members = next(
+                            (
+                                hyperedge.get(alias)
+                                for alias in ("members", "node_ids")
+                                if isinstance(hyperedge.get(alias), list)
+                            ),
+                            None,
+                        )
+                    if not isinstance(members, list):
+                        continue
+                    surviving_members = [
+                        member
+                        for member in members
+                        if isinstance(member, str) and member in all_ids
+                    ]
+                    surviving_members = list(dict.fromkeys(surviving_members))
+                    if len(surviving_members) < 2:
+                        continue
+                    if surviving_members != members or "nodes" not in hyperedge:
+                        hyperedge = {
+                            key: value
+                            for key, value in hyperedge.items()
+                            if key not in ("members", "node_ids")
+                        }
+                        hyperedge["nodes"] = surviving_members
+                    preserved_hyperedges.append(hyperedge)
+
                 result = {
                     "nodes": result["nodes"] + preserved_nodes,
                     "edges": result["edges"] + preserved_edges,
-                    "hyperedges": existing.get("hyperedges", []),
+                    "hyperedges": preserved_hyperedges,
                     "input_tokens": 0,
                     "output_tokens": 0,
                 }
@@ -963,7 +1053,8 @@ def _rebuild_code(
         if changed_paths is None:
             rebuilt_sources = {
                 _nsf(str(p.relative_to(project_root)), _rebuilt_root)
-                for p in code_files if p.is_relative_to(project_root)
+                for p in code_files
+                if p.is_relative_to(project_root)
             }
         else:
             rebuilt_sources = {(_nsf(str(p), _rebuilt_root) or str(p)) for p in extract_targets}
@@ -983,6 +1074,7 @@ def _rebuild_code(
             # without it, --no-cluster + repeated `update` accumulate duplicates and edge
             # counts diverge across build modes (#1317).
             from graphify.build import dedupe_edges as _dedupe_edges, dedupe_nodes as _dedupe_nodes
+
             candidate_graph_data = {
                 **{k: v for k, v in result.items() if k not in ("edges", "nodes")},
                 "nodes": _dedupe_nodes(result.get("nodes", [])),
@@ -1137,12 +1229,25 @@ def _rebuild_code(
             # Deterministic hub name (highest-degree member) beats a bare "Community N"
             # placeholder for any community without a saved label.
             from graphify.cluster import label_communities_by_hub
+
             labels.update(label_communities_by_hub(G, missing))
         questions = suggest_questions(G, communities, labels)
         from graphify.report import load_learning_for_report as _llfr
-        report = generate(G, communities, cohesion, labels, gods, surprises, detection,
-                          {"input": 0, "output": 0}, report_root, suggested_questions=questions,
-                          built_at_commit=commit, learning=_llfr(out / "graph.json"))
+
+        report = generate(
+            G,
+            communities,
+            cohesion,
+            labels,
+            gods,
+            surprises,
+            detection,
+            {"input": 0, "output": 0},
+            report_root,
+            suggested_questions=questions,
+            built_at_commit=commit,
+            learning=_llfr(out / "graph.json"),
+        )
         report_path = out / "GRAPH_REPORT.md"
         labels_json = (
             json.dumps({str(k): v for k, v in sorted(labels.items())}, ensure_ascii=False, indent=2)

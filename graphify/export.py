@@ -1,5 +1,6 @@
 # write graph to HTML, JSON, SVG, GraphML, Obsidian vault, and Neo4j Cypher
 from __future__ import annotations
+from collections.abc import Iterator
 import hashlib
 import html as _html
 import json
@@ -121,6 +122,7 @@ def _obsidian_tag(name: str) -> str:
 
 def _strip_diacritics(text: str | None) -> str:
     import unicodedata
+
     if not isinstance(text, str):
         text = "" if text is None else str(text)
     nfkd = unicodedata.normalize("NFKD", text)
@@ -932,6 +934,7 @@ def to_html(
         learning_overlay = {}
         try:
             from graphify.reflect import load_learning_overlay as _llo
+
             learning_overlay = _llo(Path(output_path))
         except Exception:
             learning_overlay = {}
@@ -957,7 +960,11 @@ def to_html(
         node = {
             "id": node_id,
             "label": label,
-            "color": {"background": color, "border": color, "highlight": {"background": "#ffffff", "border": color}},
+            "color": {
+                "background": color,
+                "border": color,
+                "highlight": {"background": "#ffffff", "border": color},
+            },
             "size": round(size, 1),
             "font": {"size": font_size, "color": "#ffffff"},
             "title": _html.escape(label),
@@ -984,7 +991,8 @@ def to_html(
                     node["shapeProperties"] = {"borderDashes": [4, 4]}
                 node["borderWidth"] = 3
                 node["color"] = {
-                    "background": color, "border": ring,
+                    "background": color,
+                    "border": ring,
                     "highlight": {"background": "#ffffff", "border": ring},
                 }
             # Lesson line appended to the hover title.
@@ -1182,7 +1190,9 @@ def to_obsidian(
     # file NOT in the manifest is the user's and is never overwritten.
     _manifest_path = out / ".graphify_obsidian_manifest.json"
     try:
-        _owned: set[str] = set(json.loads(_manifest_path.read_text(encoding="utf-8")).get("files", []))
+        _owned: set[str] = set(
+            json.loads(_manifest_path.read_text(encoding="utf-8")).get("files", [])
+        )
     except (OSError, ValueError):
         _owned = set()
     _written: list[str] = []
@@ -1424,8 +1434,13 @@ def to_obsidian(
         if cross:
             lines.append("## Connections to other communities")
             for other_cid, edge_count in sorted(cross.items(), key=lambda x: -x[1]):
-                other_fname = community_filename.get(other_cid) or f"_COMMUNITY_{safe_name(_community_name(other_cid))}"
-                lines.append(f"- {edge_count} edge{'s' if edge_count != 1 else ''} to [[{other_fname}]]")
+                other_fname = (
+                    community_filename.get(other_cid)
+                    or f"_COMMUNITY_{safe_name(_community_name(other_cid))}"
+                )
+                lines.append(
+                    f"- {edge_count} edge{'s' if edge_count != 1 else ''} to [[{other_fname}]]"
+                )
             lines.append("")
 
         # Top bridge nodes - highest degree nodes that connect to other communities
@@ -1471,11 +1486,15 @@ def to_obsidian(
     # own notes while still refusing to touch the user's. Warn (once, aggregated)
     # about anything skipped to avoid clobbering a pre-existing file.
     try:
-        _manifest_path.write_text(json.dumps({"files": sorted(set(_written))}, indent=2), encoding="utf-8")
+        _manifest_path.write_text(
+            json.dumps({"files": sorted(set(_written))}, indent=2), encoding="utf-8"
+        )
     except OSError:
         pass
     if _skipped:
-        shown = ", ".join(_skipped[:5]) + (f" (+{len(_skipped) - 5} more)" if len(_skipped) > 5 else "")
+        shown = ", ".join(_skipped[:5]) + (
+            f" (+{len(_skipped) - 5} more)" if len(_skipped) > 5 else ""
+        )
         print(
             f"[graphify] WARNING: skipped {len(_skipped)} pre-existing file(s) graphify "
             f"did not create, to avoid overwriting your notes: {shown}. "
@@ -1719,6 +1738,18 @@ def to_canvas(
     Path(output_path).write_text(json.dumps(canvas_data, indent=2), encoding="utf-8")  # nosec
 
 
+def _keyed_export_edges(
+    G: nx.Graph,
+) -> Iterator[tuple[object, object, str, dict[str, Any]]]:
+    """Yield every edge record with a stable remote-store identity."""
+    if G.is_multigraph():
+        for u, v, key, data in cast(Any, G).edges(keys=True, data=True):
+            yield u, v, _edge_distinguishing_key(data, key), data
+        return
+    for u, v, data in G.edges(data=True):
+        yield u, v, _edge_distinguishing_key(data), data
+
+
 def push_to_neo4j(
     G: nx.Graph,
     uri: str,
@@ -1759,7 +1790,8 @@ def push_to_neo4j(
         session_any = cast(Any, session)
         for node_id, data in G.nodes(data=True):
             props = {
-                k: v for k, v in data.items()
+                k: v
+                for k, v in data.items()
                 if isinstance(v, (str, int, float, bool)) and not k.startswith("_")
             }
             props["id"] = node_id
@@ -1774,17 +1806,20 @@ def push_to_neo4j(
             )
             nodes_pushed += 1
 
-        for u, v, data in G.edges(data=True):
+        for u, v, edge_key, data in _keyed_export_edges(G):
             rel = _safe_rel(data.get("relation", "RELATED_TO"))
             props = {
-                k: v for k, v in data.items()
+                k: v
+                for k, v in data.items()
                 if isinstance(v, (str, int, float, bool)) and not k.startswith("_")
             }
+            props["edge_key"] = edge_key
             session_any.run(
                 f"MATCH (a {{id: $src}}), (b {{id: $tgt}}) "
-                f"MERGE (a)-[r:{rel}]->(b) SET r += $props",
+                f"MERGE (a)-[r:{rel} {{edge_key: $edge_key}}]->(b) SET r += $props",
                 src=u,
                 tgt=v,
+                edge_key=edge_key,
                 props=props,
             )
             edges_pushed += 1
@@ -1824,16 +1859,17 @@ def push_to_falkordb(
     try:
         from falkordb import FalkorDB
     except ImportError as e:
-        raise ImportError(
-            "falkordb SDK not installed. Run: pip install falkordb"
-        ) from e
+        raise ImportError("falkordb SDK not installed. Run: pip install falkordb") from e
 
     from urllib.parse import urlparse
 
     node_community = _node_community_map(communities) if communities else {}
 
     def _safe_rel(relation: str) -> str:
-        return re.sub(r"[^A-Z0-9_]", "_", relation.upper().replace(" ", "_").replace("-", "_")) or "RELATED_TO"
+        return (
+            re.sub(r"[^A-Z0-9_]", "_", relation.upper().replace(" ", "_").replace("-", "_"))
+            or "RELATED_TO"
+        )
 
     def _safe_label(label: str) -> str:
         """Sanitize a FalkorDB node label to prevent Cypher injection."""
@@ -1859,7 +1895,8 @@ def push_to_falkordb(
 
     for node_id, data in G.nodes(data=True):
         props = {
-            k: v for k, v in data.items()
+            k: v
+            for k, v in data.items()
             if isinstance(v, (str, int, float, bool)) and not k.startswith("_")
         }
         props["id"] = node_id
@@ -1873,16 +1910,18 @@ def push_to_falkordb(
         )
         nodes_pushed += 1
 
-    for u, v, data in G.edges(data=True):
+    for u, v, edge_key, data in _keyed_export_edges(G):
         rel = _safe_rel(data.get("relation", "RELATED_TO"))
         props = {
-            k: v for k, v in data.items()
+            k: v
+            for k, v in data.items()
             if isinstance(v, (str, int, float, bool)) and not k.startswith("_")
         }
+        props["edge_key"] = edge_key
         graph.query(
             f"MATCH (a {{id: $src}}), (b {{id: $tgt}}) "
-            f"MERGE (a)-[r:{rel}]->(b) SET r += $props",
-            {"src": u, "tgt": v, "props": props},
+            f"MERGE (a)-[r:{rel} {{edge_key: $edge_key}}]->(b) SET r += $props",
+            {"src": u, "tgt": v, "edge_key": edge_key, "props": props},
         )
         edges_pushed += 1
 

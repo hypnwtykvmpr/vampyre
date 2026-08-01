@@ -169,9 +169,7 @@ def test_graphify_root_preserves_relative_when_invoked_with_relative_path(tmp_pa
     assert _rebuild_code(Path("."), acquire_lock=False) is True
 
     saved = (corpus / "graphify-out" / ".graphify_root").read_text(encoding="utf-8")
-    assert saved == ".", (
-        f".graphify_root must preserve the user-supplied path; got {saved!r}"
-    )
+    assert saved == ".", f".graphify_root must preserve the user-supplied path; got {saved!r}"
 
 
 def test_graphify_root_preserves_absolute_when_user_supplied(tmp_path):
@@ -185,9 +183,7 @@ def test_graphify_root_preserves_absolute_when_user_supplied(tmp_path):
     assert _rebuild_code(corpus, acquire_lock=False) is True
 
     saved = (corpus / "graphify-out" / ".graphify_root").read_text(encoding="utf-8")
-    assert saved == str(corpus), (
-        f"absolute caller path must be preserved as-is; got {saved!r}"
-    )
+    assert saved == str(corpus), f"absolute caller path must be preserved as-is; got {saved!r}"
 
 
 def test_rebuild_code_evicts_nodes_from_deleted_files(tmp_path):
@@ -229,9 +225,7 @@ def test_rebuild_code_evicts_removed_symbol_from_surviving_file(tmp_path):
     corpus = tmp_path / "corpus"
     corpus.mkdir()
 
-    (corpus / "a.py").write_text(
-        "def foo(): pass\ndef bar(): pass\n", encoding="utf-8"
-    )
+    (corpus / "a.py").write_text("def foo(): pass\ndef bar(): pass\n", encoding="utf-8")
     (corpus / "b.py").write_text(
         "from a import foo\n\ndef caller():\n    foo()\n", encoding="utf-8"
     )
@@ -253,20 +247,21 @@ def test_rebuild_code_evicts_removed_symbol_from_surviving_file(tmp_path):
     assert {"foo()", "bar()", "caller()"} <= before
     foo_id = id_for(data, "foo()")
     caller_id = id_for(data, "caller()")
-    assert any(
-        {e.get("source"), e.get("target")} == {caller_id, foo_id}
-        for e in edges(data)
-    ), "cross-file caller->foo call edge must exist before removal"
+    assert any({e.get("source"), e.get("target")} == {caller_id, foo_id} for e in edges(data)), (
+        "cross-file caller->foo call edge must exist before removal"
+    )
 
     # Pre-seed a semantic node on the surviving a.py (no AST id, no _origin
     # marker). A naive "evict every re-extracted file's nodes by source_file"
     # fix would wrongly delete this; the identity-based fix must keep it.
-    data["nodes"].append({
-        "id": "a_authconcept",
-        "label": "AuthConcept",
-        "file_type": "concept",
-        "source_file": "a.py",
-    })
+    data["nodes"].append(
+        {
+            "id": "a_authconcept",
+            "label": "AuthConcept",
+            "file_type": "concept",
+            "source_file": "a.py",
+        }
+    )
     graph_path.write_text(json.dumps(data), encoding="utf-8")
 
     # Remove foo() from a.py (keep bar); leave b.py untouched.
@@ -281,8 +276,7 @@ def test_rebuild_code_evicts_removed_symbol_from_surviving_file(tmp_path):
 
     assert "foo()" not in after, "removed symbol must be pruned from surviving file"
     assert not any(
-        e.get("source") == foo_id or e.get("target") == foo_id
-        for e in edges(after_data)
+        e.get("source") == foo_id or e.get("target") == foo_id for e in edges(after_data)
     ), "dangling edge to the removed symbol must be dropped"
     assert "bar()" in after, "surviving symbol in the same file must be kept"
     assert "caller()" in after, "unchanged file's nodes must be kept"
@@ -315,12 +309,14 @@ def test_rebuild_code_preupgrade_marker_less_node_one_cycle_lag(tmp_path):
     # marker-less, exactly as a pre-upgrade graph would carry it.
     for n in data["nodes"]:
         n.pop("_origin", None)
-    data["nodes"].append({
-        "id": "a_foo",
-        "label": "foo()",
-        "file_type": "function",
-        "source_file": "a.py",
-    })
+    data["nodes"].append(
+        {
+            "id": "a_foo",
+            "label": "foo()",
+            "file_type": "function",
+            "source_file": "a.py",
+        }
+    )
     graph_path.write_text(json.dumps(data), encoding="utf-8")
 
     # First update after "upgrade" (full rebuild, no changed_paths): the stale
@@ -342,8 +338,7 @@ def test_rebuild_code_preupgrade_marker_less_node_one_cycle_lag(tmp_path):
     assert _rebuild_code(corpus, acquire_lock=False, force=True) is True
     healed = json.loads(graph_path.read_text(encoding="utf-8"))
     assert "foo()" not in labels(healed), (
-        "once carrying _origin=ast, the stale node is pruned on the next "
-        "update (self-heal)"
+        "once carrying _origin=ast, the stale node is pruned on the next update (self-heal)"
     )
     assert "bar()" in labels(healed), "surviving symbol must be kept throughout"
 
@@ -596,15 +591,21 @@ def test_check_shrink_allows_no_existing_data():
 def test_check_shrink_allows_shrink_within_rebuilt_sources(capsys):
     """#1116: a symbol removed from a re-extracted file is a legitimate shrink —
     every lost node belongs to a rebuilt source, so the write proceeds (no --force)."""
-    existing = {"nodes": [
-        {"id": "a", "source_file": "m.py"},
-        {"id": "b", "source_file": "m.py"},
-        {"id": "c", "source_file": "other.py"},
-    ], "links": []}
-    new = {"nodes": [
-        {"id": "a", "source_file": "m.py"},
-        {"id": "c", "source_file": "other.py"},
-    ], "links": []}
+    existing = {
+        "nodes": [
+            {"id": "a", "source_file": "m.py"},
+            {"id": "b", "source_file": "m.py"},
+            {"id": "c", "source_file": "other.py"},
+        ],
+        "links": [],
+    }
+    new = {
+        "nodes": [
+            {"id": "a", "source_file": "m.py"},
+            {"id": "c", "source_file": "other.py"},
+        ],
+        "links": [],
+    }
     ok = _check_shrink(False, existing, new, rebuilt_sources={"m.py"})
     assert ok is True
     assert "Refusing to overwrite" not in capsys.readouterr().err
@@ -613,10 +614,13 @@ def test_check_shrink_allows_shrink_within_rebuilt_sources(capsys):
 def test_check_shrink_blocks_shrink_outside_rebuilt_sources(capsys):
     """The guard's real job is intact: a node lost from a file we did NOT re-extract
     (the failed-chunk signal) is still refused even with rebuilt_sources set."""
-    existing = {"nodes": [
-        {"id": "a", "source_file": "m.py"},
-        {"id": "z", "source_file": "untouched.py"},
-    ], "links": []}
+    existing = {
+        "nodes": [
+            {"id": "a", "source_file": "m.py"},
+            {"id": "z", "source_file": "untouched.py"},
+        ],
+        "links": [],
+    }
     new = {"nodes": [{"id": "a", "source_file": "m.py"}], "links": []}
     ok = _check_shrink(False, existing, new, rebuilt_sources={"m.py"})
     assert ok is False
@@ -746,13 +750,16 @@ def test_rebuild_code_accepts_repo_relative_changed_path_for_subdir_root(tmp_pat
         assert "old_name()" in {n.get("label") for n in before.get("nodes", [])}
 
         app.write_text("def new_name():\n    return 2\n", encoding="utf-8")
-        assert _rebuild_code(
-            Path("src"),
-            changed_paths=[Path("src/app.py")],
-            no_cluster=True,
-            acquire_lock=False,
-            force=True,
-        ) is True
+        assert (
+            _rebuild_code(
+                Path("src"),
+                changed_paths=[Path("src/app.py")],
+                no_cluster=True,
+                acquire_lock=False,
+                force=True,
+            )
+            is True
+        )
 
         after = json.loads(graph_path.read_text(encoding="utf-8"))
         labels = {n.get("label") for n in after.get("nodes", [])}
@@ -1574,7 +1581,8 @@ def test_watch_full_rebuild_preserves_real_call_site_parallels(tmp_path):
     a = next(n["id"] for n in rebuilt["nodes"] if n.get("label", "").startswith("alpha("))
     b = next(n["id"] for n in rebuilt["nodes"] if n.get("label", "").startswith("beta("))
     calls = [
-        e for e in links(rebuilt)
+        e
+        for e in links(rebuilt)
         if e.get("source") == b and e.get("target") == a and e.get("relation") == "calls"
     ]
     assert len(calls) == 3, f"all three real call-site parallels must survive, got {len(calls)}"
@@ -1651,15 +1659,26 @@ def test_watch_full_rebuild_preserves_semantic_edge(tmp_path):
         bar = next(n["id"] for n in data["nodes"] if n.get("label", "").startswith("bar("))
         links = data.get("links", data.get("edges", []))
         # Sourced semantic edge — the AST pass will NOT re-emit it.
-        links.append({
-            "source": foo, "target": bar, "relation": "depends_on",
-            "confidence": "INFERRED", "_origin": "semantic", "source_file": "a.py",
-        })
+        links.append(
+            {
+                "source": foo,
+                "target": bar,
+                "relation": "depends_on",
+                "confidence": "INFERRED",
+                "_origin": "semantic",
+                "source_file": "a.py",
+            }
+        )
         # Sourceless semantic edge — must also survive.
-        links.append({
-            "source": foo, "target": bar, "relation": "relates_to",
-            "confidence": "INFERRED", "_origin": "semantic",
-        })
+        links.append(
+            {
+                "source": foo,
+                "target": bar,
+                "relation": "relates_to",
+                "confidence": "INFERRED",
+                "_origin": "semantic",
+            }
+        )
         data["links"] = links
         # Multigraph so the two semantic edges on the same foo->bar pair coexist as
         # parallels — a simple DiGraph collapses them to one, masking the assertion.
@@ -1682,6 +1701,104 @@ def test_watch_full_rebuild_preserves_semantic_edge(tmp_path):
         "sourced semantic (_origin!=ast) edge must survive a full rebuild "
         "(hybrid: scope eviction to AST/structural edges only)"
     )
+
+
+def test_watch_full_rebuild_prunes_stale_semantic_sources_and_hyperedges(tmp_path):
+    """A full AST rebuild keeps valid semantic data but removes records whose
+    local source disappeared and hyperedges that no longer have two members."""
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "app.py").write_text("def live():\n    return 1\n", encoding="utf-8")
+    docs = corpus / "docs"
+    docs.mkdir()
+    (docs / "live.md").write_text("# Live semantic source\n", encoding="utf-8")
+
+    assert _rebuild_code(corpus, no_cluster=True, acquire_lock=False) is True
+    graph_path = corpus / "graphify-out" / "graph.json"
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
+    live_ast = next(
+        node["id"] for node in data["nodes"] if node.get("label", "").startswith("live(")
+    )
+    data["nodes"].extend(
+        [
+            {
+                "id": "semantic_live",
+                "label": "Live semantic node",
+                "file_type": "concept",
+                "source_file": "docs/live.md",
+                "_origin": "semantic",
+            },
+            {
+                "id": "semantic_legacy",
+                "name": "Legacy semantic node",
+                "file_type": "concept",
+                "source_file": "docs/live.md",
+                "_origin": "semantic",
+            },
+            {
+                "id": "semantic_stale",
+                "name": "Stale semantic node",
+                "file_type": "concept",
+                "source_file": "docs/deleted.md",
+                "_origin": "semantic",
+            },
+        ]
+    )
+    links = data.get("links", data.get("edges", []))
+    links.extend(
+        [
+            {
+                "source": "semantic_live",
+                "target": live_ast,
+                "relation": "documents",
+                "source_file": "docs/live.md",
+                "_origin": "semantic",
+            },
+            {
+                "source": "semantic_stale",
+                "target": live_ast,
+                "relation": "documents",
+                "source_file": "docs/deleted.md",
+                "_origin": "semantic",
+            },
+        ]
+    )
+    data["links"] = links
+    data["hyperedges"] = [
+        {
+            "id": "live_group",
+            "nodes": ["semantic_live", live_ast],
+            "source_file": "docs/live.md",
+        },
+        {
+            "id": "stale_group",
+            "nodes": ["semantic_stale", live_ast],
+            "source_file": "docs/deleted.md",
+        },
+        {
+            "id": "dangling_group",
+            "nodes": ["semantic_live", "missing_node"],
+            "source_file": "docs/live.md",
+        },
+    ]
+    data["multigraph"] = True
+    data["directed"] = True
+    graph_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    assert _rebuild_code(corpus, no_cluster=True, acquire_lock=False) is True
+    rebuilt = json.loads(graph_path.read_text(encoding="utf-8"))
+
+    rebuilt_ids = {node["id"] for node in rebuilt["nodes"]}
+    assert "semantic_live" in rebuilt_ids
+    legacy = next(node for node in rebuilt["nodes"] if node["id"] == "semantic_legacy")
+    assert legacy["label"] == "Legacy semantic node"
+    assert "semantic_stale" not in rebuilt_ids
+    rebuilt_links = rebuilt.get("links", rebuilt.get("edges", []))
+    assert any(edge.get("source") == "semantic_live" for edge in rebuilt_links)
+    assert not any(edge.get("source") == "semantic_stale" for edge in rebuilt_links)
+    assert [edge.get("id") for edge in rebuilt["hyperedges"]] == ["live_group"]
 
 
 # --- RISK 3: no-cluster compare must not flap on a legacy edges-keyed graph.json ---

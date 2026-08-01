@@ -1,10 +1,11 @@
-"""Property + generative ("robot factory") tests for the #1521 hybrid edge eviction.
+"""Deterministic generative tests for the #1521 hybrid edge eviction.
 
 Two layers:
 
-1. PROPERTY layer (fast): Hypothesis fuzzes a reference predicate that mirrors the
-   full-rebuild eviction logic in ``graphify/watch.py::_rebuild_code`` and asserts
-   the hybrid invariants hold across randomly generated graphs.
+1. REFERENCE layer (fast): a deterministic corpus generator exercises a reference
+   predicate that mirrors the full-rebuild eviction logic in
+   ``graphify/watch.py::_rebuild_code`` and asserts the hybrid invariants across
+   hundreds of generated graphs.
 
    The reference is a VERBATIM copy of the production predicate (the nested
    ``_is_ast_node`` / ``_edge_ast_resuppliable`` / ``_edge_evicted`` closures). The
@@ -12,28 +13,30 @@ Two layers:
    NOT evict everything) — is preserved here. (Two independent LLM drafts of this
    mirror both collapsed it to "full rebuild → evict all", i.e. the #1521 BLANKET
    behavior; this file encodes the real HYBRID.) The closures are nested and not
-   importable, so this is a mirror; the robot-factory layer below binds to the REAL
+   importable, so this is a mirror; the generated-corpus layer below binds to the REAL
    code and is the drift detector.
 
-2. ROBOT FACTORY layer (e2e): builds randomly-shaped real corpora on disk, drives
+2. GENERATED CORPUS layer (e2e): builds reproducible real corpora on disk, drives
    the ACTUAL ``_rebuild_code`` full rebuild, injects random semantic edges, and
    asserts the end-to-end invariants. This exercises the real predicate, so if the
    mirror above ever drifts from production the two layers diverge.
 """
+
 from __future__ import annotations
 
 import json
 import os
+import random
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
+
 # ---------------------------------------------------------------------------
 # Reference predicate — VERBATIM mirror of graphify/watch.py::_rebuild_code
-# (the existing-graph preservation block). Kept import-free so Hypothesis can
-# hammer it. full_rebuild does NOT evict everything: it evicts only edges the
+# (the existing-graph preservation block). ``full_rebuild`` does NOT evict
+# everything: it evicts only edges the
 # AST pass can re-supply (both endpoints AST-origin, no non-AST _origin marker).
 # ---------------------------------------------------------------------------
 def _edge_evicted_ref(
@@ -68,189 +71,251 @@ def _edge_evicted_ref(
 def _preserved(edges, *, all_ids, **kw) -> list:
     """Mirror of the preserved_edges comprehension: membership AND not-evicted."""
     return [
-        e for e in edges
-        if e.get("source") in all_ids and e.get("target") in all_ids
+        e
+        for e in edges
+        if e.get("source") in all_ids
+        and e.get("target") in all_ids
         and not _edge_evicted_ref(e, **kw)
     ]
 
 
 # --- deterministic sanity (these lock the mirror against the blanket misread) ---
 
+
 def test_full_rebuild_does_not_evict_everything():
     """The #1521 BLANKET misread (full rebuild => evict all) must NOT hold."""
     semantic = {"source": "a", "target": "doc1", "source_file": "a.py", "_origin": "semantic"}
-    kw = dict(full_rebuild=True, edge_evict_sources={"a.py"},
-              new_ast_ids={"a"}, origin_by_id={"a": "ast", "doc1": None})
+    kw = dict(
+        full_rebuild=True,
+        edge_evict_sources={"a.py"},
+        new_ast_ids={"a"},
+        origin_by_id={"a": "ast", "doc1": None},
+    )
     assert _edge_evicted_ref(semantic, **kw) is False, "semantic edge must survive full rebuild"
 
 
 def test_full_rebuild_evicts_stale_ast_edge():
     ast_edge = {"source": "a", "target": "b", "source_file": "a.py"}
-    kw = dict(full_rebuild=True, edge_evict_sources={"a.py"},
-              new_ast_ids={"a", "b"}, origin_by_id={"a": "ast", "b": "ast"})
+    kw = dict(
+        full_rebuild=True,
+        edge_evict_sources={"a.py"},
+        new_ast_ids={"a", "b"},
+        origin_by_id={"a": "ast", "b": "ast"},
+    )
     assert _edge_evicted_ref(ast_edge, **kw) is True, "stale AST edge must evict on full rebuild"
 
 
-@pytest.mark.parametrize("origin,both_ast,sf_evicted,full,expected", [
-    ("semantic", True, True, True, False),   # I2 explicit non-AST marker -> kept
-    (None, False, True, True, False),        # I2 non-AST endpoint -> kept
-    (None, True, True, True, True),           # I3 AST-AST stale -> evicted
-    (None, True, False, True, False),         # I5 not in evict set -> kept
-    (None, True, True, False, True),          # I4 incremental: guard off -> evicted
-    ("semantic", False, True, False, True),  # I4 incremental: semantic on changed file evicts
-])
+@pytest.mark.parametrize(
+    "origin,both_ast,sf_evicted,full,expected",
+    [
+        ("semantic", True, True, True, False),  # I2 explicit non-AST marker -> kept
+        (None, False, True, True, False),  # I2 non-AST endpoint -> kept
+        (None, True, True, True, True),  # I3 AST-AST stale -> evicted
+        (None, True, False, True, False),  # I5 not in evict set -> kept
+        (None, True, True, False, True),  # I4 incremental: guard off -> evicted
+        ("semantic", False, True, False, True),  # I4 incremental: semantic on changed file evicts
+    ],
+)
 def test_eviction_truth_table(origin, both_ast, sf_evicted, full, expected):
     e = {"source": "s", "target": "t", "source_file": "f.py"}
     if origin is not None:
         e["_origin"] = origin
     origin_by_id = {"s": "ast", "t": "ast" if both_ast else None}
     new_ast_ids = {"s", "t"} if both_ast else {"s"}
-    kw = dict(full_rebuild=full, edge_evict_sources=({"f.py"} if sf_evicted else set()),
-              new_ast_ids=new_ast_ids, origin_by_id=origin_by_id)
+    kw = dict(
+        full_rebuild=full,
+        edge_evict_sources=({"f.py"} if sf_evicted else set()),
+        new_ast_ids=new_ast_ids,
+        origin_by_id=origin_by_id,
+    )
     assert _edge_evicted_ref(e, **kw) is expected
 
 
-# --- Hypothesis property layer ---
-hypothesis = pytest.importorskip("hypothesis")
-from hypothesis import given, settings, strategies as st  # noqa: E402
-
-_ORIGINS = st.sampled_from(["ast", "semantic", "document", "rationale", None])
-_node_ids = st.sampled_from(["n0", "n1", "n2", "n3", "n4"])
-_files = st.sampled_from(["a.py", "b.py", "c.py", None])
+# --- deterministic generated-graph layer ---
+_ORIGINS = ("ast", "semantic", "document", "rationale", None)
+_NODE_IDS = ("n0", "n1", "n2", "n3", "n4")
+_FILES = ("a.py", "b.py", "c.py")
 
 
-@st.composite
-def _graph(draw):
-    ids = ["n0", "n1", "n2", "n3", "n4"]
-    origin_by_id = {nid: draw(_ORIGINS) for nid in ids}
-    new_ast_ids = {nid for nid in ids if draw(st.booleans())}
-    edges = draw(st.lists(
-        st.fixed_dictionaries(
-            {"source": _node_ids, "target": _node_ids},
-            optional={"source_file": st.sampled_from(["a.py", "b.py", "c.py"]),
-                      "_origin": _ORIGINS},
-        ),
-        min_size=0, max_size=12,
-    ))
-    files = {e["source_file"] for e in edges if e.get("source_file")}
-    evict = draw(st.sets(st.sampled_from(sorted(files) or ["a.py"]), max_size=3))
-    full = draw(st.booleans())
+def _graph(seed: int):
+    rng = random.Random(seed)
+    origin_by_id = {nid: rng.choice(_ORIGINS) for nid in _NODE_IDS}
+    new_ast_ids = {nid for nid in _NODE_IDS if rng.choice((False, True))}
+    edges = []
+    for _ in range(rng.randrange(13)):
+        edge: dict[str, str | None] = {
+            "source": rng.choice(_NODE_IDS),
+            "target": rng.choice(_NODE_IDS),
+        }
+        if rng.choice((False, True)):
+            edge["source_file"] = rng.choice(_FILES)
+        if rng.choice((False, True)):
+            edge["_origin"] = rng.choice(_ORIGINS)
+        edges.append(edge)
+    files = {source_file for e in edges if isinstance(source_file := e.get("source_file"), str)}
+    evict = {name for name in sorted(files) if rng.choice((False, True))}
+    full = rng.choice((False, True))
     return edges, evict, new_ast_ids, origin_by_id, full
 
 
-@settings(max_examples=400)
-@given(_graph())
-def test_I1_sourceless_never_evicted(g):
-    edges, evict, new_ast_ids, origin_by_id, full = g
-    for e in edges:
-        if not e.get("source_file"):
-            assert not _edge_evicted_ref(e, full_rebuild=full, edge_evict_sources=evict,
-                                         new_ast_ids=new_ast_ids, origin_by_id=origin_by_id), \
-                f"I1: sourceless edge evicted: {e}"
+def _generated_graphs():
+    return (_graph(seed) for seed in range(400))
 
 
-@settings(max_examples=400)
-@given(_graph())
-def test_I2_full_rebuild_preserves_nonast_touching(g):
-    edges, evict, new_ast_ids, origin_by_id, _full = g
-
-    def is_ast(nid):
-        return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
-
-    for e in edges:
-        nonast = (not is_ast(e.get("source")) or not is_ast(e.get("target"))
-                  or e.get("_origin") not in (None, "ast"))
-        if nonast:
-            assert not _edge_evicted_ref(e, full_rebuild=True, edge_evict_sources=evict,
-                                         new_ast_ids=new_ast_ids, origin_by_id=origin_by_id), \
-                f"I2: non-AST-touching edge evicted on full rebuild: {e}"
+def test_I1_sourceless_never_evicted():
+    for edges, evict, new_ast_ids, origin_by_id, full in _generated_graphs():
+        for e in edges:
+            if not e.get("source_file"):
+                assert not _edge_evicted_ref(
+                    e,
+                    full_rebuild=full,
+                    edge_evict_sources=evict,
+                    new_ast_ids=new_ast_ids,
+                    origin_by_id=origin_by_id,
+                ), f"I1: sourceless edge evicted: {e}"
 
 
-@settings(max_examples=400)
-@given(_graph())
-def test_I3_full_rebuild_evicts_resuppliable_ast(g):
-    edges, evict, new_ast_ids, origin_by_id, _full = g
+def test_I2_full_rebuild_preserves_nonast_touching():
+    for edges, evict, new_ast_ids, origin_by_id, _full in _generated_graphs():
 
-    def is_ast(nid):
-        return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
+        def is_ast(nid):
+            return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
 
-    for e in edges:
-        sf = e.get("source_file")
-        resup = (e.get("_origin") in (None, "ast")
-                 and is_ast(e.get("source")) and is_ast(e.get("target")))
-        if sf and sf in evict and resup:
-            assert _edge_evicted_ref(e, full_rebuild=True, edge_evict_sources=evict,
-                                     new_ast_ids=new_ast_ids, origin_by_id=origin_by_id), \
-                f"I3: AST-re-suppliable edge NOT evicted on full rebuild: {e}"
-
-
-@settings(max_examples=400)
-@given(_graph())
-def test_I5_unre_extracted_file_preserved(g):
-    edges, evict, new_ast_ids, origin_by_id, full = g
-    for e in edges:
-        sf = e.get("source_file")
-        if sf and sf not in evict:
-            assert not _edge_evicted_ref(e, full_rebuild=full, edge_evict_sources=evict,
-                                         new_ast_ids=new_ast_ids, origin_by_id=origin_by_id), \
-                f"I5: edge from un-re-extracted file evicted: {e}"
+        for e in edges:
+            nonast = (
+                not is_ast(e.get("source"))
+                or not is_ast(e.get("target"))
+                or e.get("_origin") not in (None, "ast")
+            )
+            if nonast:
+                assert not _edge_evicted_ref(
+                    e,
+                    full_rebuild=True,
+                    edge_evict_sources=evict,
+                    new_ast_ids=new_ast_ids,
+                    origin_by_id=origin_by_id,
+                ), f"I2: non-AST-touching edge evicted on full rebuild: {e}"
 
 
-@settings(max_examples=400)
-@given(_graph())
-def test_I4_incremental_guard_off(g):
+def test_I3_full_rebuild_evicts_resuppliable_ast():
+    for edges, evict, new_ast_ids, origin_by_id, _full in _generated_graphs():
+
+        def is_ast(nid):
+            return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
+
+        for e in edges:
+            sf = e.get("source_file")
+            resup = (
+                e.get("_origin") in (None, "ast")
+                and is_ast(e.get("source"))
+                and is_ast(e.get("target"))
+            )
+            if sf and sf in evict and resup:
+                assert _edge_evicted_ref(
+                    e,
+                    full_rebuild=True,
+                    edge_evict_sources=evict,
+                    new_ast_ids=new_ast_ids,
+                    origin_by_id=origin_by_id,
+                ), f"I3: AST-re-suppliable edge NOT evicted on full rebuild: {e}"
+
+
+def test_I5_unre_extracted_file_preserved():
+    for edges, evict, new_ast_ids, origin_by_id, full in _generated_graphs():
+        for e in edges:
+            sf = e.get("source_file")
+            if sf and sf not in evict:
+                assert not _edge_evicted_ref(
+                    e,
+                    full_rebuild=full,
+                    edge_evict_sources=evict,
+                    new_ast_ids=new_ast_ids,
+                    origin_by_id=origin_by_id,
+                ), f"I5: edge from un-re-extracted file evicted: {e}"
+
+
+def test_I4_incremental_guard_off():
     """The endpoint-AST guard applies ONLY on full rebuild: incrementally, any
     source_file-evicted edge evicts regardless of origin."""
-    edges, evict, new_ast_ids, origin_by_id, _full = g
-    for e in edges:
-        sf = e.get("source_file")
-        if sf and sf in evict:
-            assert _edge_evicted_ref(e, full_rebuild=False, edge_evict_sources=evict,
-                                     new_ast_ids=new_ast_ids, origin_by_id=origin_by_id), \
-                f"I4: source_file-evicted edge survived incremental rebuild: {e}"
+    for edges, evict, new_ast_ids, origin_by_id, _full in _generated_graphs():
+        for e in edges:
+            sf = e.get("source_file")
+            if sf and sf in evict:
+                assert _edge_evicted_ref(
+                    e,
+                    full_rebuild=False,
+                    edge_evict_sources=evict,
+                    new_ast_ids=new_ast_ids,
+                    origin_by_id=origin_by_id,
+                ), f"I4: source_file-evicted edge survived incremental rebuild: {e}"
 
 
-@settings(max_examples=400)
-@given(_graph())
-def test_I6_membership_filter(g):
+def test_I6_membership_filter():
     """preserved_edges keeps an edge only if BOTH endpoints are in all_ids,
     independent of eviction."""
-    edges, evict, new_ast_ids, origin_by_id, full = g
-    all_ids = set(new_ast_ids)  # any subset; endpoints outside must be dropped
-    kept = _preserved(edges, all_ids=all_ids, full_rebuild=full,
-                      edge_evict_sources=evict, new_ast_ids=new_ast_ids,
-                      origin_by_id=origin_by_id)
-    for e in kept:
-        assert e["source"] in all_ids and e["target"] in all_ids, \
-            f"I6: kept edge with endpoint outside all_ids: {e}"
+    for edges, evict, new_ast_ids, origin_by_id, full in _generated_graphs():
+        all_ids = set(new_ast_ids)  # any subset; endpoints outside must be dropped
+        kept = _preserved(
+            edges,
+            all_ids=all_ids,
+            full_rebuild=full,
+            edge_evict_sources=evict,
+            new_ast_ids=new_ast_ids,
+            origin_by_id=origin_by_id,
+        )
+        for e in kept:
+            assert e["source"] in all_ids and e["target"] in all_ids, (
+                f"I6: kept edge with endpoint outside all_ids: {e}"
+            )
 
 
-@settings(max_examples=400)
-@given(_graph())
-def test_full_vs_incremental_difference_is_exactly_the_guarded_set(g):
+def test_full_vs_incremental_difference_is_exactly_the_guarded_set():
     """The only edges full preserves that incremental evicts are exactly the
     source_file-evicted, NON-re-suppliable ones (the semantic layer the guard saves)."""
-    edges, evict, new_ast_ids, origin_by_id, _full = g
-    kw = dict(edge_evict_sources=evict, new_ast_ids=new_ast_ids, origin_by_id=origin_by_id)
+    for edges, evict, new_ast_ids, origin_by_id, _full in _generated_graphs():
 
-    def is_ast(nid):
-        return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
+        def is_ast(nid):
+            return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
 
-    full_evicts = {id(e) for e in edges if _edge_evicted_ref(e, full_rebuild=True, **kw)}
-    inc_evicts = {id(e) for e in edges if _edge_evicted_ref(e, full_rebuild=False, **kw)}
-    saved_by_guard = inc_evicts - full_evicts
-    for e in edges:
-        if id(e) in saved_by_guard:
-            sf = e.get("source_file")
-            resup = (e.get("_origin") in (None, "ast")
-                     and is_ast(e.get("source")) and is_ast(e.get("target")))
-            assert sf and sf in evict and not resup, \
-                f"guard saved an edge it should not have: {e}"
+        full_evicts = {
+            id(e)
+            for e in edges
+            if _edge_evicted_ref(
+                e,
+                full_rebuild=True,
+                edge_evict_sources=evict,
+                new_ast_ids=new_ast_ids,
+                origin_by_id=origin_by_id,
+            )
+        }
+        inc_evicts = {
+            id(e)
+            for e in edges
+            if _edge_evicted_ref(
+                e,
+                full_rebuild=False,
+                edge_evict_sources=evict,
+                new_ast_ids=new_ast_ids,
+                origin_by_id=origin_by_id,
+            )
+        }
+        saved_by_guard = inc_evicts - full_evicts
+        for e in edges:
+            if id(e) in saved_by_guard:
+                sf = e.get("source_file")
+                resup = (
+                    e.get("_origin") in (None, "ast")
+                    and is_ast(e.get("source"))
+                    and is_ast(e.get("target"))
+                )
+                assert sf and sf in evict and not resup, (
+                    f"guard saved an edge it should not have: {e}"
+                )
 
 
 # ---------------------------------------------------------------------------
-# ROBOT FACTORY (e2e) — drives the REAL _rebuild_code on random real corpora.
-# Deterministic seeds (not Hypothesis) so the filesystem fuzz is reproducible.
+# GENERATED CORPUS (e2e) — drives the real _rebuild_code on real corpora.
+# Fixed seeds keep the filesystem shapes reproducible.
 # ---------------------------------------------------------------------------
 def _git_init(path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(path)], check=True)
@@ -265,15 +330,19 @@ def _rng(seed: int):
     def nxt(n):
         state["s"] = (1103515245 * state["s"] + 12345) % (2**31)
         return state["s"] % n
+
     return nxt
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 @pytest.mark.parametrize("seed", [1, 2, 3, 5, 7, 11, 13, 17, 19, 23])
-def test_robot_factory_semantic_survives_real_full_rebuild(tmp_path, seed):
+def test_generated_corpus_semantic_survives_real_full_rebuild(tmp_path, seed):
     """Random corpus + random injected semantic edges: a full rebuild (AST only)
     must preserve every injected semantic edge whose endpoints survive, and must
-    re-supply real AST call edges (so total never collapses below the AST set)."""
+    re-supply real AST call edges (so total never collapses below the AST set).
+
+    The setup intentionally uses only cross-platform Git commands (init, -C,
+    and config), so this contract runs on every supported operating system.
+    """
     from graphify.watch import _rebuild_code
     from graphify.graph_loader import load_graph
     import networkx as nx
@@ -291,8 +360,13 @@ def test_robot_factory_semantic_survives_real_full_rebuild(tmp_path, seed):
         body = ["def f():", "    return 1"]
         if fns and nxt(2) == 0:
             callee_mod, _ = fns[nxt(len(fns))]
-            body = [f"import {callee_mod}", "", "def f():",
-                    f"    {callee_mod}.f()", f"    return {callee_mod}.f()"]
+            body = [
+                f"import {callee_mod}",
+                "",
+                "def f():",
+                f"    {callee_mod}.f()",
+                f"    return {callee_mod}.f()",
+            ]
         (corpus / f"{name}.py").write_text("\n".join(body) + "\n", encoding="utf-8")
         fns.append((name, f"{name}_f"))
 
@@ -314,8 +388,13 @@ def test_robot_factory_semantic_survives_real_full_rebuild(tmp_path, seed):
             s = node_ids[nxt(len(node_ids))]
             t = node_ids[nxt(len(node_ids))]
             rel = f"sem_{seed}_{k}"
-            e = {"source": s, "target": t, "relation": rel,
-                 "confidence": "INFERRED", "_origin": "semantic"}
+            e = {
+                "source": s,
+                "target": t,
+                "relation": rel,
+                "confidence": "INFERRED",
+                "_origin": "semantic",
+            }
             if nxt(2) == 0:
                 e["source_file"] = files[nxt(len(files))]
             injected.append(e)

@@ -6,6 +6,7 @@ fragments. These tests lock in the anti-drift guards (``--check``,
 core runs a default extraction with zero reference reads, on-demand content
 lives only in the references, and no reference duplicates core content.
 """
+
 from __future__ import annotations
 
 import sys
@@ -132,8 +133,7 @@ def test_extraction_states_no_api_key_required_for_every_host():
     """
     platforms = gen.load_platforms()
     arts = gen.render_all(platforms)
-    bodies = [a for a in arts
-              if "### Step 3 - Extract entities and relationships" in a.content]
+    bodies = [a for a in arts if "### Step 3 - Extract entities and relationships" in a.content]
     assert bodies, "no rendered skill body contains the Step 3 extraction section"
     for a in bodies:
         assert "graphify needs no API key" in a.content, a.path
@@ -145,8 +145,9 @@ def test_extraction_states_no_api_key_required_for_every_host():
         # tip — they are the model themselves — so the check only applies if present)
         tip = "Tip: set `GEMINI_API_KEY`"
         if tip in a.content:
-            assert a.content.index("graphify needs no API key") < a.content.index(tip), \
+            assert a.content.index("graphify needs no API key") < a.content.index(tip), (
                 f"{a.path}: no-key clarity is not hoisted above the GEMINI tip"
+            )
 
 
 def test_references_contain_no_core_pipeline_content():
@@ -293,7 +294,7 @@ def test_windows_frontmatter_name_and_shell_and_extra():
     assert "## Troubleshooting" in core
     assert "### PowerShell 5.1: Vertical scrolling stops working" in core
     # The troubleshooting section sits before Honesty Rules, single separator.
-    assert "\n4. **Skip graspologic**" in core
+    assert "\n4. **Skip native Leiden**" in core
     assert core.index("## Troubleshooting") < core.index("## Honesty Rules")
 
 
@@ -308,7 +309,7 @@ def test_codex_dispatch_is_agenttask_and_collects_in_memory():
     # The B2 dispatch slot itself (Codex heading -> Step B3) must not carry the
     # claude Agent-tool example. The shared Step B3 prose mentions the agent type
     # in a re-run hint, so scope the check to the dispatch block only.
-    b2 = core[core.index("**Step B2"):core.index("**Step B3")]
+    b2 = core[core.index("**Step B2") : core.index("**Step B3")]
     assert "Concrete example for 3 chunks" not in b2
     assert "Agent tool call 1" not in b2
 
@@ -397,8 +398,20 @@ def test_all_progressive_hosts_check_and_audit_clean():
 
 def test_no_host_has_trigger_in_frontmatter():
     """No split host emits a trigger: field — not part of Agent Skills spec (#1180)."""
-    for key in ("claude", "codex", "opencode", "kilo", "copilot", "claw", "droid",
-                "amp", "trae", "vscode", "kiro", "pi"):
+    for key in (
+        "claude",
+        "codex",
+        "opencode",
+        "kilo",
+        "copilot",
+        "claw",
+        "droid",
+        "amp",
+        "trae",
+        "vscode",
+        "kiro",
+        "pi",
+    ):
         core, _ = _platform_artifacts(key)
         head = core.split("---", 2)[1]
         assert "trigger:" not in head, f"[{key}] unexpectedly has a trigger: line"
@@ -422,7 +435,7 @@ def test_dispatch_variants_are_host_specific():
     }
     for key, marker in expect.items():
         core, _ = _platform_artifacts(key)
-        b2 = core[core.index("**Step B2"):core.index("**Step B3")]
+        b2 = core[core.index("**Step B2") : core.index("**Step B3")]
         assert marker.lower() in b2.lower(), f"[{key}] dispatch slot missing {marker!r}"
 
 
@@ -467,7 +480,10 @@ def test_monoliths_render_inline_single_file_no_references():
         arts = gen.render(platforms[key])
         assert len(arts) == 1, f"[{key}] monolith should render exactly one file"
         assert arts[0].path == f"graphify/skill-{key}.md"
-        assert "references/" not in arts[0].content or "see `references/" not in arts[0].content.lower()
+        assert (
+            "references/" not in arts[0].content
+            or "see `references/" not in arts[0].content.lower()
+        )
 
 
 def test_monolith_roundtrip_passes_for_aider_and_devin():
@@ -522,10 +538,24 @@ def test_monoliths_carry_the_1392_runbook_fixes():
         # #18/#20 zero-node guard before any write, report/analysis gated on
         # to_json's return.
         lines = body.splitlines()
-        build_i = next(i for i, l in enumerate(lines) if "G = build_from_json(extraction, directed=IS_DIRECTED)" in l)
-        guard_i = next(i for i, l in enumerate(lines[build_i:], build_i) if "number_of_nodes() == 0" in l)
-        report_i = next(i for i, l in enumerate(lines[build_i:], build_i) if "GRAPH_REPORT.md').write_text(report)" in l)
-        wrote_i = next(i for i, l in enumerate(lines[build_i:], build_i) if l.strip().startswith("wrote = to_json("))
+        build_i = next(
+            i
+            for i, l in enumerate(lines)
+            if "G = build_from_json(extraction, directed=IS_DIRECTED)" in l
+        )
+        guard_i = next(
+            i for i, l in enumerate(lines[build_i:], build_i) if "number_of_nodes() == 0" in l
+        )
+        report_i = next(
+            i
+            for i, l in enumerate(lines[build_i:], build_i)
+            if "GRAPH_REPORT.md').write_text(report)" in l
+        )
+        wrote_i = next(
+            i
+            for i, l in enumerate(lines[build_i:], build_i)
+            if l.strip().startswith("wrote = to_json(")
+        )
         # guard fires right after the build, before the graph/report are written.
         assert build_i < guard_i < wrote_i < report_i, f"[{key}] Step 4 ordering not fixed"
         assert "if not wrote:" in body
@@ -608,9 +638,7 @@ def test_always_on_roundtrip_is_byte_faithful():
     assert problems == []
 
     rendered_agents = next(
-        a.content
-        for a in gen.render_always_on()
-        if a.path == "graphify/always_on/agents-md.md"
+        a.content for a in gen.render_always_on() if a.path == "graphify/always_on/agents-md.md"
     )
     old_instruction = (
         "When the user types `/graphify`, invoke the `skill` tool with "
@@ -686,9 +714,18 @@ def test_audit_reads_each_host_against_its_own_v8_body():
 
     This is the structural fix: a per-host body, so a drop on one host surfaces.
     """
-    assert gen._v8_baseline_ref("claude") == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill.md"
-    assert gen._v8_baseline_ref("trae") == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill-trae.md"
-    assert gen._v8_baseline_ref("vscode") == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill-vscode.md"
+    assert (
+        gen._v8_baseline_ref("claude")
+        == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill.md"
+    )
+    assert (
+        gen._v8_baseline_ref("trae")
+        == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill-trae.md"
+    )
+    assert (
+        gen._v8_baseline_ref("vscode")
+        == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill-vscode.md"
+    )
 
 
 def test_audit_catches_an_induced_per_host_drop():
@@ -788,7 +825,7 @@ def test_trae_renders_native_agents_md_integration_not_claude():
 def test_trae_dispatch_carries_the_no_pretooluse_caveat():
     """trae's B2 dispatch block restores the v8 no-PreToolUse-hook caveat."""
     core, _ = _platform_artifacts("trae")
-    b2 = core[core.index("**Step B2"):core.index("Pass the extraction prompt")]
+    b2 = core[core.index("**Step B2") : core.index("Pass the extraction prompt")]
     assert "Trae does NOT support PreToolUse hooks" in b2
     assert "AGENTS.md rules are the always-on mechanism instead" in b2
 
@@ -812,9 +849,15 @@ def test_claude_flavored_hosts_keep_their_hooks_text_unchanged():
         hooks = refs["hooks.md"]
         assert "graphify claude install" in hooks, f"[{key}] lost the claude install command"
         assert "native CLAUDE.md integration" in hooks, f"[{key}] lost the CLAUDE.md heading"
-        assert "Trae does NOT support PreToolUse hooks" not in core, f"[{key}] leaked the trae caveat"
-        assert "Trae does NOT support PreToolUse hooks" not in hooks, f"[{key}] leaked the trae caveat"
-        assert "## For the commit hook and native CLAUDE.md integration" in core, f"[{key}] pointer drifted"
+        assert "Trae does NOT support PreToolUse hooks" not in core, (
+            f"[{key}] leaked the trae caveat"
+        )
+        assert "Trae does NOT support PreToolUse hooks" not in hooks, (
+            f"[{key}] leaked the trae caveat"
+        )
+        assert "## For the commit hook and native CLAUDE.md integration" in core, (
+            f"[{key}] pointer drifted"
+        )
 
 
 # --- the amp native AGENTS.md integration (the 13th split host) ----------------
@@ -864,7 +907,7 @@ def test_amp_has_no_pretooluse_caveat_anywhere():
     assert "Trae does NOT support" not in core
     assert "Trae does NOT support" not in hooks
     # amp's dispatch is the plain task-tool-disk block (no trae caveat line).
-    b2 = core[core.index("**Step B2"):core.index("Pass the extraction prompt")]
+    b2 = core[core.index("**Step B2") : core.index("Pass the extraction prompt")]
     assert "Trae" not in b2
 
 
@@ -876,7 +919,10 @@ def test_amp_audit_coverage_passes_against_its_own_v8():
     confirms every heading single-homes in amp's core + references.
     """
     platforms = gen.load_platforms()
-    assert gen._v8_baseline_ref("amp") == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill-amp.md"
+    assert (
+        gen._v8_baseline_ref("amp")
+        == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill-amp.md"
+    )
     problems = gen.audit_coverage(platforms["amp"])
     assert problems == [], "\n".join(problems)
 
@@ -932,6 +978,9 @@ def test_agents_body_matches_amp_modulo_hooks_wording():
 def test_agents_audit_baseline_is_amps_v8_body():
     """`agents` is a post-v8 platform, so its audit baseline is amp's v8 body."""
     platforms = gen.load_platforms()
-    assert gen._v8_baseline_ref("agents") == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill-amp.md"
+    assert (
+        gen._v8_baseline_ref("agents")
+        == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill-amp.md"
+    )
     problems = gen.audit_coverage(platforms["agents"])
     assert problems == [], "\n".join(problems)

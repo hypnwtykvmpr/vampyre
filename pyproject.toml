@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,8 @@ name = "graphifyy"
 version = "0.9.5"
 description = "AI coding assistant skill (Claude Code, CodeBuddy, Codex, OpenCode, Kilo Code, Cursor, Gemini CLI, Aider, OpenClaw, Factory Droid, Trae, Hermes, Kiro, Pi, Devin CLI, Google Antigravity) - turn any folder of code, docs, papers, images, or videos into a queryable knowledge graph"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["claude", "claude-code", "codex", "opencode", "kilo", "cursor", "gemini", "aider", "kiro", "pi", "devin", "knowledge-graph", "rag", "graphrag", "obsidian", "community-detection", "tree-sitter", "leiden", "llm"]
 requires-python = ">=3.10"
 dependencies = [
@@ -52,24 +53,24 @@ Issues = "https://github.com/safishamsi/graphify/issues"
 # starlette is pulled in transitively by mcp, but graphify/serve.py imports it
 # directly for the HTTP transport, so declare it here and floor it above the
 # CVE-2026-48818 / CVE-2026-54283 fixes (both resolved by 1.3.1) (#1391, #1396).
-mcp = ["mcp", "starlette>=1.3.1"]
+mcp = ["mcp>=1.28.1,<2", "starlette>=1.3.1"]
 neo4j = ["neo4j"]
 falkordb = ["falkordb"]
-pdf = ["pypdf>=6.12.0", "markdownify"]
+pdf = ["pypdf>=6.14.2", "markdownify"]
 watch = ["watchdog"]
 svg = ["matplotlib", "numpy>=2.0; python_version >= '3.13'"]
-leiden = ["graspologic; python_version < '3.13'"]
+leiden = ["graspologic-native>=1.2.5,<2; python_version < '3.14'"]
 office = ["python-docx", "openpyxl"]
 google = ["openpyxl"]
 postgres = ["psycopg[binary]"]
-video = ["faster-whisper; python_version >= '3.11'", "yt-dlp>=2026.6.9"]
+video = ["faster-whisper; python_version >= '3.11'", "yt-dlp>=2026.7.4"]
 kimi = ["openai", "tiktoken"]
 ollama = ["openai"]
 bedrock = ["boto3"]
 anthropic = ["anthropic"]
 gemini = ["openai", "tiktoken"]
 openai = ["openai", "tiktoken"]
-chinese = ["jieba"]
+chinese = ["jieba3>=1.0.2"]
 sql = ["tree-sitter-sql"]
 # tree-sitter-dm (BYOND DreamMaker) ships only a Windows wheel, so on Linux/Mac it
 # must compile from source (needs a C toolchain + python3-dev). Keeping it optional
@@ -80,7 +81,7 @@ sql = ["tree-sitter-sql"]
 # crash) when the extra is absent. Install graphifyy[dm] (or [all]) for DM parsing.
 dm = ["tree-sitter-dm"]
 terraform = ["tree-sitter-hcl"]
-all = ["mcp", "starlette>=1.3.1", "neo4j", "falkordb", "pypdf>=6.12.0", "markdownify", "watchdog", "graspologic; python_version < '3.13'", "python-docx", "openpyxl", "faster-whisper; python_version >= '3.11'", "yt-dlp>=2026.6.9", "matplotlib", "numpy>=2.0; python_version >= '3.13'", "openai", "tiktoken", "boto3", "anthropic", "tree-sitter-sql", "jieba", "tree-sitter-dm", "tree-sitter-hcl"]
+all = ["mcp>=1.28.1,<2", "starlette>=1.3.1", "neo4j", "falkordb", "pypdf>=6.14.2", "markdownify", "watchdog", "graspologic-native>=1.2.5,<2; python_version < '3.14'", "python-docx", "openpyxl", "faster-whisper; python_version >= '3.11'", "yt-dlp>=2026.7.4", "matplotlib", "numpy>=2.0; python_version >= '3.13'", "openai", "tiktoken", "boto3", "anthropic", "tree-sitter-sql", "jieba3>=1.0.2", "tree-sitter-dm", "tree-sitter-hcl"]
 
 [project.scripts]
 graphify = "graphify.__main__:main"
@@ -90,7 +91,8 @@ graphify-mcp = "graphify.serve:_main"
 dev = [
     "bandit>=1.9.4",
     "build>=1.5.0",
-    "hypothesis>=6.152.7",
+    # Starlette >=1.3 TestClient uses httpx2; keep strict HTTP tests warning-free.
+    "httpx2>=2.9.1,<3",
     "nuitka>=4.1",
     "patchelf>=0.17.2.4 ; sys_platform != 'win32'",
     "pip-audit>=2.10.0",
@@ -99,7 +101,7 @@ dev = [
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.13",
-    "setuptools>=82.0.1",
+    "setuptools>=83.0.0",
     "wheel>=0.47.0",
     "tomli>=2.0 ; python_version < '3.11'",
     "tree-sitter-hcl>=1.2.0",

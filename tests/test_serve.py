@@ -109,14 +109,14 @@ def test_score_nodes_multiword_exact_label_outranks_superset():
     full-query tier in _score_nodes must make the exact label win strictly.
     """
     G = nx.Graph()
+
     # Reproduce the real graph: norm_label keeps punctuation (strip_diacritics +
     # lower, NOT tokenized), so the ':' survives. A tokenized query can never
     # equal that, which is exactly why the first-cut fix was a no-op for
     # punctuated labels. The exact node must still win via the label's tokenized
     # form.
     def _add(nid, label, src):
-        G.add_node(nid, label=label, norm_label=label.lower(),
-                   source_file=src, community=0)
+        G.add_node(nid, label=label, norm_label=label.lower(), source_file=src, community=0)
 
     _add("exact", "UOCE: Dehumidifier Driver", "uoce_dehumidifier.yaml")
     _add("super", "UOCE: Dehumidifier Driver State Machine", "uoce_dehumidifier.yaml")
@@ -127,7 +127,9 @@ def test_score_nodes_multiword_exact_label_outranks_superset():
 
     # Resolves uniquely to the exact label, strictly ahead of the superset.
     assert scored[0][1] == "exact"
-    assert scored[0][0] > scored[1][0], "exact label must strictly outrank superset/token-bag matches"
+    assert scored[0][0] > scored[1][0], (
+        "exact label must strictly outrank superset/token-bag matches"
+    )
 
 
 def test_find_node_ignores_trailing_punctuation():
@@ -165,7 +167,7 @@ def _make_big_graph(n: int = 150) -> nx.Graph:
 
 def test_trigrams_basic():
     assert _trigrams("foobar") == {"foo", "oob", "oba", "bar"}
-    assert _trigrams("ab") == {"ab"}        # <3 chars -> whole string is the key
+    assert _trigrams("ab") == {"ab"}  # <3 chars -> whole string is the key
     assert _trigrams("") == set()
 
 
@@ -175,19 +177,19 @@ def test_node_search_text_includes_all_matched_fields():
     # norm_label, tokenized label, nid, raw source, and tokenized source are all
     # present, NUL-separated so trigrams can't span fields.
     parts = text.split("\x00")
-    assert parts[0] == "foo.bar:baz"          # norm_label (punctuation kept)
-    assert parts[1] == "foo bar baz"          # label_tokens (tokenized)
-    assert parts[2] == "punct"                # nid
-    assert parts[3] == "pkg/foobar.py"        # source_file
-    assert parts[4] == "pkg foobar py"        # source_file tokens
+    assert parts[0] == "foo.bar:baz"  # norm_label (punctuation kept)
+    assert parts[1] == "foo bar baz"  # label_tokens (tokenized)
+    assert parts[2] == "punct"  # nid
+    assert parts[3] == "pkg/foobar.py"  # source_file
+    assert parts[4] == "pkg foobar py"  # source_file tokens
 
 
 def test_trigram_candidates_fast_path_fires_for_rare_term():
     G = _make_big_graph()
     cand = _trigram_candidates(G, ["zebraquokkawidget"])
-    assert cand is not None                   # selective -> fast-path used
+    assert cand is not None  # selective -> fast-path used
     assert "rareA" in cand
-    assert len(cand) < G.number_of_nodes()    # a real shrink, not the whole graph
+    assert len(cand) < G.number_of_nodes()  # a real shrink, not the whole graph
 
 
 def test_trigram_candidates_falls_back_on_common_term():
@@ -199,13 +201,19 @@ def test_trigram_candidates_falls_back_on_common_term():
 
 def test_trigram_candidates_falls_back_on_short_token():
     G = _make_big_graph()
-    assert _trigram_candidates(G, ["ab"]) is None   # <3 chars -> can't trigram-filter
+    assert _trigram_candidates(G, ["ab"]) is None  # <3 chars -> can't trigram-filter
 
 
 def test_score_nodes_prefilter_is_identical_to_full_scan(monkeypatch):
     G = _make_big_graph()
-    queries = ["zebraquokkawidget", "marmosetgadget handler", "foo bar baz",
-               "item", "node 42", "nonexistentxyz"]
+    queries = [
+        "zebraquokkawidget",
+        "marmosetgadget handler",
+        "foo bar baz",
+        "item",
+        "node 42",
+        "nonexistentxyz",
+    ]
     for q in queries:
         terms = _query_terms(q)
         fast = _score_nodes(G, terms)
@@ -218,8 +226,13 @@ def test_score_nodes_prefilter_is_identical_to_full_scan(monkeypatch):
 def test_find_node_prefilter_is_identical_to_full_scan(monkeypatch):
     G = _make_big_graph()
     # includes the punctuated label, exercised via its tokenized (label_tokens) form
-    for label in ["ZebraQuokkaWidget", "MarmosetGadget handler", "Foo Bar Baz",
-                  "item node 7", "missing"]:
+    for label in [
+        "ZebraQuokkaWidget",
+        "MarmosetGadget handler",
+        "Foo Bar Baz",
+        "item node 7",
+        "missing",
+    ]:
         fast = _find_node(G, label)
         _force_full_scan(monkeypatch)
         full = _find_node(G, label)
@@ -262,10 +275,10 @@ def test_find_node_source_file_path_prefers_file_level_node():
 def test_trigram_index_cached_and_rebuilt_per_graph():
     G = _make_big_graph()
     idx1 = _get_trigram_index(G)
-    assert idx1 is _get_trigram_index(G)            # cached on the same graph object
+    assert idx1 is _get_trigram_index(G)  # cached on the same graph object
     assert G.graph["_trigram_index"] is idx1
     G2 = _make_big_graph()
-    assert _get_trigram_index(G2) is not idx1       # a fresh graph rebuilds (reload safety)
+    assert _get_trigram_index(G2) is not idx1  # a fresh graph rebuilds (reload safety)
 
 
 def test_query_terms_strips_search_punctuation():
@@ -289,7 +302,7 @@ def test_query_terms_filters_only_short_english_terms(monkeypatch):
     import graphify.serve as serve_mod
 
     class FakeJieba:
-        def cut(self, text):
+        def cut_text(self, text):
             return {
                 "前端": ["前端"],
                 "依赖": ["依赖"],
@@ -299,7 +312,7 @@ def test_query_terms_filters_only_short_english_terms(monkeypatch):
                 "a前": ["a", "前"],
             }[text]
 
-    monkeypatch.setattr(serve_mod, "_jieba", FakeJieba())
+    monkeypatch.setattr(serve_mod, "_chinese_tokenizer", FakeJieba())
     terms = _query_terms("前端 dependency 依赖 install 安装 to of 包管理器 项目约定 a前")
     assert terms == [
         "前端",
@@ -426,6 +439,7 @@ def test_subgraph_to_text_includes_edge_context():
 
 # --- work-memory overlay annotation on NODE lines -----------------------------
 
+
 def test_subgraph_to_text_annotates_node_with_learning_status():
     """An annotated node gets a `learning=<status>` suffix inside its NODE
     bracket; an un-annotated node gets none."""
@@ -454,8 +468,7 @@ def test_subgraph_to_text_learning_suffix_counts_against_budget():
     bare = _subgraph_to_text(G, {"n1", "n2", "n3"}, [])
     # token_budget chosen so the un-annotated render fits without truncation...
     budget = (len(bare) // 3) + 1
-    assert "truncated" not in _subgraph_to_text(G, {"n1", "n2", "n3"}, [],
-                                                token_budget=budget)
+    assert "truncated" not in _subgraph_to_text(G, {"n1", "n2", "n3"}, [], token_budget=budget)
     # ...but once every node carries a learning= suffix, the same budget overflows.
     G.graph["_learning_overlay"] = {
         n: {"status": "preferred", "stale": False} for n in ("n1", "n2", "n3")
@@ -747,16 +760,16 @@ def test_query_graph_text_context_filter_aliases_resolve():
 # --- Chinese segmentation ---
 
 
-def test_query_terms_chinese_segments_with_cached_jieba(monkeypatch):
-    """Chinese text should use the cached jieba module and keep the original term."""
+def test_query_terms_chinese_segments_with_cached_tokenizer(monkeypatch):
+    """Chinese text should use the cached tokenizer and keep the original term."""
     import graphify.serve as serve_mod
 
     class FakeJieba:
-        def cut(self, text):
+        def cut_text(self, text):
             assert text == "页面路由"
             return ["页面", "路由"]
 
-    monkeypatch.setattr(serve_mod, "_jieba", FakeJieba())
+    monkeypatch.setattr(serve_mod, "_chinese_tokenizer", FakeJieba())
     terms = _query_terms("页面路由")
     assert terms == ["页面", "路由", "页面路由"]
 
@@ -778,11 +791,11 @@ def test_query_terms_non_chinese_scripts_are_not_segmented():
     assert serve_mod._query_terms("かなカナ한글") == ["かなカナ한글"]
 
 
-def test_query_terms_chinese_no_jieba_fallback(monkeypatch):
-    """When jieba is not installed, fallback to character bigrams."""
+def test_query_terms_chinese_no_tokenizer_fallback(monkeypatch):
+    """When the tokenizer is not installed, fall back to character bigrams."""
     import graphify.serve as serve_mod
 
-    monkeypatch.setattr(serve_mod, "_jieba", None)
+    monkeypatch.setattr(serve_mod, "_chinese_tokenizer", None)
     terms = serve_mod._query_terms("页面路由")
     # bigram fallback: ["页面", "面路", "路由"] + original "页面路由"
     assert "页面" in terms
@@ -818,6 +831,7 @@ def test_query_text_chinese_finds_routing_nodes():
 
 
 # --- get_community header (#1448): show the community name, no placeholder doubling ---
+
 
 def test_community_header_shows_real_name():
     assert _community_header(12, "Auth & Sessions") == "Community 12 — Auth & Sessions"

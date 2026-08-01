@@ -10,6 +10,7 @@ dir-copy, version-stamp, reinstall, and uninstall flow can be exercised with
 fixed, asserted content. The fixture backs up the real committed bundle and
 restores it on teardown, so the working tree is never disturbed.
 """
+
 from __future__ import annotations
 
 import os
@@ -214,41 +215,13 @@ def test_hard_fail_when_bundle_dir_present_but_references_missing(tmp_path, monk
             shutil.rmtree(skills_root, ignore_errors=True)
 
 
-def _first_unbuilt_progressive_host():
-    """Find a progressive host whose bundle dir has not shipped in this build.
-
-    The wave ships bundles incrementally (claude, then codex/windows, then the
-    rest), so this picks whichever progressive host is still bundle-less right
-    now instead of hard-coding one that a later wave will build. Returns the
-    host name and its packaged monolith path, or (None, None) if all built.
-    """
-    skills_root = PKG_DIR / "skills"
-    for name, cfg in mainmod._PLATFORM_CONFIG.items():
-        bundle = cfg.get("skill_refs")
-        if not bundle:
-            continue
-        if (skills_root / bundle).exists():
-            continue
-        # Resolve the packaged monolith for this host (skill.md for claude-named).
-        suffix = "" if name == "claude" else f"-{name}"
-        monolith = PKG_DIR / f"skill{suffix}.md"
-        if monolith.exists():
-            return name, monolith
-    return None, None
-
-
-def test_unbuilt_bundle_host_falls_back_to_monolith(tmp_path):
-    """A progressive host whose bundle has not shipped installs the monolith.
-
-    claude/codex/windows bundles now ship; the remaining progressive hosts do
-    not have a bundle yet. They must still install their byte-identical monolith
-    with no references/ sidecar. The host is chosen dynamically so this stays
-    valid as later waves ship more bundles.
-    """
-    host, monolith = _first_unbuilt_progressive_host()
-    if host is None:
-        pytest.skip("every progressive host bundle has shipped; nothing to fall back")
-    assert not (PKG_DIR / "skills" / mainmod._PLATFORM_CONFIG[host]["skill_refs"]).exists()
+def test_unbuilt_bundle_host_falls_back_to_monolith(tmp_path, monkeypatch):
+    """A progressive host whose bundle is absent installs its monolith."""
+    host = "claude"
+    monolith = PKG_DIR / "skill.md"
+    missing_bundle = "__test_missing_bundle__"
+    assert not (PKG_DIR / "skills" / missing_bundle).exists()
+    monkeypatch.setitem(mainmod._PLATFORM_CONFIG[host], "skill_refs", missing_bundle)
     _install(tmp_path, host)
     with patch("graphify.__main__.Path.home", return_value=tmp_path):
         dst = mainmod._platform_skill_destination(host)
@@ -303,6 +276,7 @@ def test_gemini_install_references_all_resolve(tmp_path):
     real claude bundle must leave no dead pointer on disk.
     """
     import re
+
     _install(tmp_path, "gemini")
     skill = tmp_path / ".gemini" / "skills" / "graphify" / "SKILL.md"
     assert skill.exists()
@@ -372,16 +346,37 @@ _EXPECTED_SKILL_BODIES = (
     "skill-devin.md",
 )
 _SPLIT_HOSTS = (
-    "claude", "codex", "windows", "opencode", "kilo", "copilot",
-    "claw", "droid", "amp", "trae", "kiro", "pi", "vscode",
+    "claude",
+    "codex",
+    "windows",
+    "opencode",
+    "kilo",
+    "copilot",
+    "claw",
+    "droid",
+    "amp",
+    "trae",
+    "kiro",
+    "pi",
+    "vscode",
 )
 _REFERENCE_NAMES = (
-    "add-watch.md", "exports.md", "extraction-spec.md", "github-and-merge.md",
-    "hooks.md", "query.md", "transcribe.md", "update.md",
+    "add-watch.md",
+    "exports.md",
+    "extraction-spec.md",
+    "github-and-merge.md",
+    "hooks.md",
+    "query.md",
+    "transcribe.md",
+    "update.md",
 )
 _ALWAYS_ON_NAMES = (
-    "agents-md.md", "antigravity-rules.md", "claude-md.md",
-    "gemini-md.md", "kiro-steering.md", "vscode-instructions.md",
+    "agents-md.md",
+    "antigravity-rules.md",
+    "claude-md.md",
+    "gemini-md.md",
+    "kiro-steering.md",
+    "vscode-instructions.md",
 )
 
 
@@ -407,7 +402,16 @@ def _build_wheel_names(repo_root):
 
     with tempfile.TemporaryDirectory() as outdir:
         result = subprocess.run(
-            [sys.executable, "-m", "build", "--wheel", "--no-isolation", "--outdir", outdir, str(repo_root)],
+            [
+                sys.executable,
+                "-m",
+                "build",
+                "--wheel",
+                "--no-isolation",
+                "--outdir",
+                outdir,
+                str(repo_root),
+            ],
             capture_output=True,
             text=True,
         )

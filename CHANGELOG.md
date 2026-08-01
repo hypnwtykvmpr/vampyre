@@ -182,7 +182,7 @@ Full release notes with details on each version: [GitHub Releases](https://githu
 - Fix: the semantic extract entry points (`extract_corpus_parallel`, `extract_files_direct`) crashed with `AttributeError` when passed `str` paths instead of `pathlib.Path`. Both now coerce `files = [Path(f) for f in files]` at entry (#1386).
 - Fix: community labeling now recovers from a malformed-JSON batch by splitting it at the midpoint and retrying each half (mirroring the extract path), instead of logging-and-skipping it — which silently lost ~100 community names per failed batch on large graphs (#1280, #1278; thanks @CJdev232).
 - Fix: `graphify hook install` no longer creates a literal backslash-named junk directory and reports false success when `core.hooksPath` (or `git rev-parse --git-path hooks`) is a Windows-style path under WSL. Drive-letter / embedded-backslash hooks paths are now rejected with a clear error (#1385).
-- Refactor: node-ID normalization is unified into a single `graphify.ids` module. `extract._make_id`, `build._normalize_id`, `mcp_ingest._make_id`, and `symbol_resolution._bash_make_id` were four hand-synced copies of the same NFKC/casefold recipe — the root of the recurring ghost-node bug class (#811/#550/#1033/#1104). All four now delegate to one implementation guarded by contract + hypothesis property tests (#1378; thanks @danielnguyenfinhub).
+- Refactor: node-ID normalization is unified into a single `graphify.ids` module. `extract._make_id`, `build._normalize_id`, `mcp_ingest._make_id`, and `symbol_resolution._bash_make_id` were four hand-synced copies of the same NFKC/casefold recipe — the root of the recurring ghost-node bug class (#811/#550/#1033/#1104). All four now delegate to one implementation guarded by contract and deterministic generative tests (#1378; thanks @danielnguyenfinhub).
 
 ## 0.8.42 (2026-06-18)
 
@@ -426,7 +426,7 @@ Full release notes with details on each version: [GitHub Releases](https://githu
 ## 0.8.19 (2026-05-26)
 
 - Feat: .NET project file support — `.sln`, `.csproj`, `.fsproj`, `.vbproj`, `.razor`, `.cshtml` now extracted; captures NuGet package refs, project-to-project dependencies, target frameworks, SDK attributes, Blazor/Razor directives (`@using`, `@inject`, `@inherits`, `@model`, `@page`), component refs, and `@code` block methods (#1025)
-- Feat: Chinese query segmentation — compound Chinese tokens (e.g. `页面路由`) are split into meaningful words using jieba when installed, with character bigram fallback; original compound preserved alongside segments for exact-match; new `pip install "graphifyy[chinese]"` extra (#1026)
+- Feat: Chinese query segmentation — compound Chinese tokens (e.g. `页面路由`) are split into meaningful words using the optional Python 3 tokenizer, with character bigram fallback; original compound preserved alongside segments for exact-match; new `pip install "graphifyy[chinese]"` extra (#1026)
 - Fix: Wiki TypeError when `source_file` is `None` — `G.nodes[n].get("source_file") or ""` replaces `.get("source_file", "")`, which did not handle explicit `None` values (#1016)
 - Fix: Nested `.claude/worktrees/` no longer indexed — `_is_noise_dir` now accepts an optional `parent` param and skips `worktrees/` directories nested inside dotted dirs like `.claude/` (#1023)
 - Fix: `backup_if_protected` no longer accumulates one folder per run — uses content-hash comparison to skip identical backups and overwrite in-place when content changes; one folder per day maximum

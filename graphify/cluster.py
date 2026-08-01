@@ -1,57 +1,43 @@
-"""Community detection on NetworkX graphs. Uses Leiden (graspologic) if available, falls back to Louvain (networkx). Splits oversized communities. Returns cohesion scores."""
+"""Community detection with native Leiden and a NetworkX Louvain fallback."""
+
 from __future__ import annotations
-import contextlib
 import inspect
-import io
 import json
-import sys
-import warnings
+import math
 import networkx as nx
 
 from graphify.projections import project_for_community
 
 
-def _suppress_output():
-    """Context manager to suppress stdout/stderr during library calls.
+def _is_usable_weight(raw: object) -> bool:
+    """True when *raw* is a weight the native Leiden engine can consume.
 
-    graspologic's leiden() emits ANSI escape sequences (progress bars,
-    colored warnings) that corrupt PowerShell 5.1's scroll buffer on
-    Windows (see issue #19). Redirecting stdout/stderr to devnull during
-    the call prevents this without losing any graphify output.
+    Only a finite, non-negative real number qualifies. ``bool`` is excluded
+    because it subclasses ``int``.
     """
-    return contextlib.redirect_stdout(io.StringIO())
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        return False
+    return math.isfinite(raw) and raw >= 0
 
 
-@contextlib.contextmanager
-def _suppress_graspologic_dependency_warnings():
-    """Suppress known optional-dependency deprecations emitted by graspologic imports."""
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message=r"Please import `random` from the `scipy\.sparse` namespace.*",
-            category=DeprecationWarning,
-            module=r"hyppo\.independence\.hhg",
-        )
-        warnings.filterwarnings(
-            "ignore",
-            message=r"The keyword argument 'nopython=False' was supplied.*",
-            category=Warning,
-            module=r"numba\.core\.decorators",
-        )
-        yield
+def _effective_weight(data: dict) -> float:
+    """Weight leiden will actually use for an edge: its usable ``weight``, else 1.0.
+
+    Mirrors the previous wrapper's default so a total-weight check here matches what
+    the partitioner sees.
+    """
+    raw = data.get("weight")
+    return float(raw) if _is_usable_weight(raw) else 1.0  # type: ignore[arg-type]
 
 
 def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
     """Run community detection. Returns {node_id: community_id}.
 
-    Tries Leiden (graspologic) first — best quality.
-    Falls back to Louvain (built into networkx) if graspologic is not installed.
+    Tries the native Leiden engine first, then falls back to NetworkX Louvain.
 
     resolution > 1.0 → more, smaller communities.
     resolution < 1.0 → fewer, larger communities.
 
-    Output from graspologic is suppressed to prevent ANSI escape codes
-    from corrupting terminal scroll buffers on Windows PowerShell 5.1.
     """
     stable = nx.Graph()
     stable.add_nodes_from(sorted(G.nodes(), key=str))
@@ -66,31 +52,61 @@ def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
     for src, tgt, attrs in edge_rows:
         stable.add_edge(src, tgt, **attrs)
 
-    try:
-        with _suppress_graspologic_dependency_warnings():
-            from graspologic.partition import leiden
+    # The native engine does not validate edge weights before handing them to its
+    # Rust core. A negative, NaN, or all-zero graph can trigger PanicException,
+    # while infinities raise ParameterRangeError. Drop anything that is not a
+    # finite, non-negative real so it receives the established default of 1.0,
+    # exactly like an edge carrying no `weight` key. The simple-graph path reaches
+    # this with stored attrs untouched (cluster() only calls to_undirected), so
+    # a corrupt weight in graph.json is a live crash vector; the multigraph path
+    # is incidentally safe because project_for_community overwrites `weight`.
+    for _, _, data in stable.edges(data=True):
+        if "weight" in data and not _is_usable_weight(data["weight"]):
+            del data["weight"]
 
-        lsig = inspect.signature(leiden).parameters
-        kwargs: dict = {}
-        if "random_seed" in lsig:
-            kwargs["random_seed"] = 42
-        if "trials" in lsig:
-            kwargs["trials"] = 1
-        if "resolution" in lsig:
-            kwargs["resolution"] = resolution
-        # Suppress graspologic output to prevent ANSI escape codes from
-        # corrupting PowerShell 5.1 scroll buffer (issue #19)
-        old_stderr = sys.stderr
-        try:
-            sys.stderr = io.StringIO()
-            with _suppress_graspologic_dependency_warnings(), _suppress_output():
-                result = leiden(stable, **kwargs)
-        finally:
-            sys.stderr = old_stderr
-        return result
-    # graspologic has shipped releases that fail to import on some Python
-    # versions with a SyntaxError (not only absence -> ImportError); treat both
-    # as 'leiden unavailable' and fall back to networkx Louvain below.
+    # Separately, a graph whose weights are all a legitimate 0.0 has zero total
+    # weight and panics the same way. project_for_community scores an edge whose
+    # `confidence` is missing/unrecognized as 0.0, so a graph whose edges ALL
+    # lack confidence projects to all-zero weights. Fall back to uniform
+    # weighting; a graph with any positive weight keeps its weights untouched.
+    if (
+        stable.number_of_edges()
+        and sum(_effective_weight(data) for _, _, data in stable.edges(data=True)) <= 0
+    ):
+        for _, _, data in stable.edges(data=True):
+            data.pop("weight", None)
+
+    try:
+        from graspologic_native import leiden
+
+        node_by_native: dict[str, object] = {}
+        native_by_node: dict[object, str] = {}
+        for node in stable.nodes():
+            native_id = str(node)
+            if native_id in node_by_native and node_by_native[native_id] != node:
+                raise ValueError(
+                    "Leiden node IDs must have unique string representations: "
+                    f"{node_by_native[native_id]!r} and {node!r}"
+                )
+            node_by_native[native_id] = node
+            native_by_node[node] = native_id
+
+        native_edges = [
+            (native_by_node[source], native_by_node[target], _effective_weight(data))
+            for source, target, data in stable.edges(data=True)
+        ]
+        # The native API returns (quality, {string_node_id: community_id}).
+        _quality, partition = leiden(
+            edges=native_edges,
+            starting_communities=None,
+            resolution=resolution,
+            randomness=0.001,
+            iterations=1,
+            use_modularity=True,
+            seed=42,
+            trials=1,
+        )
+        return {node_by_native[node]: cid for node, cid in partition.items()}  # type: ignore[misc]
     except (ImportError, SyntaxError):
         pass
 
@@ -104,15 +120,13 @@ def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
     return {node: cid for cid, nodes in enumerate(communities) for node in nodes}
 
 
-_MAX_COMMUNITY_FRACTION = 0.25   # communities larger than 25% of graph get split
-_MIN_SPLIT_SIZE = 10             # only split if community has at least this many nodes
-_COHESION_SPLIT_THRESHOLD = 0.05 # re-split communities with cohesion below this
-_COHESION_SPLIT_MIN_SIZE = 50    # only cohesion-split if community has at least this many nodes
+_MAX_COMMUNITY_FRACTION = 0.25  # communities larger than 25% of graph get split
+_MIN_SPLIT_SIZE = 10  # only split if community has at least this many nodes
+_COHESION_SPLIT_THRESHOLD = 0.05  # re-split communities with cohesion below this
+_COHESION_SPLIT_MIN_SIZE = 50  # only cohesion-split if community has at least this many nodes
 
 
-def label_communities_by_hub(
-    G: nx.Graph, communities: dict[int, list[str]]
-) -> dict[int, str]:
+def label_communities_by_hub(G: nx.Graph, communities: dict[int, list[str]]) -> dict[int, str]:
     """Deterministic, LLM-free community labels: name each community after its
     highest-degree member — the structural hub — so a report reads ``auth`` /
     ``log_action`` instead of ``Community 70``. Degree is measured on the full graph
@@ -250,7 +264,10 @@ def cluster(
     # that bridge otherwise-unrelated subsystems (e.g. CLAUDE.md connected to everything).
     second_pass: list[list[str]] = []
     for nodes in final_communities:
-        if len(nodes) >= _COHESION_SPLIT_MIN_SIZE and cohesion_score(G, nodes) < _COHESION_SPLIT_THRESHOLD:
+        if (
+            len(nodes) >= _COHESION_SPLIT_MIN_SIZE
+            and cohesion_score(G, nodes) < _COHESION_SPLIT_THRESHOLD
+        ):
             splits = _split_community(G, nodes)
             second_pass.extend(splits if len(splits) > 1 else [nodes])
         else:

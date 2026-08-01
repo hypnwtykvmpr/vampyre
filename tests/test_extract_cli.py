@@ -1,4 +1,5 @@
 """Tests for `graphify extract` CLI dispatch path in graphify.__main__."""
+
 from __future__ import annotations
 
 import json
@@ -31,9 +32,7 @@ def _make_corpus(tmp_path):
     return tmp_path
 
 
-def test_extract_exits_nonzero_when_all_semantic_chunks_fail(
-    monkeypatch, tmp_path, capsys
-):
+def test_extract_exits_nonzero_when_all_semantic_chunks_fail(monkeypatch, tmp_path, capsys):
     """When every semantic chunk errors (e.g. backend SDK not installed),
     the CLI must exit non-zero instead of silently writing an AST-only graph.
 
@@ -62,23 +61,19 @@ def test_extract_exits_nonzero_when_all_semantic_chunks_fail(
             "output_tokens": 0,
         }
 
-    monkeypatch.setattr(
-        "graphify.llm.extract_corpus_parallel", _all_chunks_failed
-    )
+    monkeypatch.setattr("graphify.llm.extract_corpus_parallel", _all_chunks_failed)
     monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
     monkeypatch.setattr(
         mainmod.sys,
         "argv",
-        ["graphify", "extract", str(corpus), "--backend", "claude",
-         "--out", str(out_dir)],
+        ["graphify", "extract", str(corpus), "--backend", "claude", "--out", str(out_dir)],
     )
 
     with pytest.raises(SystemExit) as exc_info:
         mainmod.main()
 
     assert exc_info.value.code == 1, (
-        f"expected exit code 1 when all semantic chunks fail, "
-        f"got {exc_info.value.code}"
+        f"expected exit code 1 when all semantic chunks fail, got {exc_info.value.code}"
     )
 
     stderr = capsys.readouterr().err
@@ -92,9 +87,7 @@ def test_extract_exits_nonzero_when_all_semantic_chunks_fail(
     )
 
 
-def test_extract_succeeds_when_at_least_one_chunk_completes(
-    monkeypatch, tmp_path
-):
+def test_extract_succeeds_when_at_least_one_chunk_completes(monkeypatch, tmp_path):
     """Sanity counter-test: a successful chunk run keeps exit 0. Confirms the
     new guard only fires on the all-failed path, not on every extract."""
     corpus = _make_corpus(tmp_path)
@@ -113,15 +106,12 @@ def test_extract_succeeds_when_at_least_one_chunk_completes(
             "output_tokens": 50,
         }
 
-    monkeypatch.setattr(
-        "graphify.llm.extract_corpus_parallel", _one_chunk_succeeded
-    )
+    monkeypatch.setattr("graphify.llm.extract_corpus_parallel", _one_chunk_succeeded)
     monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
     monkeypatch.setattr(
         mainmod.sys,
         "argv",
-        ["graphify", "extract", str(corpus), "--backend", "claude",
-         "--out", str(out_dir)],
+        ["graphify", "extract", str(corpus), "--backend", "claude", "--out", str(out_dir)],
     )
 
     # extract may still raise SystemExit at the end (clean exit code 0)
@@ -140,8 +130,7 @@ def test_extract_succeeds_when_at_least_one_chunk_completes(
 def _code_only_corpus(tmp_path):
     """A corpus with only code — no docs/papers/images."""
     (tmp_path / "auth.py").write_text(
-        "def login(user):\n    return validate(user)\n\n"
-        "def validate(user):\n    return True\n"
+        "def login(user):\n    return validate(user)\n\ndef validate(user):\n    return True\n"
     )
     return tmp_path
 
@@ -149,10 +138,17 @@ def _code_only_corpus(tmp_path):
 def _clear_backend_keys(monkeypatch):
     """Clear every env var that detect_backend() or _get_backend_api_key() reads."""
     for key in (
-        "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "MOONSHOT_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "MOONSHOT_API_KEY",
         # bedrock: presence of any of these is treated as a valid credential
-        "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ACCESS_KEY_ID",
+        "AWS_PROFILE",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_ACCESS_KEY_ID",
         # ollama: a set OLLAMA_BASE_URL triggers backend detection
         "OLLAMA_BASE_URL",
     ):
@@ -171,7 +167,8 @@ def test_extract_codeonly_succeeds_without_api_key(monkeypatch, tmp_path):
     _clear_backend_keys(monkeypatch)
     monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
     monkeypatch.setattr(
-        mainmod.sys, "argv",
+        mainmod.sys,
+        "argv",
         ["graphify", "extract", str(corpus), "--out", str(out_dir)],
     )
 
@@ -183,6 +180,7 @@ def test_extract_codeonly_succeeds_without_api_key(monkeypatch, tmp_path):
     graph = out_dir / "graphify-out" / "graph.json"
     assert graph.exists(), "code-only extract must write graph.json without a key"
     import json
+
     assert len(json.loads(graph.read_text()).get("nodes", [])) > 0
 
 
@@ -228,7 +226,8 @@ def test_extract_out_keeps_project_root_clean(monkeypatch, tmp_path):
     monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
     monkeypatch.chdir(corpus)  # run from the project root, like a real user
     monkeypatch.setattr(
-        mainmod.sys, "argv",
+        mainmod.sys,
+        "argv",
         ["graphify", "extract", ".", "--out", str(external)],
     )
 
@@ -248,9 +247,7 @@ def test_extract_out_keeps_project_root_clean(monkeypatch, tmp_path):
     )
 
 
-def test_extract_without_key_still_errors_when_docs_present(
-    monkeypatch, tmp_path, capsys
-):
+def test_extract_without_key_still_errors_when_docs_present(monkeypatch, tmp_path, capsys):
     """Key requirement still fires when semantic work is needed.
 
     A corpus with a Markdown doc needs LLM semantic extraction, so a keyless
@@ -263,7 +260,8 @@ def test_extract_without_key_still_errors_when_docs_present(
     monkeypatch.setattr("graphify.llm.detect_backend", lambda: None)
     monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
     monkeypatch.setattr(
-        mainmod.sys, "argv",
+        mainmod.sys,
+        "argv",
         ["graphify", "extract", str(corpus), "--out", str(out_dir)],
     )
 
@@ -285,8 +283,17 @@ def test_extract_timing_flag_emits_stage_timings(monkeypatch, tmp_path, capsys):
 
     # with --timing
     monkeypatch.setattr(
-        mainmod.sys, "argv",
-        ["graphify", "extract", str(code), "--no-cluster", "--out", str(tmp_path / "o1"), "--timing"],
+        mainmod.sys,
+        "argv",
+        [
+            "graphify",
+            "extract",
+            str(code),
+            "--no-cluster",
+            "--out",
+            str(tmp_path / "o1"),
+            "--timing",
+        ],
     )
     with pytest.raises(SystemExit) as exc:
         mainmod.main()
@@ -297,7 +304,8 @@ def test_extract_timing_flag_emits_stage_timings(monkeypatch, tmp_path, capsys):
 
     # without --timing => no timing lines
     monkeypatch.setattr(
-        mainmod.sys, "argv",
+        mainmod.sys,
+        "argv",
         ["graphify", "extract", str(code), "--no-cluster", "--out", str(tmp_path / "o2")],
     )
     with pytest.raises(SystemExit) as exc2:
@@ -581,6 +589,34 @@ def test_extract_explicit_simple_downgrade_warns(tmp_path):
     assert len(_parallel_edges(after, "main", "helper")) == 1, (
         "explicit --simple must collapse the existing parallel edges onto one"
     )
+
+
+def test_extract_explicit_simple_noop_still_downgrades(tmp_path):
+    """A no-change incremental scan must still apply an explicit class change."""
+    corpus = _make_code_corpus(tmp_path)
+    env = _clean_env()
+    env["ANTHROPIC_API_KEY"] = "sk-test-fake-key"
+    graph_json = corpus / "graphify-out" / "graph.json"
+
+    seed = _run(
+        ["extract", str(corpus), "--backend", "claude", "--multigraph", "--no-cluster"],
+        tmp_path,
+        env=env,
+    )
+    assert seed.returncode == 0, seed.stderr
+    assert json.loads(graph_json.read_text(encoding="utf-8"))["multigraph"] is True
+
+    downgrade = _run(
+        ["extract", str(corpus), "--backend", "claude", "--simple", "--no-cluster"],
+        tmp_path,
+        env=env,
+    )
+
+    assert downgrade.returncode == 0, downgrade.stderr
+    assert "WARNING" in downgrade.stderr and "--simple" in downgrade.stderr
+    data = json.loads(graph_json.read_text(encoding="utf-8"))
+    assert data["multigraph"] is False
+    assert _graph_type(data) != "multidigraph"
 
 
 def test_extract_multigraph_capability_failure_message(monkeypatch, tmp_path, capsys):
