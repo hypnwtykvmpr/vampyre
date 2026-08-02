@@ -1081,7 +1081,9 @@ def test_extract_falls_back_to_sequential_when_parallel_returns_false(tmp_path, 
     calls = {"parallel": 0, "sequential": 0}
     real_sequential = extract_mod._extract_sequential
 
-    def fake_parallel(uncached_work, per_file, effective_root, max_workers, total_files):
+    def fake_parallel(
+        uncached_work, per_file, cache_root, source_root, max_workers, total_files
+    ):
         calls["parallel"] += 1
         return False  # simulate the post-fix BrokenProcessPool branch
 
@@ -1117,7 +1119,7 @@ def test_extract_parallel_returns_false_on_broken_pool(tmp_path, monkeypatch, ca
 
     uncached = [(0, FIXTURES / "sample.py")]
     per_file: list = [None]
-    ok = extract_mod._extract_parallel(uncached, per_file, tmp_path, 2, 1)
+    ok = extract_mod._extract_parallel(uncached, per_file, tmp_path, tmp_path, 2, 1)
     assert ok is False, "function should report failure via return value, not raise"
     out = capsys.readouterr().out
     assert "BrokenProcessPool" in out, "user-facing warning must mention the failure"
@@ -1977,7 +1979,7 @@ def test_extract_parallel_returns_false_when_pool_unavailable(tmp_path, monkeypa
     uncached = [(0, FIXTURES / "sample.py")]
     per_file: list = [None]
 
-    ok = extract_mod._extract_parallel(uncached, per_file, tmp_path, 2, 1)
+    ok = extract_mod._extract_parallel(uncached, per_file, tmp_path, tmp_path, 2, 1)
 
     assert ok is False
     out = capsys.readouterr().out
@@ -2013,12 +2015,87 @@ def test_extract_parallel_worker_warning_handles_sparse_file_indexes(tmp_path, m
     uncached = [(3, source)]
     per_file: list = [None, None, None, None]
 
-    ok = extract_mod._extract_parallel(uncached, per_file, tmp_path, 2, 4)
+    ok = extract_mod._extract_parallel(uncached, per_file, tmp_path, tmp_path, 2, 4)
 
     assert ok is True
     err = capsys.readouterr().err
     assert "late.py" in err
     assert "simulated worker failure" in err
+
+
+def test_extract_parallel_worker_separates_source_and_cache_roots(tmp_path, monkeypatch):
+    import concurrent.futures
+    from graphify import extract as extract_mod
+
+    class ImmediatePool:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def submit(self, fn, item):
+            future: concurrent.futures.Future = concurrent.futures.Future()
+            future.set_result(fn(item))
+            return future
+
+    monkeypatch.setattr(
+        concurrent.futures,
+        "ProcessPoolExecutor",
+        lambda *args, **kwargs: ImmediatePool(),
+    )
+
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source = source_root / "module.py"
+    source.write_text("def run():\n    return 1\n", encoding="utf-8")
+    cache_root = tmp_path / "external-output"
+    per_file: list = [None]
+
+    assert extract_mod._extract_parallel(
+        [(0, source)], per_file, cache_root, source_root, 1, 1
+    )
+    assert per_file[0] is not None
+    assert all(
+        node.get("source_file") == str(source)
+        for node in per_file[0]["nodes"]
+        if node.get("source_file")
+    )
+    assert (cache_root / "graphify-out" / "cache" / "ast").exists()
+    assert not (source_root / "graphify-out").exists()
+
+
+def test_extract_external_cache_warm_and_cold_results_match(tmp_path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    first = source_root / "a.py"
+    second = source_root / "b.py"
+    first.write_text(
+        "from b import beta\n\ndef alpha():\n    return beta()\n",
+        encoding="utf-8",
+    )
+    second.write_text("def beta():\n    return 1\n", encoding="utf-8")
+    cache_root = tmp_path / "external-output"
+
+    cold = extract(
+        [first, second],
+        cache_root=cache_root,
+        source_root=source_root,
+        parallel=False,
+    )
+    warm = extract(
+        [first, second],
+        cache_root=cache_root,
+        source_root=source_root,
+        parallel=False,
+    )
+
+    assert warm == cold
+    assert {node["id"] for node in warm["nodes"]} >= {"a", "a_alpha", "b", "b_beta"}
+    assert not (source_root / "graphify-out").exists()
 
 
 def test_extract_bash_multisite_calls_are_keyed_by_source_location(tmp_path):

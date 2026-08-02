@@ -5233,6 +5233,17 @@ def main() -> None:
         graphify_out = out_root / _GRAPHIFY_OUT
         graphify_out.mkdir(parents=True, exist_ok=True)
 
+        def _write_scan_root_marker() -> None:
+            if not has_path:
+                return
+            try:
+                recorded_root = os.path.relpath(target, out_root).replace(os.sep, "/")
+            except ValueError:
+                recorded_root = target.as_posix()
+            (graphify_out / ".graphify_root").write_text(
+                recorded_root, encoding="utf-8"
+            )
+
         stages = _StageTimer(cli_timing)
 
         from graphify.detect import (
@@ -5401,7 +5412,7 @@ def main() -> None:
             # Anchor the cache at the output root, not the scanned project:
             # with --out, a <target>/graphify-out/cache/ would leak a
             # graphify-out/ dir into a project that asked for external output.
-            ast_kwargs: dict = {"cache_root": out_root}
+            ast_kwargs: dict = {"cache_root": out_root, "source_root": target}
             if cli_max_workers is not None:
                 ast_kwargs["max_workers"] = cli_max_workers
             print(f"[graphify extract] AST extraction on {len(code_files)} code files...")
@@ -5431,7 +5442,7 @@ def main() -> None:
         if semantic_files:
             sem_paths_str = [str(p) for p in semantic_files]
             cached_nodes, cached_edges, cached_hyperedges, uncached_paths = _check_semantic_cache(
-                sem_paths_str, root=out_root
+                sem_paths_str, root=out_root, source_root=target
             )
             sem_cache_hits = len(semantic_files) - len(uncached_paths)
             sem_cache_misses = len(uncached_paths)
@@ -5514,6 +5525,7 @@ def main() -> None:
                         fresh.get("edges", []),
                         fresh.get("hyperedges", []),
                         root=out_root,
+                        source_root=target,
                     )
                 except Exception as exc:
                     print(
@@ -5542,11 +5554,11 @@ def main() -> None:
                 for _fp in files_by_type.get(_kind, []):
                     _abs = Path(_fp)
                     if not _abs.is_absolute():
-                        _abs = Path(out_root) / _abs
+                        _abs = target / _abs
                     if not _abs.is_file():
                         continue  # deleted/missing — leave out so its entry is pruned
                     try:
-                        _live_hashes.add(_file_hash(_abs, out_root))
+                        _live_hashes.add(_file_hash(_abs, target, cache_root=out_root))
                     except OSError:
                         pass
             _prune_semantic_cache(out_root, _live_hashes)
@@ -5721,6 +5733,7 @@ def main() -> None:
                         f"[graphify extract] warning: could not write manifest: {exc}",
                         file=sys.stderr,
                     )
+                _write_scan_root_marker()
                 stages.total()
                 sys.exit(0)
 
@@ -5855,6 +5868,7 @@ def main() -> None:
                 print(
                     f"[graphify extract] warning: could not write manifest: {exc}", file=sys.stderr
                 )
+            _write_scan_root_marker()
             if global_merge:
                 from graphify.global_graph import global_add as _global_add
 
@@ -5982,6 +5996,7 @@ def main() -> None:
             )
         except Exception as exc:
             print(f"[graphify extract] warning: could not write manifest: {exc}", file=sys.stderr)
+        _write_scan_root_marker()
 
         cost = _estimate_cost(backend, merged["input_tokens"], merged["output_tokens"])
         print(

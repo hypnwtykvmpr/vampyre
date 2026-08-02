@@ -129,6 +129,7 @@ def test_extract_succeeds_when_at_least_one_chunk_completes(monkeypatch, tmp_pat
 
 def _code_only_corpus(tmp_path):
     """A corpus with only code — no docs/papers/images."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "auth.py").write_text(
         "def login(user):\n    return validate(user)\n\ndef validate(user):\n    return True\n"
     )
@@ -245,6 +246,203 @@ def test_extract_out_keeps_project_root_clean(monkeypatch, tmp_path):
     assert sorted(p.name for p in corpus.iterdir()) == ["auth.py"], (
         "no stray files may appear in the project root"
     )
+
+
+def _cross_file_python_corpus(root: Path) -> Path:
+    root.mkdir()
+    (root / "a.py").write_text(
+        "from b import beta\n\ndef alpha():\n    return beta()\n",
+        encoding="utf-8",
+    )
+    (root / "b.py").write_text("def beta():\n    return 1\n", encoding="utf-8")
+    return root
+
+
+def _topology_signature(graph_path: Path) -> tuple[list[str], list[tuple[str, str, str]]]:
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
+    nodes = sorted(str(node["id"]) for node in data.get("nodes", []))
+    edges = sorted(
+        (
+            str(edge["source"]),
+            str(edge["target"]),
+            str(edge.get("relation", "")),
+        )
+        for edge in data.get("links", data.get("edges", []))
+    )
+    return nodes, edges
+
+
+def test_extract_out_preserves_ids_and_cross_file_edges(monkeypatch, tmp_path):
+    """Changing only output storage must not change extracted graph content."""
+    plain = _cross_file_python_corpus(tmp_path / "plain")
+    external_source = _cross_file_python_corpus(tmp_path / "external-source")
+    external_root = tmp_path / "external-output"
+
+    _clear_backend_keys(monkeypatch)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "extract", str(plain), "--multigraph", "--no-cluster"],
+    )
+    try:
+        mainmod.main()
+    except SystemExit as exc:
+        assert exc.code in (None, 0)
+
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        [
+            "graphify",
+            "extract",
+            str(external_source),
+            "--out",
+            str(external_root),
+            "--multigraph",
+            "--no-cluster",
+        ],
+    )
+    try:
+        mainmod.main()
+    except SystemExit as exc:
+        assert exc.code in (None, 0)
+
+    plain_signature = _topology_signature(plain / "graphify-out" / "graph.json")
+    external_signature = _topology_signature(external_root / "graphify-out" / "graph.json")
+    assert plain_signature == external_signature
+    assert plain_signature[0] == ["a", "a_alpha", "b", "b_beta"]
+    assert ("a", "b", "imports_from") in plain_signature[1]
+    assert ("a", "b_beta", "imports") in plain_signature[1]
+    assert not any(str(tmp_path) in node_id for node_id in external_signature[0])
+
+
+def test_extract_persists_portable_scan_root_marker(monkeypatch, tmp_path):
+    """Plain and external-output extraction must record their source root."""
+    plain = _code_only_corpus(tmp_path / "plain")
+    external_source = _code_only_corpus(tmp_path / "external-source")
+    external_root = tmp_path / "external-output"
+
+    _clear_backend_keys(monkeypatch)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+
+    for argv in (
+        ["graphify", "extract", str(plain), "--no-cluster"],
+        [
+            "graphify",
+            "extract",
+            str(external_source),
+            "--out",
+            str(external_root),
+            "--no-cluster",
+        ],
+    ):
+        monkeypatch.setattr(mainmod.sys, "argv", argv)
+        try:
+            mainmod.main()
+        except SystemExit as exc:
+            assert exc.code in (None, 0)
+
+    plain_marker = plain / "graphify-out" / ".graphify_root"
+    external_marker = external_root / "graphify-out" / ".graphify_root"
+    assert plain_marker.read_text(encoding="utf-8") == "."
+    assert external_marker.read_text(encoding="utf-8") == os.path.relpath(
+        external_source.resolve(), external_root.resolve()
+    ).replace(os.sep, "/")
+
+
+def test_extract_out_respects_process_bound_graphify_out(tmp_path):
+    corpus = _cross_file_python_corpus(tmp_path / "corpus")
+    external_root = tmp_path / "external-output"
+    env = _clean_env()
+    env["GRAPHIFY_OUT"] = "custom-graph"
+
+    result = _run(
+        [
+            "extract",
+            str(corpus),
+            "--out",
+            str(external_root),
+            "--multigraph",
+            "--no-cluster",
+        ],
+        tmp_path,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    custom_out = external_root / "custom-graph"
+    nodes, edges = _topology_signature(custom_out / "graph.json")
+    assert nodes == ["a", "a_alpha", "b", "b_beta"]
+    assert ("a", "b", "imports_from") in edges
+    assert ("a", "b_beta", "imports") in edges
+    assert (custom_out / ".graphify_root").read_text(encoding="utf-8") == os.path.relpath(
+        corpus.resolve(), external_root.resolve()
+    ).replace(os.sep, "/")
+    assert (custom_out / "cache" / "stat-index.json").exists()
+    assert not (external_root / "graphify-out").exists()
+    assert not (corpus / "graphify-out").exists()
+
+
+def test_extract_out_semantic_cache_survives_prune_and_reloads(monkeypatch, tmp_path):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "notes.md").write_text("# Notes\n\nStable body.\n", encoding="utf-8")
+    external_root = tmp_path / "external-output"
+    calls = 0
+
+    def _semantic_result(paths, **kwargs):
+        nonlocal calls
+        calls += 1
+        kwargs["on_chunk_done"](0, 1, {})
+        return {
+            "nodes": [
+                {
+                    "id": "notes",
+                    "label": "Notes",
+                    "type": "document",
+                    "source_file": "notes.md",
+                }
+            ],
+            "edges": [],
+            "hyperedges": [],
+            "input_tokens": 1,
+            "output_tokens": 1,
+        }
+
+    _clear_backend_keys(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr("graphify.llm.extract_corpus_parallel", _semantic_result)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    argv = [
+        "graphify",
+        "extract",
+        str(corpus),
+        "--backend",
+        "claude",
+        "--out",
+        str(external_root),
+        "--no-cluster",
+    ]
+
+    for attempt in range(2):
+        monkeypatch.setattr(mainmod.sys, "argv", argv)
+        try:
+            mainmod.main()
+        except SystemExit as exc:
+            assert exc.code in (None, 0)
+        if attempt == 0:
+            (external_root / "graphify-out" / "manifest.json").unlink()
+
+    assert calls == 1
+    entries = list(
+        (external_root / "graphify-out" / "cache" / "semantic").glob("*.json")
+    )
+    assert len(entries) == 1
+    cached = json.loads(entries[0].read_text(encoding="utf-8"))
+    assert cached["nodes"][0]["source_file"] == "notes.md"
+    assert not (corpus / "graphify-out").exists()
 
 
 def test_extract_without_key_still_errors_when_docs_present(monkeypatch, tmp_path, capsys):

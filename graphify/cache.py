@@ -83,7 +83,7 @@ def _body_content(content: bytes) -> bytes:
     return text[closer.start() + 3:].encode()
 
 
-# Stat-based index: maps absolute path → {size, mtime_ns, hash}.
+# Stat-based index: maps source root + absolute path → {size, mtime_ns, hash}.
 # Loaded once per process, flushed via atexit. Skips full file reads when
 # size+mtime_ns are unchanged — same trade-off as make(1).
 # Correctness risks: `touch` causes a harmless extra re-hash; same-size edits
@@ -102,9 +102,13 @@ def _stat_index_file(root: Path) -> Path:
 
 def _ensure_stat_index(root: Path) -> None:
     global _stat_index, _stat_index_root, _stat_index_dirty
-    if _stat_index_root is not None:
+    requested_root = Path(root).resolve()
+    if _stat_index_root == requested_root:
         return
-    _stat_index_root = Path(root).resolve()
+    first_load = _stat_index_root is None
+    if not first_load:
+        _flush_stat_index()
+    _stat_index_root = requested_root
     p = _stat_index_file(_stat_index_root)
     if p.exists():
         try:
@@ -113,7 +117,8 @@ def _ensure_stat_index(root: Path) -> None:
             _stat_index = {}
     else:
         _stat_index = {}
-    atexit.register(_flush_stat_index)
+    if first_load:
+        atexit.register(_flush_stat_index)
 
 
 def _flush_stat_index() -> None:
@@ -153,7 +158,9 @@ def _normalize_path(path: Path) -> Path:
     return Path(os.path.normcase(s))
 
 
-def file_hash(path: Path, root: Path = Path(".")) -> str:
+def file_hash(
+    path: Path, root: Path = Path("."), *, cache_root: Path | None = None
+) -> str:
     """SHA256 of file contents + path relative to root.
 
     Uses a stat-based fastpath (size + mtime_ns) to skip full reads when the
@@ -173,8 +180,8 @@ def file_hash(path: Path, root: Path = Path(".")) -> str:
     if not p.is_file():
         raise IsADirectoryError(f"file_hash requires a file, got: {p}")
 
-    _ensure_stat_index(root)
-    abs_key = str(p.resolve())
+    _ensure_stat_index(cache_root or root)
+    abs_key = f"{root.resolve()}\x00{p.resolve()}"
     st: "os.stat_result | None" = None
     try:
         st = p.stat()
@@ -290,7 +297,13 @@ def cache_dir(root: Path = Path("."), kind: str = "ast") -> Path:
     return d
 
 
-def load_cached(path: Path, root: Path = Path("."), kind: str = "ast") -> dict | None:
+def load_cached(
+    path: Path,
+    root: Path = Path("."),
+    kind: str = "ast",
+    *,
+    source_root: Path | None = None,
+) -> dict | None:
     """Return cached extraction for this file if hash matches, else None.
 
     Cache key: SHA256 of file contents.
@@ -303,8 +316,9 @@ def load_cached(path: Path, root: Path = Path("."), kind: str = "ast") -> dict |
     extractor and may be stale.
     Returns None if no cache entry or file has changed.
     """
+    identity_root = source_root or root
     try:
-        h = file_hash(path, root)
+        h = file_hash(path, identity_root, cache_root=root)
     except OSError:
         return None
     entry = cache_dir(root, kind) / f"{h}.json"
@@ -317,12 +331,19 @@ def load_cached(path: Path, root: Path = Path("."), kind: str = "ast") -> dict |
         # absolute-path shape that a fresh in-process extraction produces
         # (#777). Legacy entries with absolute source_file pass through.
         if isinstance(result, dict):
-            _absolutize_source_files_in(result, root)
+            _absolutize_source_files_in(result, identity_root)
         return result
     return None
 
 
-def save_cached(path: Path, result: dict, root: Path = Path("."), kind: str = "ast") -> None:
+def save_cached(
+    path: Path,
+    result: dict,
+    root: Path = Path("."),
+    kind: str = "ast",
+    *,
+    source_root: Path | None = None,
+) -> None:
     """Save extraction result for this file.
 
     Stores as graphify-out/cache/{kind}/{hash}.json where hash = SHA256 of current file contents.
@@ -333,6 +354,7 @@ def save_cached(path: Path, result: dict, root: Path = Path("."), kind: str = "a
     IsADirectoryError from aborting the whole batch.
     """
     p = Path(path)
+    identity_root = source_root or root
     if not p.is_file():
         return
     # Relativize source_file fields against ``root`` before write so the
@@ -349,8 +371,8 @@ def save_cached(path: Path, result: dict, root: Path = Path("."), kind: str = "a
     if isinstance(result, dict) and any(result.get(k) for k in ("nodes", "edges", "hyperedges")):
         import copy as _copy
         on_disk = _copy.deepcopy(result)
-        _relativize_source_files_in(on_disk, root)
-    h = file_hash(p, root)
+        _relativize_source_files_in(on_disk, identity_root)
+    h = file_hash(p, identity_root, cache_root=root)
     target_dir = cache_dir(root, kind)
     entry = target_dir / f"{h}.json"
     fd, tmp_path = tempfile.mkstemp(dir=target_dir, prefix=f"{h}.", suffix=".tmp")
@@ -448,6 +470,8 @@ def prune_semantic_cache(root: Path, live_hashes: set[str]) -> int:
 def check_semantic_cache(
     files: list[str],
     root: Path = Path("."),
+    *,
+    source_root: Path | None = None,
 ) -> tuple[list[dict], list[dict], list[dict], list[str]]:
     """Check semantic extraction cache for a list of absolute file paths.
 
@@ -459,11 +483,12 @@ def check_semantic_cache(
     cached_hyperedges: list[dict] = []
     uncached: list[str] = []
 
+    identity_root = source_root or root
     for fpath in files:
         p = Path(fpath)
         if not p.is_absolute():
-            p = Path(root) / p
-        result = load_cached(p, root, kind="semantic")
+            p = Path(identity_root) / p
+        result = load_cached(p, root, kind="semantic", source_root=identity_root)
         if result is not None:
             cached_nodes.extend(result.get("nodes", []))
             cached_edges.extend(result.get("edges", []))
@@ -479,6 +504,8 @@ def save_semantic_cache(
     edges: list[dict],
     hyperedges: list[dict] | None = None,
     root: Path = Path("."),
+    *,
+    source_root: Path | None = None,
 ) -> int:
     """Save semantic extraction results to cache, keyed by source_file.
 
@@ -503,12 +530,13 @@ def save_semantic_cache(
         if src:
             by_file[src]["hyperedges"].append(h)
 
+    identity_root = source_root or root
     saved = 0
     for fpath, result in by_file.items():
         p = Path(fpath)
         if not p.is_absolute():
-            p = Path(root) / p
+            p = Path(identity_root) / p
         if p.is_file():
-            save_cached(p, result, root, kind="semantic")
+            save_cached(p, result, root, kind="semantic", source_root=identity_root)
             saved += 1
     return saved

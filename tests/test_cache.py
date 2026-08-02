@@ -1,7 +1,9 @@
 """Tests for graphify/cache.py."""
+import json
 import pytest
 from pathlib import Path
 from graphify.cache import file_hash, cache_dir, load_cached, save_cached, cached_files, clear_cache, _body_content
+from graphify.cache import check_semantic_cache, save_semantic_cache
 
 
 @pytest.fixture
@@ -40,6 +42,102 @@ def test_cache_roundtrip(tmp_file, cache_root):
     save_cached(tmp_file, result, root=cache_root)
     loaded = load_cached(tmp_file, root=cache_root)
     assert loaded == result
+
+
+def test_cache_storage_root_is_independent_from_source_root(tmp_path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source = source_root / "module.py"
+    source.write_text("def run():\n    return 1\n", encoding="utf-8")
+    storage_root = tmp_path / "external-output"
+    result = {
+        "nodes": [{"id": "module_run", "source_file": str(source)}],
+        "edges": [],
+    }
+
+    save_cached(source, result, root=storage_root, source_root=source_root)
+    loaded = load_cached(source, root=storage_root, source_root=source_root)
+
+    assert loaded == result
+    entries = list((storage_root / "graphify-out" / "cache" / "ast").rglob("*.json"))
+    assert len(entries) == 1
+    on_disk = json.loads(entries[0].read_text(encoding="utf-8"))
+    assert on_disk["nodes"][0]["source_file"] == "module.py"
+    assert not (source_root / "graphify-out").exists()
+
+
+def test_file_hash_places_stat_index_under_cache_root(tmp_path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source = source_root / "module.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    storage_root = tmp_path / "external-output"
+
+    digest = file_hash(source, source_root, cache_root=storage_root)
+
+    assert len(digest) == 64
+    from graphify.cache import _flush_stat_index
+
+    _flush_stat_index()
+    assert (storage_root / "graphify-out" / "cache" / "stat-index.json").exists()
+    assert not (source_root / "graphify-out").exists()
+
+
+def test_file_hash_switches_stat_index_storage_roots(tmp_path):
+    from graphify.cache import _flush_stat_index
+
+    for name in ("one", "two"):
+        source_root = tmp_path / f"source-{name}"
+        source_root.mkdir()
+        source = source_root / "module.py"
+        source.write_text(f"value = {name!r}\n", encoding="utf-8")
+        storage_root = tmp_path / f"output-{name}"
+        file_hash(source, source_root, cache_root=storage_root)
+
+    _flush_stat_index()
+    for name in ("one", "two"):
+        assert (
+            tmp_path / f"output-{name}" / "graphify-out" / "cache" / "stat-index.json"
+        ).exists()
+
+
+def test_file_hash_stat_fastpath_respects_source_root(tmp_path):
+    source_root = tmp_path / "source"
+    nested_root = source_root / "nested"
+    nested_root.mkdir(parents=True)
+    source = nested_root / "module.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    storage_root = tmp_path / "external-output"
+
+    broad_hash = file_hash(source, source_root, cache_root=storage_root)
+    nested_hash = file_hash(source, nested_root, cache_root=storage_root)
+
+    assert broad_hash != nested_hash
+
+
+def test_semantic_cache_separates_storage_and_source_roots(tmp_path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source = source_root / "notes.md"
+    source.write_text("# Notes\n\nStable body.\n", encoding="utf-8")
+    storage_root = tmp_path / "external-output"
+    nodes = [{"id": "notes", "source_file": "notes.md"}]
+
+    saved = save_semantic_cache(nodes, [], root=storage_root, source_root=source_root)
+    cached_nodes, cached_edges, cached_hyperedges, uncached = check_semantic_cache(
+        [str(source)], root=storage_root, source_root=source_root
+    )
+
+    assert saved == 1
+    assert cached_nodes == [{"id": "notes", "source_file": str(source)}]
+    assert cached_edges == []
+    assert cached_hyperedges == []
+    assert uncached == []
+    entries = list((storage_root / "graphify-out" / "cache" / "semantic").glob("*.json"))
+    assert len(entries) == 1
+    on_disk = json.loads(entries[0].read_text(encoding="utf-8"))
+    assert on_disk["nodes"][0]["source_file"] == "notes.md"
+    assert not (source_root / "graphify-out").exists()
 
 
 def test_cache_miss_on_change(tmp_file, cache_root):
