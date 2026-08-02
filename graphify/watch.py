@@ -556,6 +556,31 @@ def _existing_is_multigraph(graph_data: dict) -> bool:
     return False
 
 
+def _existing_graph_type(graph_data: dict) -> str:
+    """Return the graph class declared by an existing serialized payload."""
+    if _existing_is_multigraph(graph_data):
+        return "multidigraph"
+    if isinstance(graph_data, dict) and graph_data.get("directed") is True:
+        return "digraph"
+    return "simple"
+
+
+def _stamp_graph_type(graph_data: dict, graph_type: str) -> None:
+    """Persist an explicit loader profile on raw no-cluster output."""
+    from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
+
+    graph_data["multigraph"] = graph_type == "multidigraph"
+    graph_data["directed"] = graph_type in {"digraph", "multidigraph"}
+    graph_meta = graph_data.get("graph")
+    if not isinstance(graph_meta, dict):
+        graph_meta = {}
+    profile = graph_meta.get(GRAPHIFY_PROFILE_KEY)
+    profile = dict(profile) if isinstance(profile, dict) else {}
+    profile["graph_type"] = graph_type
+    graph_meta[GRAPHIFY_PROFILE_KEY] = profile
+    graph_data["graph"] = graph_meta
+
+
 def _check_shrink(
     force: bool,
     existing_data: dict,
@@ -664,6 +689,9 @@ def _missing_local_source(source_file: object, *roots: Path) -> bool:
 def _rebuild_code(
     watch_path: Path,
     *,
+    output_dir: Path | None = None,
+    output_root: Path | None = None,
+    graph_type: str | None = None,
     changed_paths: list[Path] | None = None,
     follow_symlinks: bool = False,
     force: bool = False,
@@ -698,7 +726,8 @@ def _rebuild_code(
 
     Returns True on success, False on error or skipped-due-to-lock.
     """
-    out = watch_path / _GRAPHIFY_OUT
+    out = Path(output_dir).resolve() if output_dir is not None else watch_path / _GRAPHIFY_OUT
+    storage_root = Path(output_root).resolve() if output_root is not None else watch_path.resolve()
     if acquire_lock:
         # #1059: incremental (changed_paths is not None) hooks must not drop
         # their change set when another rebuild is already running. Queue
@@ -727,6 +756,9 @@ def _rebuild_code(
                 merged = None
             ok = _rebuild_code(
                 watch_path,
+                output_dir=out,
+                output_root=storage_root,
+                graph_type=graph_type,
                 changed_paths=merged,
                 follow_symlinks=follow_symlinks,
                 force=force,
@@ -746,6 +778,9 @@ def _rebuild_code(
                     ok = (
                         _rebuild_code(
                             watch_path,
+                            output_dir=out,
+                            output_root=storage_root,
+                            graph_type=graph_type,
                             changed_paths=late,
                             follow_symlinks=follow_symlinks,
                             force=force,
@@ -840,7 +875,7 @@ def _rebuild_code(
 
         commit = _git_head()
         result = (
-            extract(extract_targets, cache_root=watch_root)
+            extract(extract_targets, cache_root=storage_root, source_root=project_root)
             if extract_targets
             else {
                 "nodes": [],
@@ -861,11 +896,15 @@ def _rebuild_code(
         # otherwise the old nodes for those files would survive forever.
         existing_graph = out / "graph.json"
         existing_graph_data: dict = {}
+        existing_graph_metadata: dict = {}
         if existing_graph.exists():
             try:
                 check_graph_file_size_cap(existing_graph)
                 existing = json.loads(existing_graph.read_text(encoding="utf-8"))
                 existing_graph_data = existing
+                raw_graph_metadata = existing.get("graph")
+                if isinstance(raw_graph_metadata, dict):
+                    existing_graph_metadata = dict(raw_graph_metadata)
                 new_ast_ids = {n["id"] for n in result["nodes"]}
                 _relativize_source_files(existing, project_root)
                 evict_sources: set[str] = set(deleted_paths)
@@ -1049,6 +1088,8 @@ def _rebuild_code(
                     file=sys.stderr,
                 )
 
+        resolved_graph_type = graph_type or _existing_graph_type(existing_graph_data)
+
         _relativize_source_files(result, project_root)
         # Source files re-extracted this run — their symbol sets may legitimately
         # shrink (a removed function), so the shrink-guard should not block the
@@ -1081,28 +1122,19 @@ def _rebuild_code(
                 # Multigraph keeps parallel edges; only collapse for simple graphs (#1317).
                 "links": (
                     result.get("edges", [])
-                    if _existing_is_multigraph(existing_graph_data)
+                    if resolved_graph_type == "multidigraph"
                     else _dedupe_edges(result.get("edges", []))
                 ),
             }
+            if existing_graph_metadata:
+                candidate_graph_data["graph"] = existing_graph_metadata
             # The no-cluster path writes raw merged extraction JSON directly (it
             # never goes through build_from_json/to_json), so it would otherwise
             # emit a graph.json with no multigraph flag — the same deferred
-            # collapse as the clustered path. When the existing graph was a
-            # MultiDiGraph, stamp the multigraph/directed flags + a multidigraph
-            # graphify_profile so the rewritten file reloads as a MultiDiGraph
-            # (preserved parallel-edge records keep their `key`; new AST edges get
-            # a generated key on load). Simple graphs are left untouched.
-            if _existing_is_multigraph(existing_graph_data):
-                from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
-
-                candidate_graph_data["multigraph"] = True
-                candidate_graph_data["directed"] = True
-                graph_meta = candidate_graph_data.get("graph")
-                if not isinstance(graph_meta, dict):
-                    graph_meta = {}
-                graph_meta[GRAPHIFY_PROFILE_KEY] = {"graph_type": "multidigraph"}
-                candidate_graph_data["graph"] = graph_meta
+            # collapse as the clustered path. Stamp the resolved class explicitly
+            # so every rewrite reloads with the same graph semantics. Preserved
+            # multigraph records keep their key; new AST edges receive one on load.
+            _stamp_graph_type(candidate_graph_data, resolved_graph_type)
             candidate_graph_text = _json_text(candidate_graph_data)
             same_graph = False
             if existing_graph.exists():
@@ -1134,7 +1166,12 @@ def _rebuild_code(
             try:
                 from graphify.detect import save_manifest
 
-                save_manifest(detected["files"], kind="ast", root=project_root)
+                save_manifest(
+                    detected["files"],
+                    manifest_path=str(out / "manifest.json"),
+                    kind="ast",
+                    root=project_root,
+                )
             except Exception as exc:
                 print(f"[graphify] warning: could not save AST manifest: {exc}", file=sys.stderr)
 
@@ -1167,16 +1204,17 @@ def _rebuild_code(
             "total_words": detected.get("total_words", 0),
         }
 
-        # Inherit the existing graph's multigraph class so an incremental rebuild
-        # of a MultiDiGraph graph.json stays a MultiDiGraph. build_from_json with
-        # multigraph=True keeps each preserved edge record's `key`, so parallel
-        # edges survive the rebuild AND the to_json below stamps multigraph=true +
-        # graphify_profile (Phase A) so the file reloads as a MultiDiGraph rather
-        # than silently collapsing to one edge per pair on the next load_graph.
-        # When the existing graph is simple (or absent) this is False — build a
-        # simple graph exactly as before, no behavior change.
-        saved_is_multigraph = _existing_is_multigraph(existing_graph_data)
-        G = build_from_json(result, multigraph=saved_is_multigraph)
+        # Rebuild with the resolved saved class. MultiDiGraph records retain their
+        # keys, and directed simple graphs remain directed across the write/load
+        # cycle instead of being downgraded to Graph.
+        saved_is_multigraph = resolved_graph_type == "multidigraph"
+        G = build_from_json(
+            result,
+            directed=resolved_graph_type == "digraph",
+            multigraph=saved_is_multigraph,
+        )
+        if existing_graph_metadata:
+            G.graph.update(existing_graph_metadata)
         candidate_topology = _topology_from_graph(G)
         if existing_graph_data:
             try:
@@ -1195,7 +1233,12 @@ def _rebuild_code(
                 try:
                     from graphify.detect import save_manifest
 
-                    save_manifest(detected["files"], kind="ast", root=project_root)
+                    save_manifest(
+                        detected["files"],
+                        manifest_path=str(out / "manifest.json"),
+                        kind="ast",
+                        root=project_root,
+                    )
                 except Exception as exc:
                     print(
                         f"[graphify] warning: could not save AST manifest: {exc}", file=sys.stderr
@@ -1312,7 +1355,12 @@ def _rebuild_code(
         try:
             from graphify.detect import save_manifest
 
-            save_manifest(detected["files"], kind="ast", root=project_root)
+            save_manifest(
+                detected["files"],
+                manifest_path=str(out / "manifest.json"),
+                kind="ast",
+                root=project_root,
+            )
         except Exception as exc:
             print(f"[graphify] warning: could not save AST manifest: {exc}", file=sys.stderr)
 
@@ -1375,7 +1423,7 @@ def _rebuild_code(
         return False
 
 
-def check_update(watch_path: Path) -> bool:
+def check_update(watch_path: Path, *, output_dir: Path | None = None) -> bool:
     """Check for pending semantic update flag and notify the user if set.
 
     Cron-safe: always returns True so cron jobs do not alarm.
@@ -1383,16 +1431,20 @@ def check_update(watch_path: Path) -> bool:
     re-extraction via `/graphify --update` — this function only signals
     that the update is needed.
     """
-    flag = Path(watch_path) / _GRAPHIFY_OUT / "needs_update"
+    flag = (
+        Path(output_dir).resolve() if output_dir is not None else Path(watch_path) / _GRAPHIFY_OUT
+    ) / "needs_update"
     if flag.exists():
         print(f"[graphify check-update] Pending non-code changes in {watch_path}.")
         print("[graphify check-update] Run `/graphify --update` to apply semantic re-extraction.")
     return True
 
 
-def _notify_only(watch_path: Path) -> None:
+def _notify_only(watch_path: Path, *, output_dir: Path | None = None) -> None:
     """Write a flag file and print a notification (fallback for non-code-only corpora)."""
-    flag = watch_path / _GRAPHIFY_OUT / "needs_update"
+    flag = (
+        Path(output_dir).resolve() if output_dir is not None else watch_path / _GRAPHIFY_OUT
+    ) / "needs_update"
     flag.parent.mkdir(parents=True, exist_ok=True)
     flag.write_text("1", encoding="utf-8")
     print(f"\n[graphify watch] New or changed files detected in {watch_path}")
@@ -1405,7 +1457,14 @@ def _has_non_code(changed_paths: list[Path]) -> bool:
     return any(p.suffix.lower() not in _CODE_EXTENSIONS for p in changed_paths)
 
 
-def watch(watch_path: Path, debounce: float = 3.0) -> None:
+def watch(
+    watch_path: Path,
+    debounce: float = 3.0,
+    *,
+    output_dir: Path | None = None,
+    output_root: Path | None = None,
+    graph_type: str | None = None,
+) -> None:
     """
     Watch watch_path for new or modified files and auto-update the graph.
 
@@ -1487,9 +1546,14 @@ def watch(watch_path: Path, debounce: float = 3.0) -> None:
                 has_non_code = _has_non_code(batch)
                 has_code = any(p.suffix.lower() in _CODE_EXTENSIONS for p in batch)
                 if has_code:
-                    _rebuild_code(watch_path)
+                    _rebuild_code(
+                        watch_path,
+                        output_dir=output_dir,
+                        output_root=output_root,
+                        graph_type=graph_type,
+                    )
                 if has_non_code:
-                    _notify_only(watch_path)
+                    _notify_only(watch_path, output_dir=output_dir)
     except KeyboardInterrupt:
         print("\n[graphify watch] Stopped.")
     finally:

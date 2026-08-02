@@ -49,9 +49,21 @@ REQUIRED_COMMANDS = [
 # CLI surface even when the underlying function still supports the behavior.
 COMMAND_FLAGS = {
     "update": ["--force", "--no-cluster", "--no-viz"],
-    "extract": ["--multigraph", "--simple", "--no-cluster", "--global"],
+    "extract": [
+        "--multigraph",
+        "--directed",
+        "--simple",
+        "--full",
+        "--no-cluster",
+        "--global",
+    ],
     "merge-graphs": ["--multigraph", "--simple"],
     "cluster-only": ["--no-viz"],
+}
+
+COMMAND_VALUE_FLAGS = {
+    "update": ["--out"],
+    "watch": ["--out"],
 }
 
 _BAD_PATH = "/no/such/graphify/path/xyz-123"
@@ -71,4 +83,16 @@ def test_flag_is_parseable(cmd: str, flag: str) -> None:
     rejected = "unknown" in out and flag.lower() in out
     assert not rejected, (
         f"`graphify {cmd} {flag}` is rejected as an unknown option (CLI surface regression)"
+    )
+
+
+@pytest.mark.parametrize(
+    "cmd,flag",
+    [(command, flag) for command, flags in COMMAND_VALUE_FLAGS.items() for flag in flags],
+)
+def test_value_flag_is_parseable(cmd: str, flag: str) -> None:
+    out = _graphify(cmd, _BAD_PATH, flag, _BAD_PATH).lower()
+    rejected = "unknown" in out and flag.lower() in out
+    assert not rejected, (
+        f"`graphify {cmd} {flag} VALUE` is rejected as an unknown option (CLI surface regression)"
     )

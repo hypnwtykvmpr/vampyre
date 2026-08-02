@@ -606,6 +606,10 @@ graphify extract ./docs --api-timeout 900      # longer HTTP timeout for slow lo
 graphify extract ./docs --google-workspace     # export .gdoc/.gsheet/.gslides via gws before extraction
 graphify extract ./docs --mode deep            # richer semantic extraction via extended system prompt
 graphify extract ./docs --no-cluster           # raw extraction only, skip clustering
+graphify extract ./docs --multigraph           # keyed directed graph with parallel relationships
+graphify extract ./docs --directed             # directed graph with one edge per endpoint pair
+graphify extract ./docs --simple               # explicit undirected simple graph
+graphify extract ./docs --full                 # bypass incremental detection and rebuild the full corpus
 graphify extract ./docs --timing               # print per-stage wall-clock timings to stderr (also works on cluster-only)
 graphify extract ./docs --force                # overwrite graph.json even if new graph has fewer nodes (use after refactors or to clear ghost duplicates)
 graphify extract ./docs --dedup-llm            # LLM tiebreaker for ambiguous entity pairs (uses same API key)
@@ -635,10 +639,14 @@ graphify clone https://github.com/karpathy/nanoGPT
 graphify merge-graphs a.json b.json --out merged.json
 graphify --version                                    # print installed version
 graphify watch ./src
+graphify watch ./src --out ./canonical       # watch sources while keeping all state under canonical/graphify-out/
 graphify check-update ./src
 graphify update ./src
 graphify update ./src --no-cluster  # skip reclustering, write raw AST graph only
 graphify update ./src --force       # overwrite even if new graph has fewer nodes
+graphify update ./src --out ./canonical      # update a graph stored outside the source tree
+graphify update --out ./canonical            # recover the scan root from that graph's marker
+graphify update ./src --out ./canonical --remap  # full re-extraction; preserve output and graph profile
 graphify cluster-only ./my-project
 graphify cluster-only ./my-project --graph path/to/graph.json  # custom graph location
 graphify cluster-only ./my-project --max-concurrency 16 --batch-size 200  # parallel community labeling (large graphs)
@@ -650,6 +658,8 @@ graphify cluster-only ./my-project --backend=gemini --model gemini-2.5-pro  # sp
 graphify label ./my-project                                    # (re)name communities with the configured backend
 graphify label ./my-project --backend=openai --model gpt-4o   # force a specific backend and model
 ```
+
+`update` and `watch` operate only on existing, explicitly profiled graph state. They never initialize a second graph or guess a missing scan root; run `graphify extract <path>` with `--multigraph`, `--directed`, or `--simple` first. When extraction used `--out`, pass the same output root or run from that output root so the saved scan-root marker selects the original sources.
 
 > **Community names:** inside an agent (Claude Code, Gemini CLI) the agent names communities itself. When you run the bare CLI, `cluster-only` auto-names them with the configured backend (built-in or custom OpenAI-compatible provider) — pass `--no-label` to keep `Community N`, or run `graphify label` to (re)generate names on demand.
 

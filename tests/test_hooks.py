@@ -1,5 +1,6 @@
 """Tests for hooks.py - git hook install/uninstall."""
 
+import json
 import os
 import subprocess
 from types import SimpleNamespace
@@ -318,13 +319,13 @@ def test_rebuild_bodies_read_graphify_root(name, body):
     """The rebuild must honour the persisted scan root rather than hardcoding the
     repo top (#1173). Both bodies read <output-dir>/.graphify_root and pass the
     recovered root to _rebuild_code instead of the bare Path('.')."""
-    assert ".graphify_root" in body, f"{name} ignores .graphify_root (#1173)"
+    assert "resolve_update_context" in body, f"{name} bypasses strict state resolution"
     # The output dir is resolved from GRAPHIFY_OUT at hook-run time, not hardcoded
     # to graphify-out/, so a renamed output dir is still found (#1423).
     assert "GRAPHIFY_OUT" in body, f"{name} ignores the GRAPHIFY_OUT override (#1423)"
     # The recovered root is what gets rebuilt, not a hardcoded cwd.
     assert "_rebuild_code(_root" in body, f"{name} does not pass the recovered root"
-    assert "resolve_scan_root_marker" in body, f"{name} bypasses marker resolution"
+    assert "output_dir=_configured_out" in body, f"{name} drops its runtime output directory"
 
 
 def test_rebuild_bodies_with_graphify_root_are_valid_python():
@@ -344,6 +345,18 @@ def test_rebuild_bodies_resolve_portable_marker_from_unrelated_cwd(body, tmp_pat
     output.mkdir(parents=True)
     relative = os.path.relpath(source_root, output).replace(os.sep, "/")
     (output / ".graphify_root").write_text(f"marker-relative:{relative}", encoding="utf-8")
+    (output / "graph.json").write_text(
+        json.dumps(
+            {
+                "directed": False,
+                "multigraph": False,
+                "graph": {"graphify_profile": {"graph_type": "simple"}},
+                "nodes": [],
+                "links": [],
+            }
+        ),
+        encoding="utf-8",
+    )
     unrelated = tmp_path / "unrelated"
     unrelated.mkdir()
     captured: list[Path] = []

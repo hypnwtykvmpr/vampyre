@@ -25,7 +25,6 @@ except Exception:
 # same override (#1423).
 from graphify.paths import (
     GRAPHIFY_OUT as _GRAPHIFY_OUT,
-    resolve_scan_root_marker as _resolve_scan_root_marker,
     write_scan_root_marker as _persist_scan_root_marker,
 )
 
@@ -2354,7 +2353,7 @@ def _cmd_extract() -> None:
         print(
             "Usage: graphify extract <path> [--backend gemini|kimi|claude|openai|deepseek|ollama] "
             "[--model M] [--mode deep] [--out DIR] [--google-workspace] [--no-cluster] "
-            "[--multigraph|--simple] "
+            "[--multigraph|--directed|--simple] [--full] "
             "[--max-workers N] [--token-budget N] [--max-concurrency N] "
             "[--api-timeout S] [--postgres DSN] [--cargo] [--timing]",
             file=sys.stderr,
@@ -2378,17 +2377,15 @@ def _cmd_extract() -> None:
     cli_postgres_dsn: str | None = None
     cli_cargo: bool = False
     no_cluster = False
+    full_scan = False
     dedup_llm = False
     google_workspace = False
     global_merge = False
     global_repo_tag: str | None = None
-    # Graph class selection (PR 9). None = STICKY: inherit the existing
-    # graphify-out/graph.json profile (multidigraph stays multidigraph,
-    # otherwise the historical simple/directed default). True = force a
-    # keyed MultiDiGraph (parallel edges). False = explicit downgrade to a
-    # simple graph even when the existing graph.json is a multigraph.
-    # --multigraph and --simple are mutually exclusive.
+    # Graph class selection. None = sticky inheritance from graph.json;
+    # otherwise the chosen flag selects one exact serialized graph class.
     multigraph_flag: bool | None = None
+    directed_flag = False
     # Performance/tuning knobs (issue #792). None means "use library default".
     cli_max_workers: int | None = None
     cli_token_budget: int | None = None
@@ -2453,6 +2450,9 @@ def _cmd_extract() -> None:
         elif a == "--no-cluster":
             no_cluster = True
             i += 1
+        elif a == "--full":
+            full_scan = True
+            i += 1
         elif a == "--dedup-llm":
             dedup_llm = True
             i += 1
@@ -2463,18 +2463,27 @@ def _cmd_extract() -> None:
             global_merge = True
             i += 1
         elif a == "--multigraph":
-            if multigraph_flag is False:
+            if multigraph_flag is False or directed_flag:
                 print(
-                    "error: --multigraph and --simple are mutually exclusive",
+                    "error: --multigraph, --directed, and --simple are mutually exclusive",
                     file=sys.stderr,
                 )
                 sys.exit(2)
             multigraph_flag = True
             i += 1
-        elif a == "--simple":
-            if multigraph_flag is True:
+        elif a == "--directed":
+            if multigraph_flag is not None:
                 print(
-                    "error: --multigraph and --simple are mutually exclusive",
+                    "error: --multigraph, --directed, and --simple are mutually exclusive",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            directed_flag = True
+            i += 1
+        elif a == "--simple":
+            if multigraph_flag is True or directed_flag:
+                print(
+                    "error: --multigraph, --directed, and --simple are mutually exclusive",
                     file=sys.stderr,
                 )
                 sys.exit(2)
@@ -2570,8 +2579,6 @@ def _cmd_extract() -> None:
     graphify_out.mkdir(parents=True, exist_ok=True)
 
     def _write_scan_root_marker() -> None:
-        if not has_path:
-            return
         _persist_scan_root_marker(graphify_out / ".graphify_root", target)
 
     stages = _StageTimer(cli_timing)
@@ -2585,7 +2592,9 @@ def _cmd_extract() -> None:
     manifest_path = graphify_out / "manifest.json"
     existing_graph_path = graphify_out / "graph.json"
     incremental_mode = (
-        manifest_path.exists() and existing_graph_path.exists() if has_path else False
+        manifest_path.exists() and existing_graph_path.exists() and not full_scan
+        if has_path
+        else False
     )
 
     if not has_path:
@@ -2973,37 +2982,41 @@ def _cmd_extract() -> None:
         for ftype, flist in files_by_type.items()
     }
 
-    # Resolve the effective graph class (PR 9 sticky profile). When neither
-    # --multigraph nor --simple is given the build must INHERIT the existing
-    # graph.json profile so a multigraph never silently downgrades to a
-    # simple graph on a default re-extract (mirrors watch._rebuild_code and
-    # build_merge's inherit-on-None contract). --multigraph forces multi,
-    # --simple forces a simple downgrade.
-    from graphify.watch import _existing_is_multigraph as _detect_multigraph
+    # Resolve one exact graph class. With no class flag, extraction inherits
+    # the existing profile; an explicit flag selects that class even on a full
+    # rebuild. This includes directed simple graphs, not only multidigraphs.
+    from graphify.watch import _existing_graph_type as _detect_graph_type
 
-    _existing_multigraph = False
+    _existing_graph_type = "simple"
     if existing_graph_path.exists():
         try:
             _existing_data = json.loads(existing_graph_path.read_text(encoding="utf-8"))
-            _existing_multigraph = _detect_multigraph(_existing_data)
+            _existing_graph_type = _detect_graph_type(_existing_data)
         except Exception as exc:
             print(
                 f"[graphify extract] warning: could not inspect existing graph.json "
                 f"profile ({exc}); treating as simple.",
                 file=sys.stderr,
             )
-    if multigraph_flag is None:
-        resolved_multigraph = _existing_multigraph
+    if directed_flag:
+        resolved_graph_type = "digraph"
+    elif multigraph_flag is True:
+        resolved_graph_type = "multidigraph"
+    elif multigraph_flag is False:
+        resolved_graph_type = "simple"
     else:
-        resolved_multigraph = multigraph_flag
+        resolved_graph_type = _existing_graph_type
+    resolved_multigraph = resolved_graph_type == "multidigraph"
+    resolved_directed = resolved_graph_type in {"digraph", "multidigraph"}
+    explicit_graph_type = directed_flag or multigraph_flag is not None
     _profile_transition_requested = (
-        multigraph_flag is not None and multigraph_flag != _existing_multigraph
+        explicit_graph_type and resolved_graph_type != _existing_graph_type
     )
 
     # Lossy-projection warning: an EXPLICIT --simple over an existing
     # multigraph graph.json collapses keyed parallel edges. This is an
     # intentional downgrade, so warn loudly (not silently) and proceed.
-    if multigraph_flag is False and _existing_multigraph:
+    if multigraph_flag is False and _existing_graph_type == "multidigraph":
         print(
             "[graphify extract] WARNING: --simple requested over an existing "
             "multigraph graph.json; parallel edges between the same pair will be "
@@ -3091,6 +3104,7 @@ def _cmd_extract() -> None:
                 [merged],
                 graph_path=existing_graph_path,
                 prune_sources=deleted_files or None,
+                directed=resolved_directed if explicit_graph_type else None,
                 dedup=True,
                 dedup_llm_backend=backend if dedup_llm else None,
                 root=target,
@@ -3169,6 +3183,15 @@ def _cmd_extract() -> None:
                         file=sys.stderr,
                     )
                     sys.exit(1)
+            merged["multigraph"] = False
+            merged["directed"] = resolved_directed
+            graph_meta = merged.get("graph")
+            if not isinstance(graph_meta, dict):
+                graph_meta = {}
+            from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
+
+            graph_meta[GRAPHIFY_PROFILE_KEY] = {"graph_type": resolved_graph_type}
+            merged["graph"] = graph_meta
             graph_json_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
             n_nodes = len(merged["nodes"])
             n_edges = len(merged["edges"])
@@ -3234,6 +3257,7 @@ def _cmd_extract() -> None:
             [merged],
             graph_path=existing_graph_path,
             prune_sources=deleted_files or None,
+            directed=resolved_directed if explicit_graph_type else None,
             dedup=True,
             dedup_llm_backend=dedup_backend,
             root=target,
@@ -3245,6 +3269,7 @@ def _cmd_extract() -> None:
         # simple default when no flag is given).
         G = _build(
             [merged],
+            directed=resolved_directed,
             dedup=True,
             dedup_llm_backend=dedup_backend,
             root=target,
@@ -3560,12 +3585,17 @@ def main() -> None:
         print('    --author "Name"         tag the author of the content')
         print('    --contributor "Name"    tag who added it to the corpus')
         print("    --dir <path>            target directory (default: ./raw)")
-        print("  watch <path>            watch a folder and rebuild the graph on code changes")
+        print("  watch [<path>]          watch an existing graph's source tree for code changes")
+        print("    --out DIR               use the graph state at <DIR>/graphify-out/")
         print(
-            "  update <path>           re-extract code files and update the graph (no LLM needed)"
+            "  update [<path>]         re-extract code files in an existing graph (no LLM needed)"
         )
         print(
             "                            (inherits the existing graph.json profile — a multigraph stays a multigraph)"
+        )
+        print("    --out DIR               use the graph state at <DIR>/graphify-out/")
+        print(
+            "                            (without <path>, the saved scan-root marker is required)"
         )
         print(
             "    --force                 overwrite graph.json even if the rebuild has fewer nodes"
@@ -3574,6 +3604,10 @@ def main() -> None:
             "                            (also: GRAPHIFY_FORCE=1 env var; use after refactors that delete code)"
         )
         print("    --no-cluster            skip clustering, write raw extraction only")
+        print("    --no-viz                skip graph.html generation")
+        print(
+            "    --remap                 run a full extraction while preserving output and profile"
+        )
         print(
             "  cluster-only <path>     rerun clustering on an existing graph.json and regenerate report"
         )
@@ -4706,14 +4740,51 @@ def main() -> None:
             sys.exit(1)
 
     elif cmd == "watch":
-        watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
-        if not watch_path.exists():
-            print(f"error: path not found: {watch_path}", file=sys.stderr)
+        watch_path_arg: Path | None = None
+        output_root: Path | None = None
+        watch_args = sys.argv[2:]
+        i_arg = 0
+        while i_arg < len(watch_args):
+            arg = watch_args[i_arg]
+            if arg == "--out":
+                if i_arg + 1 >= len(watch_args):
+                    print("error: --out requires a directory", file=sys.stderr)
+                    sys.exit(2)
+                output_root = Path(watch_args[i_arg + 1])
+                i_arg += 2
+            elif arg.startswith("--out="):
+                raw_output = arg.split("=", 1)[1]
+                if not raw_output:
+                    print("error: --out requires a directory", file=sys.stderr)
+                    sys.exit(2)
+                output_root = Path(raw_output)
+                i_arg += 1
+            elif arg.startswith("-"):
+                print(f"error: unknown watch option: {arg}", file=sys.stderr)
+                sys.exit(2)
+            elif watch_path_arg is None:
+                watch_path_arg = Path(arg)
+                i_arg += 1
+            else:
+                print("error: watch accepts at most one path argument", file=sys.stderr)
+                sys.exit(2)
+
+        from graphify.update_state import UpdateStateError, resolve_update_context
+
+        try:
+            update_context = resolve_update_context(watch_path_arg, output_root=output_root)
+        except UpdateStateError as exc:
+            print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
         from graphify.watch import watch as _watch
 
         try:
-            _watch(watch_path)
+            _watch(
+                update_context.scan_root,
+                output_dir=update_context.output_dir,
+                output_root=update_context.output_root,
+                graph_type=update_context.graph_type,
+            )
         except ImportError as exc:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -5086,18 +5157,40 @@ def main() -> None:
         remap = False
         args = sys.argv[2:]
         watch_arg: str | None = None
-        for a in args:
+        output_root: Path | None = None
+        i_arg = 0
+        while i_arg < len(args):
+            a = args[i_arg]
             if a == "--force":
                 force = True
+                i_arg += 1
                 continue
             if a == "--no-cluster":
                 no_cluster = True
+                i_arg += 1
                 continue
             if a == "--no-viz":
                 no_viz = True
+                i_arg += 1
                 continue
             if a in ("--remap", "--rebuild"):
                 remap = True
+                i_arg += 1
+                continue
+            if a == "--out":
+                if i_arg + 1 >= len(args):
+                    print("error: --out requires a directory", file=sys.stderr)
+                    sys.exit(2)
+                output_root = Path(args[i_arg + 1])
+                i_arg += 2
+                continue
+            if a.startswith("--out="):
+                raw_output = a.split("=", 1)[1]
+                if not raw_output:
+                    print("error: --out requires a directory", file=sys.stderr)
+                    sys.exit(2)
+                output_root = Path(raw_output)
+                i_arg += 1
                 continue
             if a.startswith("-"):
                 print(f"error: unknown update option: {a}", file=sys.stderr)
@@ -5106,19 +5199,19 @@ def main() -> None:
                 print("error: update accepts at most one path argument", file=sys.stderr)
                 sys.exit(2)
             watch_arg = a
+            i_arg += 1
 
-        if watch_arg is not None:
-            watch_path = Path(watch_arg)
-        else:
-            # Try to recover the scan root saved by the last full build
-            saved = Path(_GRAPHIFY_OUT) / ".graphify_root"
-            if saved.exists():
-                watch_path = _resolve_scan_root_marker(saved) or Path(".")
-            else:
-                watch_path = Path(".")
-        if not watch_path.exists():
-            print(f"error: path not found: {watch_path}", file=sys.stderr)
+        from graphify.update_state import UpdateStateError, resolve_update_context
+
+        try:
+            update_context = resolve_update_context(
+                Path(watch_arg) if watch_arg is not None else None,
+                output_root=output_root,
+            )
+        except UpdateStateError as exc:
+            print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
+        watch_path = update_context.scan_root
 
         if remap:
             # --remap (a.k.a. --rebuild): force a full AST + semantic-LLM
@@ -5150,6 +5243,14 @@ def main() -> None:
             # leading-'-' arg as "no path given"). watch_path.exists() was verified
             # above, so resolve() is safe.
             remap_argv = ["graphify", "extract", str(watch_path.resolve())]
+            remap_argv.extend(["--out", str(update_context.output_root), "--full"])
+            remap_argv.append(
+                {
+                    "simple": "--simple",
+                    "digraph": "--directed",
+                    "multidigraph": "--multigraph",
+                }[update_context.graph_type]
+            )
             if no_cluster:
                 remap_argv.append("--no-cluster")
             # Restore the global sys.argv after the in-process re-dispatch so a
@@ -5179,7 +5280,14 @@ def main() -> None:
         # user sees their explicit `graphify update` complete instead of
         # exiting silently when a hook-driven rebuild happens to be running.
         ok = _rebuild_code(
-            watch_path, force=force, no_cluster=no_cluster, no_viz=no_viz, block_on_lock=True
+            watch_path,
+            output_dir=update_context.output_dir,
+            output_root=update_context.output_root,
+            graph_type=update_context.graph_type,
+            force=force,
+            no_cluster=no_cluster,
+            no_viz=no_viz,
+            block_on_lock=True,
         )
         if ok:
             print(

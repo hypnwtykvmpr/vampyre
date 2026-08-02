@@ -286,6 +286,10 @@ def test_update_no_cluster_writes_raw_graph(tmp_path):
     src = tmp_path / "sample.py"
     src.write_text("def f():\n    return 1\n", encoding="utf-8")
 
+    initial = _run(["extract", "."], tmp_path)
+    assert initial.returncode == 0, initial.stderr
+    src.write_text("def f():\n    return 2\n", encoding="utf-8")
+
     r = _run(["update", ".", "--no-cluster"], tmp_path)
     assert r.returncode == 0, r.stderr
 

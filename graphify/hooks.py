@@ -118,27 +118,27 @@ print(f'[graphify hook] {len(changed)} file(s) changed - rebuilding graph...')
 
 try:
     from graphify.watch import _rebuild_code, _apply_resource_limits
-    from graphify.paths import resolve_scan_root_marker
+    from graphify.update_state import resolve_update_context
     _apply_resource_limits()
     _timeout = int(os.environ.get('GRAPHIFY_REBUILD_TIMEOUT', '600'))
     if _timeout > 0 and hasattr(signal, 'SIGALRM'):
         signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError(f'graphify rebuild exceeded {_timeout}s')))
         signal.alarm(_timeout)
     _force = os.environ.get('GRAPHIFY_FORCE', '').lower() in ('1', 'true', 'yes')
-    _root = Path('.')
-    _out = os.environ.get('GRAPHIFY_OUT', 'graphify-out')
-    _saved = Path(_out) / '.graphify_root'
-    if _saved.exists():
-        _root = resolve_scan_root_marker(_saved) or _root
-    _rebuild_code(_root, changed_paths=changed, force=_force)
+    _configured_out = Path(os.environ.get('GRAPHIFY_OUT', 'graphify-out'))
+    _context = resolve_update_context(output_dir=_configured_out)
+    _root = _context.scan_root
+    _out = _context.output_dir
+    _rebuild_code(_root, output_dir=_out, output_root=_context.output_root,
+                  graph_type=_context.graph_type, changed_paths=changed, force=_force)
     # Refresh the work-memory lessons doc when saved Q&A outcomes exist
     # (best-effort; never fails the hook).
     try:
-        _md = (_root / _out) / 'memory'
+        _md = _out / 'memory'
         if _md.is_dir() and any(_md.glob('*.md')):
             from graphify.reflect import reflect as _reflect
-            _gj = (_root / _out) / 'graph.json'
-            _reflect(memory_dir=_md, out_path=(_root / _out) / 'reflections' / 'LESSONS.md',
+            _gj = _out / 'graph.json'
+            _reflect(memory_dir=_md, out_path=_out / 'reflections' / 'LESSONS.md',
                      graph_path=_gj if _gj.exists() else None)
     except Exception:
         pass
@@ -152,7 +152,7 @@ except Exception as exc:
 
 _REBUILD_BODY_CHECKOUT = """\
 from graphify.watch import _rebuild_code, _apply_resource_limits
-from graphify.paths import resolve_scan_root_marker
+from graphify.update_state import resolve_update_context
 from pathlib import Path
 import os, signal, sys
 try:
@@ -165,20 +165,20 @@ try:
     # post-checkout: branch switch can touch arbitrary files; full rebuild path
     # (no changed_paths) is correct here. The flock inside _rebuild_code still
     # prevents pile-ups when commit + checkout fire back-to-back.
-    _root = Path('.')
-    _out = os.environ.get('GRAPHIFY_OUT', 'graphify-out')
-    _saved = Path(_out) / '.graphify_root'
-    if _saved.exists():
-        _root = resolve_scan_root_marker(_saved) or _root
-    _rebuild_code(_root, force=_force)
+    _configured_out = Path(os.environ.get('GRAPHIFY_OUT', 'graphify-out'))
+    _context = resolve_update_context(output_dir=_configured_out)
+    _root = _context.scan_root
+    _out = _context.output_dir
+    _rebuild_code(_root, output_dir=_out, output_root=_context.output_root,
+                  graph_type=_context.graph_type, force=_force)
     # Refresh the work-memory lessons doc when saved Q&A outcomes exist
     # (best-effort; never fails the hook).
     try:
-        _md = (_root / _out) / 'memory'
+        _md = _out / 'memory'
         if _md.is_dir() and any(_md.glob('*.md')):
             from graphify.reflect import reflect as _reflect
-            _gj = (_root / _out) / 'graph.json'
-            _reflect(memory_dir=_md, out_path=(_root / _out) / 'reflections' / 'LESSONS.md',
+            _gj = _out / 'graph.json'
+            _reflect(memory_dir=_md, out_path=_out / 'reflections' / 'LESSONS.md',
                      graph_path=_gj if _gj.exists() else None)
     except Exception:
         pass

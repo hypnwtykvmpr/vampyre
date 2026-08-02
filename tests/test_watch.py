@@ -2026,6 +2026,21 @@ def test_update_cli_passes_no_viz_to_rebuild(tmp_path, monkeypatch):
     import graphify.__main__ as _main
 
     (tmp_path / "x.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    output = tmp_path / "graphify-out"
+    output.mkdir()
+    (output / "graph.json").write_text(
+        json.dumps(
+            {
+                "directed": False,
+                "multigraph": False,
+                "graph": {"graphify_profile": {"graph_type": "simple"}},
+                "nodes": [],
+                "links": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output / ".graphify_root").write_text("marker-relative:..", encoding="utf-8")
     captured: dict = {}
 
     def _fake_rebuild(path, **kwargs):
@@ -2040,3 +2055,48 @@ def test_update_cli_passes_no_viz_to_rebuild(tmp_path, monkeypatch):
     except SystemExit as exc:  # must NOT be the unknown-option exit(2)
         assert exc.code in (0, None), f"update --no-viz errored: exit {exc.code}"
     assert captured.get("no_viz") is True
+
+
+def test_watch_cli_passes_resolved_external_output_context(tmp_path, monkeypatch):
+    import sys as _sys
+    import graphify.watch as _watch_module
+    import graphify.__main__ as _main
+
+    source_root = tmp_path / "Sources"
+    source_root.mkdir()
+    output_root = tmp_path / "canonical"
+    output = output_root / "graphify-out"
+    output.mkdir(parents=True)
+    (output / "graph.json").write_text(
+        json.dumps(
+            {
+                "directed": True,
+                "multigraph": True,
+                "graph": {"graphify_profile": {"graph_type": "multidigraph"}},
+                "nodes": [],
+                "links": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    relative = os.path.relpath(source_root, output).replace(os.sep, "/")
+    (output / ".graphify_root").write_text(f"marker-relative:{relative}", encoding="utf-8")
+    captured: dict = {}
+
+    def _fake_watch(path, **kwargs):
+        captured["path"] = path
+        captured.update(kwargs)
+
+    monkeypatch.setattr(_watch_module, "watch", _fake_watch)
+    monkeypatch.setattr(
+        _sys,
+        "argv",
+        ["graphify", "watch", str(source_root), "--out", str(output_root)],
+    )
+
+    _main.main()
+
+    assert captured["path"] == source_root.resolve()
+    assert captured["output_dir"] == output.resolve()
+    assert captured["output_root"] == output_root.resolve()
+    assert captured["graph_type"] == "multidigraph"
