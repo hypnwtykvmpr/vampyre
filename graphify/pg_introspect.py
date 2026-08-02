@@ -1,6 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from graphify.extract import extract_sql
+from graphify.installation import uv_tool_install_command
 
 
 def _quote_ident(name: str) -> str:
@@ -12,10 +13,11 @@ def introspect_postgres(dsn: str | None = None) -> dict:
     """Connect to PostgreSQL, reconstruct DDL, and extract via extract_sql()."""
     try:
         import psycopg
+        from psycopg import conninfo
     except ModuleNotFoundError:
         raise ImportError(
             "psycopg is required for --postgres. "
-            "Install with: pip install 'graphify[postgres]'"
+            f"Install with: {uv_tool_install_command('postgres')}"
         )
 
     try:
@@ -132,9 +134,11 @@ def introspect_postgres(dsn: str | None = None) -> dict:
     ddl_string = "\n".join(ddl)
 
     # Determine host/dbname for virtual path DSN sanitization
-    info = psycopg.conninfo.conninfo_to_dict(dsn or "")
-    host = info.get("host", "localhost")
-    dbname = info.get("dbname", "db")
+    info = conninfo.conninfo_to_dict(dsn or "")
+    raw_host = info.get("host")
+    raw_dbname = info.get("dbname")
+    host = raw_host if isinstance(raw_host, str) and raw_host else "localhost"
+    dbname = raw_dbname if isinstance(raw_dbname, str) and raw_dbname else "db"
     virtual_path = Path(f"postgresql://{host}/{dbname}")
 
     # Pass virtual path and in-memory DDL content to extract_sql

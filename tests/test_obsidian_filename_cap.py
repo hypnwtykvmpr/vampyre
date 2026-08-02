@@ -1,6 +1,7 @@
 """Regression tests for issue #1094: to_obsidian / to_canvas must cap filenames
 to stay under the 255-byte filesystem limit, instead of crashing with
 OSError ENAMETOOLONG on long node labels."""
+
 import networkx as nx
 
 from graphify.export import to_obsidian, to_canvas
@@ -55,6 +56,7 @@ def test_obsidian_wikilink_resolves_after_truncation(tmp_path):
     neighbor_note = (tmp_path / "neighbor.md").read_text()
     # Extract the [[target]] from the neighbor's Connections section.
     import re
+
     targets = re.findall(r"\[\[([^\]]+)\]\]", neighbor_note)
     assert targets, "no wikilink found in neighbor note"
     # Every linked target must correspond to a real .md file on disk.
@@ -64,6 +66,7 @@ def test_obsidian_wikilink_resolves_after_truncation(tmp_path):
 
 def test_canvas_long_label_file_ref_capped(tmp_path):
     import json
+
     G, comms = _graph(["c" * 300, "ok"])
     out = tmp_path / "graph.canvas"
     to_canvas(G, comms, str(out))

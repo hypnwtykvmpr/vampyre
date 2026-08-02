@@ -1,10 +1,13 @@
 import unittest
 import tempfile
-import sys
 import textwrap
 from pathlib import Path
+from typing import TypeVar
 
-from graphify.extract import extract_dart, _make_id, _file_stem
+from graphify.extract import extract_dart, _make_id
+
+
+_T = TypeVar("_T")
 
 
 class TestDart(unittest.TestCase):
@@ -14,6 +17,11 @@ class TestDart(unittest.TestCase):
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    def assert_found(self, item: _T | None, description: str) -> _T:
+        if item is None:
+            self.fail(f"Expected {description} to be present")
+        return item
 
     def test_universal_generic_syntax_extraction(self):
         """Test that the universal parser successfully extracts generic relationships, annotations, extensions, classes, and generic calls."""
@@ -67,16 +75,24 @@ class TestDart(unittest.TestCase):
         edges = result["edges"]
 
         # A. File node check
-        file_node = next(
-            (n for n in nodes if n["file_type"] == "code" and n["label"] == "test_app_bloc.dart"),
-            None,
+        file_node = self.assert_found(
+            next(
+                (
+                    n
+                    for n in nodes
+                    if n["file_type"] == "code" and n["label"] == "test_app_bloc.dart"
+                ),
+                None,
+            ),
+            "test_app_bloc.dart file node",
         )
-        self.assertIsNotNone(file_node)
         self.assertEqual(file_node["source_file"], str(file_path))
 
         # B. Class & Enum extraction check
-        user_bloc_node = next((n for n in nodes if n["label"] == "UserBloc"), None)
-        self.assertIsNotNone(user_bloc_node)
+        user_bloc_node = self.assert_found(
+            next((n for n in nodes if n["label"] == "UserBloc"), None),
+            "UserBloc node",
+        )
         self.assertEqual(user_bloc_node["source_file"], str(file_path))
 
         user_role_node = next((n for n in nodes if n["label"] == "UserRole"), None)
@@ -84,19 +100,23 @@ class TestDart(unittest.TestCase):
 
         # C. Inherits & Generics
         # Inherits Bloc (Should be global ID "bloc" without stem, source_file is None)
-        inherits_bloc = next(
-            (
-                e
-                for e in edges
-                if e["source"] == user_bloc_node["id"] and e["relation"] == "inherits"
+        inherits_bloc = self.assert_found(
+            next(
+                (
+                    e
+                    for e in edges
+                    if e["source"] == user_bloc_node["id"] and e["relation"] == "inherits"
+                ),
+                None,
             ),
-            None,
+            "UserBloc inheritance edge",
         )
-        self.assertIsNotNone(inherits_bloc)
         self.assertEqual(inherits_bloc["target"], "bloc")
 
-        bloc_node = next((n for n in nodes if n["id"] == "bloc"), None)
-        self.assertIsNotNone(bloc_node)
+        bloc_node = self.assert_found(
+            next((n for n in nodes if n["id"] == "bloc"), None),
+            "Bloc reference node",
+        )
         self.assertIsNone(bloc_node["source_file"])
 
         # References UserEvent, UserState generics (Should be global IDs without stem, source_file is None)
@@ -112,8 +132,10 @@ class TestDart(unittest.TestCase):
         )
         self.assertIsNotNone(ref_event)
 
-        event_node = next((n for n in nodes if n["id"] == "userevent"), None)
-        self.assertIsNotNone(event_node)
+        event_node = self.assert_found(
+            next((n for n in nodes if n["id"] == "userevent"), None),
+            "UserEvent reference node",
+        )
         self.assertIsNone(event_node["source_file"])
 
         ref_state = next(
@@ -129,8 +151,10 @@ class TestDart(unittest.TestCase):
         self.assertIsNotNone(ref_state)
 
         # D. Generic Class Annotations (Should be global annotation ID, source_file is None)
-        injectable_annotation = next((n for n in nodes if n["label"] == "@injectable"), None)
-        self.assertIsNotNone(injectable_annotation)
+        injectable_annotation = self.assert_found(
+            next((n for n in nodes if n["label"] == "@injectable"), None),
+            "@injectable annotation node",
+        )
         self.assertEqual(injectable_annotation["id"], "annotation_injectable")
         self.assertIsNone(injectable_annotation["source_file"])
 
@@ -198,13 +222,18 @@ class TestDart(unittest.TestCase):
         self.assertIsNone(bad_disposable_mixes_in)
 
         # E. Extensions (target class string should be global without stem, source_file is None)
-        ext_node = next((n for n in nodes if n["label"] == "StringExtensions"), None)
-        self.assertIsNotNone(ext_node)
-
-        extends_string = next(
-            (e for e in edges if e["source"] == ext_node["id"] and e["relation"] == "extends"), None
+        ext_node = self.assert_found(
+            next((n for n in nodes if n["label"] == "StringExtensions"), None),
+            "StringExtensions node",
         )
-        self.assertIsNotNone(extends_string)
+
+        extends_string = self.assert_found(
+            next(
+                (e for e in edges if e["source"] == ext_node["id"] and e["relation"] == "extends"),
+                None,
+            ),
+            "StringExtensions extends edge",
+        )
         self.assertEqual(extends_string["target"], "string")
 
         # F. Variable declarations
@@ -224,8 +253,10 @@ class TestDart(unittest.TestCase):
         )
         self.assertIsNotNone(ref_custom)
 
-        custom_node = next((n for n in nodes if n["id"] == "customservice"), None)
-        self.assertIsNotNone(custom_node)
+        custom_node = self.assert_found(
+            next((n for n in nodes if n["id"] == "customservice"), None),
+            "CustomService reference node",
+        )
         self.assertIsNone(custom_node["source_file"])
 
         ref_net = next(
@@ -241,15 +272,20 @@ class TestDart(unittest.TestCase):
         self.assertIsNotNone(ref_net)
 
         # H. Imports and Exports (Should have global ID, source_file is None)
-        import_node = next((n for n in nodes if n["id"] == "package_flutter_material_dart"), None)
-        self.assertIsNotNone(import_node)
+        import_node = self.assert_found(
+            next((n for n in nodes if n["id"] == "package_flutter_material_dart"), None),
+            "Flutter material import node",
+        )
         self.assertIsNone(import_node["source_file"])
         self.assertEqual(import_node["label"], "package:flutter/material.dart")
 
-        export_node = next(
-            (n for n in nodes if n["id"] == "package_flutter_bloc_flutter_bloc_dart"), None
+        export_node = self.assert_found(
+            next(
+                (n for n in nodes if n["id"] == "package_flutter_bloc_flutter_bloc_dart"),
+                None,
+            ),
+            "Flutter Bloc export node",
         )
-        self.assertIsNotNone(export_node)
         self.assertIsNone(export_node["source_file"])
         self.assertEqual(export_node["label"], "package:flutter_bloc/flutter_bloc.dart")
 
@@ -444,15 +480,23 @@ class TestDart(unittest.TestCase):
         edges = result["edges"]
 
         # 1. Namespaced Extends/Implements
-        widget_node = next((n for n in nodes if n["label"] == "MyWidget"), None)
-        self.assertIsNotNone(widget_node)
+        widget_node = self.assert_found(
+            next((n for n in nodes if n["label"] == "MyWidget"), None),
+            "MyWidget node",
+        )
 
         # Base class should be 'foo.Bar' -> normalized to 'foo_bar' or 'bar'
-        extends_edge = next(
-            (e for e in edges if e["source"] == widget_node["id"] and e["relation"] == "inherits"),
-            None,
+        extends_edge = self.assert_found(
+            next(
+                (
+                    e
+                    for e in edges
+                    if e["source"] == widget_node["id"] and e["relation"] == "inherits"
+                ),
+                None,
+            ),
+            "MyWidget inheritance edge",
         )
-        self.assertIsNotNone(extends_edge)
         self.assertNotEqual(extends_edge["target"], "foo")  # Ensure it didn't clip
 
         # 2. Spaced Generics in Variables
@@ -493,8 +537,10 @@ class TestDart(unittest.TestCase):
         edges = result["edges"]
 
         # 1. Mixin 'on' relation
-        auth_mixin = next((n for n in nodes if n["label"] == "AuthMixin"), None)
-        self.assertIsNotNone(auth_mixin)
+        auth_mixin = self.assert_found(
+            next((n for n in nodes if n["label"] == "AuthMixin"), None),
+            "AuthMixin node",
+        )
         inherits_base = next(
             (
                 e
@@ -548,8 +594,10 @@ class TestDart(unittest.TestCase):
         self.assertIsNotNone(nav_profile)
 
         # 6. Extension Types
-        user_id = next((n for n in nodes if n["label"] == "UserId"), None)
-        self.assertIsNotNone(user_id)
+        user_id = self.assert_found(
+            next((n for n in nodes if n["label"] == "UserId"), None),
+            "UserId extension type node",
+        )
         impl_obj = next(
             (
                 e
@@ -594,14 +642,22 @@ class TestDart(unittest.TestCase):
 
         # B. Check that defines edge source is parent file ID
         parent_fid = _make_id(str(parent_file.resolve()))
-        child_class = next((n for n in nodes if n["label"] == "ChildClass"), None)
-        self.assertIsNotNone(child_class)
-
-        def_edge = next(
-            (e for e in edges if e["target"] == child_class["id"] and e["relation"] == "defines"),
-            None,
+        child_class = self.assert_found(
+            next((n for n in nodes if n["label"] == "ChildClass"), None),
+            "ChildClass node",
         )
-        self.assertIsNotNone(def_edge)
+
+        def_edge = self.assert_found(
+            next(
+                (
+                    e
+                    for e in edges
+                    if e["target"] == child_class["id"] and e["relation"] == "defines"
+                ),
+                None,
+            ),
+            "parent-to-child definition edge",
+        )
         self.assertEqual(def_edge["source"], parent_fid)
 
         # C. Bug A safe generic inheritance commas split: check referenced generics
@@ -628,11 +684,13 @@ class TestDart(unittest.TestCase):
         )
 
         # F. Bug C GoRouter query parameter route mapping
-        nav_edge = next(
-            (e for e in edges if e["relation"] == "navigates" and e["context"] == "route_path"),
-            None,
+        nav_edge = self.assert_found(
+            next(
+                (e for e in edges if e["relation"] == "navigates" and e["context"] == "route_path"),
+                None,
+            ),
+            "GoRouter route-path navigation edge",
         )
-        self.assertIsNotNone(nav_edge)
         self.assertEqual(nav_edge["target"], "route_home_id_123_type_auth")
 
 

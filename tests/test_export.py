@@ -3,14 +3,21 @@ import math
 import re
 import tempfile
 from pathlib import Path
+
+import networkx as nx
+
 from graphify.build import build_from_json
 from graphify.cluster import cluster
 from graphify.export import to_json, to_cypher, to_graphml, to_html, to_canvas, to_obsidian
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
-def make_graph():
-    return build_from_json(json.loads((FIXTURES / "extraction.json").read_text()))
+
+def make_graph() -> nx.Graph:
+    graph = build_from_json(json.loads((FIXTURES / "extraction.json").read_text()))
+    assert type(graph) is nx.Graph
+    return graph
+
 
 def test_to_json_creates_file():
     G = make_graph()
@@ -19,6 +26,7 @@ def test_to_json_creates_file():
         out = Path(tmp) / "graph.json"
         to_json(G, communities, str(out))
         assert out.exists()
+
 
 def test_to_json_valid_json():
     G = make_graph()
@@ -30,6 +38,7 @@ def test_to_json_valid_json():
         assert "nodes" in data
         assert "links" in data
 
+
 def test_to_json_nodes_have_community():
     G = make_graph()
     communities = cluster(G)
@@ -40,12 +49,14 @@ def test_to_json_nodes_have_community():
         for node in data["nodes"]:
             assert "community" in node
 
+
 def test_to_cypher_creates_file():
     G = make_graph()
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "cypher.txt"
         to_cypher(G, str(out))
         assert out.exists()
+
 
 def test_to_cypher_contains_merge_statements():
     G = make_graph()
@@ -55,6 +66,7 @@ def test_to_cypher_contains_merge_statements():
         content = out.read_text()
         assert "MERGE" in content
 
+
 def test_to_graphml_creates_file():
     G = make_graph()
     communities = cluster(G)
@@ -62,6 +74,7 @@ def test_to_graphml_creates_file():
         out = Path(tmp) / "graph.graphml"
         to_graphml(G, communities, str(out))
         assert out.exists()
+
 
 def test_to_graphml_valid_xml():
     G = make_graph()
@@ -73,6 +86,7 @@ def test_to_graphml_valid_xml():
         assert "<graphml" in content
         assert "<node" in content
 
+
 def test_to_graphml_has_community_attribute():
     G = make_graph()
     communities = cluster(G)
@@ -81,6 +95,7 @@ def test_to_graphml_has_community_attribute():
         to_graphml(G, communities, str(out))
         content = out.read_text()
         assert "community" in content
+
 
 def test_to_graphml_tolerates_none_attribute_values():
     """nx.write_graphml raises ValueError on a None attribute value; to_graphml
@@ -99,6 +114,7 @@ def test_to_graphml_tolerates_none_attribute_values():
         content = out.read_text()
         assert "<graphml" in content
 
+
 def test_to_html_creates_file():
     G = make_graph()
     communities = cluster(G)
@@ -106,6 +122,7 @@ def test_to_html_creates_file():
         out = Path(tmp) / "graph.html"
         to_html(G, communities, str(out))
         assert out.exists()
+
 
 def test_to_html_contains_visjs():
     G = make_graph()
@@ -138,10 +155,14 @@ def test_to_html_pins_visjs_version_with_sri():
     assert "https://unpkg.com/vis-network/standalone" not in content
 
     # SRI integrity attribute pinning the known-good hash.
-    assert 'integrity="sha384-Ux6phic9PEHJ38YtrijhkzyJ8yQlH8i/+buBR8s3mAZOJrP1gwyvAcIYl3GWtpX1"' in content
+    assert (
+        'integrity="sha384-Ux6phic9PEHJ38YtrijhkzyJ8yQlH8i/+buBR8s3mAZOJrP1gwyvAcIYl3GWtpX1"'
+        in content
+    )
 
     # crossorigin="anonymous" is required for SRI on cross-origin scripts.
     assert 'crossorigin="anonymous"' in content
+
 
 def test_to_html_contains_search():
     G = make_graph()
@@ -152,6 +173,7 @@ def test_to_html_contains_search():
         content = out.read_text()
         assert "search" in content.lower()
 
+
 def test_to_html_contains_legend_with_labels():
     G = make_graph()
     communities = cluster(G)
@@ -161,6 +183,7 @@ def test_to_html_contains_legend_with_labels():
         to_html(G, communities, str(out), community_labels=labels)
         content = out.read_text()
         assert "Group 0" in content
+
 
 def test_to_html_contains_nodes_and_edges():
     G = make_graph()
@@ -197,8 +220,7 @@ def test_to_html_annotated_node_gets_learning_status_and_ring():
     G = make_graph()
     communities = cluster(G)
     overlay = {
-        "n_transformer": {"status": "preferred", "uses": 3, "score": 2.4,
-                          "stale": False, "neg": 0},
+        "n_transformer": {"status": "preferred", "uses": 3, "score": 2.4, "stale": False, "neg": 0},
     }
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.html"
@@ -221,8 +243,13 @@ def test_to_html_contested_stale_node_gets_dashed_desaturated_ring():
     G = make_graph()
     communities = cluster(G)
     overlay = {
-        "n_transformer": {"status": "contested", "uses": 2, "neg": 1,
-                          "verdict": "dead end", "stale": True},
+        "n_transformer": {
+            "status": "contested",
+            "uses": 2,
+            "neg": 1,
+            "verdict": "dead end",
+            "stale": True,
+        },
     }
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.html"
@@ -289,13 +316,20 @@ def test_to_canvas_node_grid_matches_box_columns():
     Covers a perfect square (25 -> 5x5) and a non-square count (10 -> 4 cols, a
     partial last row) so both the column count and the row count are pinned."""
     for n in (10, 25):
-        G = build_from_json({
-            "nodes": [
-                {"id": f"n{i}", "label": f"sym_{i:02d}", "file_type": "code", "source_file": "a.py"}
-                for i in range(n)
-            ],
-            "edges": [],
-        })
+        G = build_from_json(
+            {
+                "nodes": [
+                    {
+                        "id": f"n{i}",
+                        "label": f"sym_{i:02d}",
+                        "file_type": "code",
+                        "source_file": "a.py",
+                    }
+                    for i in range(n)
+                ],
+                "edges": [],
+            }
+        )
         communities = {0: [f"n{i}" for i in range(n)]}
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "graph.canvas"
@@ -313,8 +347,12 @@ def test_to_canvas_node_grid_matches_box_columns():
         expected_rows = math.ceil(n / expected_cols)
         distinct_x = len({c["x"] for c in cards})
         distinct_y = len({c["y"] for c in cards})
-        assert distinct_x == expected_cols, f"n={n}: expected {expected_cols} cols, got {distinct_x}"
-        assert distinct_y == expected_rows, f"n={n}: expected {expected_rows} rows, got {distinct_y}"
+        assert distinct_x == expected_cols, (
+            f"n={n}: expected {expected_cols} cols, got {distinct_x}"
+        )
+        assert distinct_y == expected_rows, (
+            f"n={n}: expected {expected_rows} rows, got {distinct_y}"
+        )
 
         # And every card sits fully inside its group box on both axes.
         gx, gy, gw, gh = group["x"], group["y"], group["width"], group["height"]
@@ -325,16 +363,19 @@ def test_to_canvas_node_grid_matches_box_columns():
 
 # ── Issue #1409: punctuation-only Obsidian/Canvas filenames ───────────────────
 
+
 def _punct_graph(label: str):
     """A 2-node graph where one node's label is all-punctuation (e.g. a `@/*`
     tsconfig paths key) and the other is a normal symbol."""
-    return build_from_json({
-        "nodes": [
-            {"id": "n1", "label": label, "file_type": "code", "source_file": "tsconfig.json"},
-            {"id": "n2", "label": "AuthHandler", "file_type": "code", "source_file": "auth.ts"},
-        ],
-        "edges": [],
-    })
+    return build_from_json(
+        {
+            "nodes": [
+                {"id": "n1", "label": label, "file_type": "code", "source_file": "tsconfig.json"},
+                {"id": "n2", "label": "AuthHandler", "file_type": "code", "source_file": "auth.ts"},
+            ],
+            "edges": [],
+        }
+    )
 
 
 def test_to_obsidian_never_emits_punctuation_only_filenames():
@@ -362,14 +403,20 @@ def test_to_canvas_never_emits_punctuation_only_filenames():
         data = json.loads(out.read_text())
         file_nodes = [n for n in data["nodes"] if n.get("type") == "file"]
         assert file_nodes, "canvas has no file nodes"
-        bad = [n["file"] for n in file_nodes if not re.search(r"\w", Path(n["file"]).stem, flags=re.UNICODE)]
+        bad = [
+            n["file"]
+            for n in file_nodes
+            if not re.search(r"\w", Path(n["file"]).stem, flags=re.UNICODE)
+        ]
         assert not bad, f"punctuation-only canvas filenames: {bad}"
 
 
 # ── Existing-vault safety: graphify must not clobber user notes / .obsidian (#1506) ──
 
+
 def _two_node_graph():
     import networkx as nx
+
     G = nx.Graph()
     G.add_node("n1", label="Database", community=0, source_file="app/db.py", type="code")
     G.add_node("n2", label="Server", community=0, source_file="app/srv.py", type="code")
@@ -420,16 +467,19 @@ def test_to_obsidian_rerun_updates_own_notes_but_not_user_files():
 
 # ── Case-only-distinct labels must not collide on case-insensitive filesystems ──
 
+
 def _case_collision_graph():
     """Two nodes whose labels differ only by case - on macOS/APFS and Windows/NTFS
     their notes resolve to the same path unless the dedup map folds case."""
-    return build_from_json({
-        "nodes": [
-            {"id": "n1", "label": "References", "file_type": "code", "source_file": "a.py"},
-            {"id": "n2", "label": "references", "file_type": "document", "source_file": "b.md"},
-        ],
-        "edges": [],
-    })
+    return build_from_json(
+        {
+            "nodes": [
+                {"id": "n1", "label": "References", "file_type": "code", "source_file": "a.py"},
+                {"id": "n2", "label": "references", "file_type": "document", "source_file": "b.md"},
+            ],
+            "edges": [],
+        }
+    )
 
 
 def test_to_obsidian_case_only_distinct_labels_dont_overwrite():
@@ -446,7 +496,9 @@ def test_to_obsidian_case_only_distinct_labels_dont_overwrite():
         lowered = [p.stem.lower() for p in notes]
         assert len(set(lowered)) == len(lowered), [p.name for p in notes]
         # the suffixed name must be the expected one, not merely distinct
-        assert sorted(p.stem for p in notes) == ["References", "references_1"], [p.name for p in notes]
+        assert sorted(p.stem for p in notes) == ["References", "references_1"], [
+            p.name for p in notes
+        ]
 
 
 def test_to_obsidian_generated_suffix_doesnt_overwrite_literal():
@@ -455,14 +507,16 @@ def test_to_obsidian_generated_suffix_doesnt_overwrite_literal():
     becomes `dup_1`, which would clobber the third node unless the candidate is
     re-checked. This collides on case-sensitive filesystems too, so it guards the
     dedup loop independently of case-folding."""
-    G = build_from_json({
-        "nodes": [
-            {"id": "a", "label": "dup", "file_type": "code", "source_file": "a.py"},
-            {"id": "b", "label": "dup", "file_type": "code", "source_file": "b.py"},
-            {"id": "c", "label": "dup_1", "file_type": "code", "source_file": "c.py"},
-        ],
-        "edges": [],
-    })
+    G = build_from_json(
+        {
+            "nodes": [
+                {"id": "a", "label": "dup", "file_type": "code", "source_file": "a.py"},
+                {"id": "b", "label": "dup", "file_type": "code", "source_file": "b.py"},
+                {"id": "c", "label": "dup_1", "file_type": "code", "source_file": "c.py"},
+            ],
+            "edges": [],
+        }
+    )
     communities = cluster(G)
     with tempfile.TemporaryDirectory() as tmp:
         to_obsidian(G, communities, tmp)
@@ -493,7 +547,9 @@ def test_obsidian_canvas_filenames_agree():
     communities = cluster(G)
     with tempfile.TemporaryDirectory() as tmp:
         to_obsidian(G, communities, tmp)
-        note_stems = {p.stem for p in Path(tmp).rglob("*.md") if not p.name.startswith("_COMMUNITY")}
+        note_stems = {
+            p.stem for p in Path(tmp).rglob("*.md") if not p.name.startswith("_COMMUNITY")
+        }
         out = Path(tmp) / "graph.canvas"
         to_canvas(G, communities, str(out))
         data = json.loads(out.read_text())
@@ -505,13 +561,15 @@ def test_to_obsidian_community_notes_case_collision():
     """Two community labels differing only by case must each get their own
     `_COMMUNITY_*.md` overview note. This path had no dedup at all, so even
     same-case duplicate labels previously overwrote silently."""
-    G = build_from_json({
-        "nodes": [
-            {"id": "n1", "label": "alpha", "file_type": "code", "source_file": "a.py"},
-            {"id": "n2", "label": "beta", "file_type": "code", "source_file": "b.py"},
-        ],
-        "edges": [],
-    })
+    G = build_from_json(
+        {
+            "nodes": [
+                {"id": "n1", "label": "alpha", "file_type": "code", "source_file": "a.py"},
+                {"id": "n2", "label": "beta", "file_type": "code", "source_file": "b.py"},
+            ],
+            "edges": [],
+        }
+    )
     communities = {0: ["n1"], 1: ["n2"]}
     labels = {0: "API", 1: "Api"}
     with tempfile.TemporaryDirectory() as tmp:
@@ -524,15 +582,18 @@ def test_to_obsidian_community_notes_case_collision():
 
 # ── Issue #834: backup_if_protected ──────────────────────────────────────────
 
+
 def test_backup_no_graph_json(tmp_path):
     """No graph.json → no backup."""
     from graphify.export import backup_if_protected
+
     assert backup_if_protected(tmp_path) is None
 
 
 def test_backup_no_markers(tmp_path):
     """graph.json present but no sentinel and no curated labels → no backup."""
     from graphify.export import backup_if_protected
+
     (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
     assert backup_if_protected(tmp_path) is None
 
@@ -540,6 +601,7 @@ def test_backup_no_markers(tmp_path):
 def test_backup_semantic_marker(tmp_path):
     """graph.json + .graphify_semantic_marker → backup taken."""
     from graphify.export import backup_if_protected
+
     (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
     (tmp_path / "GRAPH_REPORT.md").write_text("# Report")
     (tmp_path / ".graphify_semantic_marker").write_text('{"output_tokens": 1234}')
@@ -555,8 +617,11 @@ def test_backup_curated_labels(tmp_path):
     """graph.json + non-default label in .graphify_labels.json → backup taken."""
     import json
     from graphify.export import backup_if_protected
+
     (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
-    (tmp_path / ".graphify_labels.json").write_text(json.dumps({"0": "Auth Pipeline", "1": "Community 1"}))
+    (tmp_path / ".graphify_labels.json").write_text(
+        json.dumps({"0": "Auth Pipeline", "1": "Community 1"})
+    )
     result = backup_if_protected(tmp_path)
     assert result is not None
 
@@ -565,8 +630,11 @@ def test_backup_default_labels_only(tmp_path):
     """All-default labels → no backup (not curated)."""
     import json
     from graphify.export import backup_if_protected
+
     (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
-    (tmp_path / ".graphify_labels.json").write_text(json.dumps({"0": "Community 0", "1": "Community 1"}))
+    (tmp_path / ".graphify_labels.json").write_text(
+        json.dumps({"0": "Community 0", "1": "Community 1"})
+    )
     assert backup_if_protected(tmp_path) is None
 
 
@@ -574,6 +642,7 @@ def test_backup_same_day_no_accumulation(tmp_path):
     """Same content on same day returns existing backup dir without re-copying."""
     from graphify.export import backup_if_protected
     from datetime import date
+
     (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
     (tmp_path / ".graphify_semantic_marker").write_text("{}")
     b1 = backup_if_protected(tmp_path)
@@ -586,12 +655,13 @@ def test_backup_same_day_no_accumulation(tmp_path):
 def test_backup_same_day_changed_content(tmp_path):
     """Changed graph.json on same day overwrites the existing backup in place."""
     from graphify.export import backup_if_protected
-    from datetime import date
+
     (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
     (tmp_path / ".graphify_semantic_marker").write_text("{}")
     b1 = backup_if_protected(tmp_path)
     (tmp_path / "graph.json").write_text('{"nodes":[{"id":"x"}],"links":[]}')
     b2 = backup_if_protected(tmp_path)
+    assert b2 is not None
     assert b1 == b2  # still one folder per day
     assert (b2 / "graph.json").read_text() == '{"nodes":[{"id":"x"}],"links":[]}'
 
@@ -599,6 +669,7 @@ def test_backup_same_day_changed_content(tmp_path):
 def test_backup_env_disable(tmp_path, monkeypatch):
     """GRAPHIFY_NO_BACKUP=1 disables backup entirely."""
     from graphify.export import backup_if_protected
+
     monkeypatch.setenv("GRAPHIFY_NO_BACKUP", "1")
     (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
     (tmp_path / ".graphify_semantic_marker").write_text("{}")

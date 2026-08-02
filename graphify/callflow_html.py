@@ -27,8 +27,10 @@ import sys
 import hashlib
 from pathlib import Path
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from html import escape
+from typing import TypedDict
 
 from graphify.paths import GRAPHIFY_OUT, GRAPHIFY_OUT_NAME
 
@@ -91,7 +93,8 @@ hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
 # 2. Data loading and normalization helpers
 # ──────────────────────────────────────────────
 
-def read_json(path: str | Path, default=None):
+
+def read_json(path: str | Path | None, default: object = None) -> object:
     """Read JSON with a useful error message."""
     if not path:
         return default
@@ -102,6 +105,15 @@ def read_json(path: str | Path, default=None):
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise SystemExit(f"ERROR: invalid JSON in {path}: {exc}") from exc
+
+
+def _string_keyed_mapping(value: object) -> dict[str, object] | None:
+    """Copy a mapping only when every key satisfies JSON object semantics."""
+    if not isinstance(value, Mapping):
+        return None
+    if not all(isinstance(key, str) for key in value):
+        return None
+    return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
 def first_present(mapping: dict, *keys, default=None):
@@ -206,7 +218,9 @@ def normalize_edge(raw: dict, index: int) -> dict | None:
     if not source or not target:
         return None
 
-    relation = first_present(edge, "relation", "type", "kind", "label", "predicate", default="relates")
+    relation = first_present(
+        edge, "relation", "type", "kind", "label", "predicate", default="relates"
+    )
     confidence = first_present(edge, "confidence", "evidence", "provenance", default="EXTRACTED")
     score = first_present(edge, "confidence_score", "score", "weight", "probability", default=1.0)
 
@@ -219,7 +233,7 @@ def normalize_edge(raw: dict, index: int) -> dict | None:
     return edge
 
 
-def _node_link_payload(data: dict) -> tuple[list, list] | None:
+def _node_link_payload(data: dict[str, object]) -> tuple[list, list] | None:
     """Read current graphify graph.json via NetworkX's node-link parser."""
     if not isinstance(data.get("nodes"), list):
         return None
@@ -238,12 +252,20 @@ def _node_link_payload(data: dict) -> tuple[list, list] | None:
 
     nodes = []
     for node_id, attrs in graph.nodes(data=True):
+        if attrs is None:
+            attrs = {}
+        if not isinstance(attrs, Mapping):
+            return None
         node = dict(attrs)
         node["id"] = node_id
         nodes.append(node)
 
     edges = []
     for index, (source, target, attrs) in enumerate(graph.edges(data=True), 1):
+        if attrs is None:
+            attrs = {}
+        if not isinstance(attrs, Mapping):
+            return None
         edge = dict(attrs)
         edge["source"] = edge.get("_src", edge.get("source", source))
         edge["target"] = edge.get("_tgt", edge.get("target", target))
@@ -252,28 +274,41 @@ def _node_link_payload(data: dict) -> tuple[list, list] | None:
     return nodes, edges
 
 
-def load_graph(path: str | Path) -> tuple:
+def load_graph(path: str | Path) -> tuple[list[dict], list[dict], list, dict[str, object]]:
     """Load graph.json. Returns normalized (nodes, edges, hyperedges, metadata)."""
     if path:
         from graphify.security import check_graph_file_size_cap
+
         try:
             check_graph_file_size_cap(Path(path))
         except ValueError as exc:
             raise SystemExit(f"ERROR: {exc}") from exc
-    data = read_json(path)
-    if not isinstance(data, dict):
+    data = _string_keyed_mapping(read_json(path))
+    if data is None:
         raise SystemExit(f"ERROR: graph file must contain a JSON object: {path}")
 
-    graph_block = data.get("graph") if isinstance(data.get("graph"), dict) else {}
-    meta_block = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    graph_block = _string_keyed_mapping(data.get("graph")) or {}
+    meta_block = _string_keyed_mapping(data.get("metadata")) or {}
 
     node_link = _node_link_payload(data)
     if node_link:
         raw_nodes, raw_edges = node_link
     else:
-        raw_nodes = first_list(data.get("nodes"), data.get("vertices"), graph_block.get("nodes"), graph_block.get("vertices"))
-        raw_edges = first_list(data.get("links"), data.get("edges"), graph_block.get("links"), graph_block.get("edges"))
-    hyperedges = first_list(data.get("hyperedges"), graph_block.get("hyperedges"), data.get("groups"), graph_block.get("groups"))
+        raw_nodes = first_list(
+            data.get("nodes"),
+            data.get("vertices"),
+            graph_block.get("nodes"),
+            graph_block.get("vertices"),
+        )
+        raw_edges = first_list(
+            data.get("links"), data.get("edges"), graph_block.get("links"), graph_block.get("edges")
+        )
+    hyperedges = first_list(
+        data.get("hyperedges"),
+        graph_block.get("hyperedges"),
+        data.get("groups"),
+        graph_block.get("groups"),
+    )
 
     nodes = [normalize_node(n, i) for i, n in enumerate(raw_nodes) if isinstance(n, dict)]
     edges = []
@@ -284,9 +319,16 @@ def load_graph(path: str | Path) -> tuple:
         if edge:
             edges.append(edge)
 
-    meta = dict(graph_block)
+    meta: dict[str, object] = dict(graph_block)
     meta.update(meta_block)
-    for key in ("built_at_commit", "commit", "project_name", "repo", "repository", "language_breakdown"):
+    for key in (
+        "built_at_commit",
+        "commit",
+        "project_name",
+        "repo",
+        "repository",
+        "language_breakdown",
+    ):
         if data.get(key) and not meta.get(key):
             meta[key] = data.get(key)
     if meta.get("commit") and not meta.get("built_at_commit"):
@@ -333,6 +375,7 @@ def load_report(path: str | Path | None) -> str:
 # 3. Mermaid-safe label helpers
 # ──────────────────────────────────────────────
 
+
 def safe_mermaid_text(text: str) -> str:
     """Sanitize text for use inside a Mermaid node label.
 
@@ -346,10 +389,10 @@ def safe_mermaid_text(text: str) -> str:
     """
     text = str(text or "")
     text = text.replace('"', "'")
-    text = text.replace('`', '')
-    text = text.replace('#', '')
-    text = text.replace('|', ' ')
-    text = text.replace('{', '').replace('}', '')
+    text = text.replace("`", "")
+    text = text.replace("#", "")
+    text = text.replace("|", " ")
+    text = text.replace("{", "").replace("}", "")
     text = text.replace("->>", " to ").replace("-->", " to ").replace("->", " to ")
     text = " ".join(text.split())
     return escape(text, quote=False)
@@ -426,7 +469,9 @@ def resolve_graphify_paths(args) -> dict:
     project_root = graphify_out.parent if graphify_out.name == GRAPHIFY_OUT_NAME else base
     graph = Path(args.graph).expanduser() if args.graph else graphify_out / "graph.json"
     report = Path(args.report).expanduser() if args.report else graphify_out / "GRAPH_REPORT.md"
-    labels = Path(args.labels).expanduser() if args.labels else graphify_out / ".graphify_labels.json"
+    labels = (
+        Path(args.labels).expanduser() if args.labels else graphify_out / ".graphify_labels.json"
+    )
     sections = Path(args.sections).expanduser() if args.sections else None
     return {
         "base": project_root,
@@ -511,13 +556,39 @@ def node_kind(node: dict) -> str:
     if any(word in label for word in ("async", "await", "stream", "sse")):
         return "async"
     raw_label = str(node.get("label") or "")
-    hook_like = raw_label.startswith("use") and len(raw_label) > 3 and (raw_label[3].isupper() or raw_label[3] in "_-")
-    if any(word in label for word in ("component", "props", "hook", "store")) or hook_like or source_file.endswith((".tsx", ".jsx", ".vue", ".svelte")):
+    hook_like = (
+        raw_label.startswith("use")
+        and len(raw_label) > 3
+        and (raw_label[3].isupper() or raw_label[3] in "_-")
+    )
+    if (
+        any(word in label for word in ("component", "props", "hook", "store"))
+        or hook_like
+        or source_file.endswith((".tsx", ".jsx", ".vue", ".svelte"))
+    ):
         return "ui"
     raw = raw_label
     if raw[:1].isupper() and not raw.endswith("()"):
         return "klass"
-    if raw.endswith((".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt", ".rb", ".php", ".cs", ".swift", ".vue", ".svelte")):
+    if raw.endswith(
+        (
+            ".py",
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            ".go",
+            ".rs",
+            ".java",
+            ".kt",
+            ".rb",
+            ".php",
+            ".cs",
+            ".swift",
+            ".vue",
+            ".svelte",
+        )
+    ):
         return "module"
     return "function"
 
@@ -634,6 +705,7 @@ def mermaid_class_defs() -> list:
 # 4. Community and section indexing
 # ──────────────────────────────────────────────
 
+
 def build_community_index(nodes: list) -> dict:
     """Map community_id (str) -> list of nodes."""
     idx = defaultdict(list)
@@ -654,7 +726,9 @@ def html_anchor_id(raw: str, fallback: str, used: set) -> str:
     base = base[:48].strip("-") or "section"
     candidate = base
     if candidate in used:
-        candidate = f"{base}-{hashlib.sha1(raw.encode('utf-8'), usedforsecurity=False).hexdigest()[:6]}"
+        candidate = (
+            f"{base}-{hashlib.sha1(raw.encode('utf-8'), usedforsecurity=False).hexdigest()[:6]}"
+        )
     suffix = 2
     while candidate in used:
         candidate = f"{base}-{suffix}"
@@ -690,11 +764,13 @@ def normalize_sections(sections: list, lang: str) -> list:
             continue
 
         sid = html_anchor_id(raw_id, f"section-{index}", used)
-        normalized.append({
-            "id": sid,
-            "name": raw_name,
-            "communities": normalize_communities(raw.get("communities", raw.get("community"))),
-        })
+        normalized.append(
+            {
+                "id": sid,
+                "name": raw_name,
+                "communities": normalize_communities(raw.get("communities", raw.get("community"))),
+            }
+        )
     return normalized
 
 
@@ -714,9 +790,22 @@ SECTION_ARCHETYPES = [
         "提取管线",
         "Extraction Pipeline",
         {
-            "extract", "extractor", "tree", "sitter", "parser", "language",
-            "python", "javascript", "typescript", "rust", "java", "go",
-            "ast", "calls", "imports", "multilang",
+            "extract",
+            "extractor",
+            "tree",
+            "sitter",
+            "parser",
+            "language",
+            "python",
+            "javascript",
+            "typescript",
+            "rust",
+            "java",
+            "go",
+            "ast",
+            "calls",
+            "imports",
+            "multilang",
         },
     ),
     (
@@ -724,8 +813,17 @@ SECTION_ARCHETYPES = [
         "图谱构建",
         "Graph Build",
         {
-            "build", "graph", "merge", "dedup", "node", "edge", "hyperedge",
-            "json", "schema", "normalize", "confidence",
+            "build",
+            "graph",
+            "merge",
+            "dedup",
+            "node",
+            "edge",
+            "hyperedge",
+            "json",
+            "schema",
+            "normalize",
+            "confidence",
         },
     ),
     (
@@ -733,8 +831,18 @@ SECTION_ARCHETYPES = [
         "分析聚类",
         "Analysis & Clustering",
         {
-            "cluster", "community", "leiden", "cohesion", "analyze", "god",
-            "surprise", "question", "query", "path", "explain", "benchmark",
+            "cluster",
+            "community",
+            "leiden",
+            "cohesion",
+            "analyze",
+            "god",
+            "surprise",
+            "question",
+            "query",
+            "path",
+            "explain",
+            "benchmark",
         },
     ),
     (
@@ -742,8 +850,18 @@ SECTION_ARCHETYPES = [
         "输出文档",
         "Outputs & Docs",
         {
-            "export", "html", "wiki", "obsidian", "canvas", "svg", "graphml",
-            "report", "callflow", "mermaid", "tree", "documentation",
+            "export",
+            "html",
+            "wiki",
+            "obsidian",
+            "canvas",
+            "svg",
+            "graphml",
+            "report",
+            "callflow",
+            "mermaid",
+            "tree",
+            "documentation",
         },
     ),
     (
@@ -751,9 +869,20 @@ SECTION_ARCHETYPES = [
         "CLI 与技能安装",
         "CLI & Skill Installers",
         {
-            "main", "install", "uninstall", "skill", "agent", "claude",
-            "codex", "opencode", "aider", "copilot", "kiro", "vscode",
-            "hook", "command",
+            "main",
+            "install",
+            "uninstall",
+            "skill",
+            "agent",
+            "claude",
+            "codex",
+            "opencode",
+            "aider",
+            "copilot",
+            "kiro",
+            "vscode",
+            "hook",
+            "command",
         },
     ),
     (
@@ -761,9 +890,21 @@ SECTION_ARCHETYPES = [
         "摄取与增量更新",
         "Ingestion & Updates",
         {
-            "ingest", "fetch", "download", "url", "html", "markdown",
-            "cache", "manifest", "watch", "update", "incremental",
-            "transcribe", "video", "audio", "google",
+            "ingest",
+            "fetch",
+            "download",
+            "url",
+            "html",
+            "markdown",
+            "cache",
+            "manifest",
+            "watch",
+            "update",
+            "incremental",
+            "transcribe",
+            "video",
+            "audio",
+            "google",
         },
     ),
     (
@@ -771,8 +912,17 @@ SECTION_ARCHETYPES = [
         "服务 API",
         "Serving API",
         {
-            "serve", "api", "request", "response", "endpoint", "router",
-            "handle", "upload", "search", "delete", "enrich",
+            "serve",
+            "api",
+            "request",
+            "response",
+            "endpoint",
+            "router",
+            "handle",
+            "upload",
+            "search",
+            "delete",
+            "enrich",
         },
     ),
     (
@@ -780,8 +930,17 @@ SECTION_ARCHETYPES = [
         "安全与全局图",
         "Security & Global Graph",
         {
-            "security", "safe", "ssrf", "xss", "path", "traversal",
-            "global", "prefix", "prune", "repo", "clone",
+            "security",
+            "safe",
+            "ssrf",
+            "xss",
+            "path",
+            "traversal",
+            "global",
+            "prefix",
+            "prune",
+            "repo",
+            "clone",
         },
     ),
     (
@@ -789,8 +948,14 @@ SECTION_ARCHETYPES = [
         "测试与样例",
         "Tests & Fixtures",
         {
-            "test", "tests", "fixture", "fixtures", "sample", "assert",
-            "pytest", "mock",
+            "test",
+            "tests",
+            "fixture",
+            "fixtures",
+            "sample",
+            "assert",
+            "pytest",
+            "mock",
         },
     ),
 ]
@@ -828,14 +993,24 @@ def _rank_grouped_sections(grouped: dict, max_sections: int) -> tuple[list, list
     return selected, overflow_communities
 
 
-def derive_sections_from_communities(nodes: list, labels: dict, lang: str, max_sections: int) -> list:
+def derive_sections_from_communities(
+    nodes: list, labels: dict, lang: str, max_sections: int
+) -> list:
     """Derive architecture-oriented sections when no sections JSON is supplied."""
     comm_idx = build_community_index(nodes)
-    sections = [{"id": "overview", "name": pick_text(lang, "架构总览", "Architecture Overview"), "communities": []}]
+    sections = [
+        {
+            "id": "overview",
+            "name": pick_text(lang, "架构总览", "Architecture Overview"),
+            "communities": [],
+        }
+    ]
     grouped = {}
     unassigned = []
 
-    for cid, community_nodes in sorted(comm_idx.items(), key=lambda item: (-len(item[1]), str(item[0]))):
+    for cid, community_nodes in sorted(
+        comm_idx.items(), key=lambda item: (-len(item[1]), str(item[0]))
+    ):
         label = label_for_community(cid, labels, community_nodes, lang)
         text = _community_text(community_nodes, label)
         best = None
@@ -863,7 +1038,9 @@ def derive_sections_from_communities(nodes: list, labels: dict, lang: str, max_s
         else:
             unassigned.append((cid, community_nodes, label))
 
-    selected, overflow_communities = _rank_grouped_sections(grouped, max(1, int(max_sections or 15)) - 1)
+    selected, overflow_communities = _rank_grouped_sections(
+        grouped, max(1, int(max_sections or 15)) - 1
+    )
     sections.extend(
         {"id": sec["id"], "name": sec["name"], "communities": sec["communities"]}
         for sec in selected
@@ -871,15 +1048,19 @@ def derive_sections_from_communities(nodes: list, labels: dict, lang: str, max_s
 
     remaining_slots = max(0, int(max_sections or 15) - (len(sections) - 1) - 1)
     for cid, community_nodes, label in unassigned[:remaining_slots]:
-        sections.append({"id": str(label or f"community-{cid}"), "name": label, "communities": [cid]})
+        sections.append(
+            {"id": str(label or f"community-{cid}"), "name": label, "communities": [cid]}
+        )
 
     other_communities = overflow_communities + [cid for cid, _, _ in unassigned[remaining_slots:]]
     if other_communities:
-        sections.append({
-            "id": "other",
-            "name": pick_text(lang, "其他", "Other"),
-            "communities": other_communities,
-        })
+        sections.append(
+            {
+                "id": "other",
+                "name": pick_text(lang, "其他", "Other"),
+                "communities": other_communities,
+            }
+        )
     return sections
 
 
@@ -906,6 +1087,7 @@ def node_in_section(node_id: str, section_node_ids: set) -> bool:
 # ──────────────────────────────────────────────
 # 5. Edge analysis
 # ──────────────────────────────────────────────
+
 
 def classify_edges(edges: list, section_nodes_map: dict) -> dict:
     """Classify edges as intra-section or inter-section.
@@ -960,13 +1142,16 @@ def should_include_edge(edge: dict) -> bool:
 # 6. Mermaid diagram generators
 # ──────────────────────────────────────────────
 
-def node_degree_scores(edges: list) -> Counter:
+
+def node_degree_scores(edges: list) -> dict[str, float]:
     """Score nodes by useful edge participation."""
-    scores = Counter()
+    scores: dict[str, float] = {}
     for edge in edges:
         score = edge_score(edge)
-        scores[edge.get("source", "")] += score
-        scores[edge.get("target", "")] += score
+        source = endpoint_id(edge.get("source"))
+        target = endpoint_id(edge.get("target"))
+        scores[source] = scores.get(source, 0.0) + score
+        scores[target] = scores.get(target, 0.0) + score
     return scores
 
 
@@ -1039,8 +1224,10 @@ def select_diagram_nodes(nodes: list, edges: list, max_nodes: int) -> list:
 
 def node_label(node: dict) -> str:
     """Build a readable Mermaid node label."""
-    label = humanize_label(node.get("label") or node.get("id"), node.get("source_file", ""))
-    source_file = safe_file_path(node.get("source_file", ""))
+    raw_label = node.get("label") or node.get("id") or ""
+    raw_source_file = node.get("source_file") or ""
+    label = humanize_label(str(raw_label), str(raw_source_file))
+    source_file = safe_file_path(str(raw_source_file))
     if source_file and not label.endswith(Path(source_file).name):
         return f"{safe_mermaid_text(label)}<br/><small>{safe_mermaid_text(source_file)}</small>"
     return safe_mermaid_text(label)
@@ -1055,26 +1242,47 @@ def group_nodes_by_file(nodes: list) -> dict:
     return dict(sorted(groups.items(), key=lambda item: (-len(item[1]), item[0])))
 
 
-def section_edge_summary(classified_edges: dict) -> dict:
+class SectionEdgeStats(TypedDict):
+    """Counts retained edges and their relation frequencies between two sections."""
+
+    count: int
+    relations: Counter[str]
+
+
+def section_edge_summary(classified_edges: dict) -> dict[tuple[str, str], SectionEdgeStats]:
     """Aggregate inter-section edge counts and relation names."""
     node_section = classified_edges.get("node_section", {})
-    summary = defaultdict(lambda: {"count": 0, "relations": Counter()})
-    for edge in classified_edges.get("inter", []):
+    inter_edges = classified_edges.get("inter", [])
+    if not isinstance(node_section, Mapping) or not isinstance(inter_edges, list):
+        return {}
+
+    summary: defaultdict[tuple[str, str], SectionEdgeStats] = defaultdict(
+        lambda: {"count": 0, "relations": Counter()}
+    )
+    for edge in inter_edges:
+        if not isinstance(edge, dict):
+            continue
         if not should_include_edge(edge):
             continue
         src_sec = node_section.get(edge.get("source"))
         tgt_sec = node_section.get(edge.get("target"))
-        if not src_sec or not tgt_sec or src_sec == tgt_sec:
+        if not isinstance(src_sec, str) or not isinstance(tgt_sec, str) or src_sec == tgt_sec:
             continue
         key = (src_sec, tgt_sec)
         summary[key]["count"] += 1
-        summary[key]["relations"][edge.get("relation", "relates")] += 1
+        relation = str(edge.get("relation") or "relates")
+        summary[key]["relations"][relation] += 1
     return summary
 
 
-def generate_overview_graph(sections: list, section_nodes_map: dict,
-                             classified_edges: dict, labels: dict, lang: str,
-                             diagram_scale: float) -> str:
+def generate_overview_graph(
+    sections: list,
+    section_nodes_map: dict,
+    classified_edges: dict,
+    labels: dict,
+    lang: str,
+    diagram_scale: float,
+) -> str:
     """Generate a readable section-level architecture overview."""
     lines = [mermaid_init(diagram_scale, "LR")]
     section_defs = [sec for sec in sections if sec["id"] != "overview"]
@@ -1090,7 +1298,9 @@ def generate_overview_graph(sections: list, section_nodes_map: dict,
         lines.append(f"    class {sid} module;")
 
     aggregated = section_edge_summary(classified_edges)
-    for (src, tgt), data in sorted(aggregated.items(), key=lambda item: item[1]["count"], reverse=True)[:12]:
+    for (src, tgt), data in sorted(
+        aggregated.items(), key=lambda item: item[1]["count"], reverse=True
+    )[:12]:
         src_id = mermaid_section_id(src)
         tgt_id = mermaid_section_id(tgt)
         relation, _ = data["relations"].most_common(1)[0]
@@ -1101,19 +1311,29 @@ def generate_overview_graph(sections: list, section_nodes_map: dict,
 
     if not aggregated and len(section_defs) > 1:
         for prev, cur in zip(section_defs, section_defs[1:]):
-            lines.append(f"    {mermaid_section_id(prev['id'])} -.-> {mermaid_section_id(cur['id'])}")
+            lines.append(
+                f"    {mermaid_section_id(prev['id'])} -.-> {mermaid_section_id(cur['id'])}"
+            )
 
     lines.extend(mermaid_class_defs())
     return "\n".join(lines)
 
 
-def generate_section_flowchart(section_id: str, section_name: str,
-                                nodes: list, edges: list, lang: str,
-                                diagram_scale: float, max_nodes: int,
-                                max_edges: int) -> str:
+def generate_section_flowchart(
+    section_id: str,
+    section_name: str,
+    nodes: list,
+    edges: list,
+    lang: str,
+    diagram_scale: float,
+    max_nodes: int,
+    max_edges: int,
+) -> str:
     """Generate a compact, human-readable call-flow chart for a section."""
     lines = [mermaid_init(diagram_scale, "LR")]
-    lines.append(f"    %% Section: {safe_mermaid_text(section_name)} ({len(nodes)} nodes, {len(edges)} edges)")
+    lines.append(
+        f"    %% Section: {safe_mermaid_text(section_name)} ({len(nodes)} nodes, {len(edges)} edges)"
+    )
 
     if not nodes:
         empty_label = pick_text(lang, f"{section_name} - 无节点", f"{section_name} - no nodes")
@@ -1124,12 +1344,14 @@ def generate_section_flowchart(section_id: str, section_name: str,
     selected_nodes = select_diagram_nodes(nodes, edges, max_nodes)
     selected_ids = {node.get("id") for node in selected_nodes}
     visible_edges = [
-        edge for edge in preferred_edges(edges, allow_structure=False)
+        edge
+        for edge in preferred_edges(edges, allow_structure=False)
         if edge.get("source") in selected_ids and edge.get("target") in selected_ids
     ]
     if not visible_edges:
         visible_edges = [
-            edge for edge in preferred_edges(edges, allow_structure=True)
+            edge
+            for edge in preferred_edges(edges, allow_structure=True)
             if edge.get("source") in selected_ids and edge.get("target") in selected_ids
         ]
 
@@ -1162,7 +1384,9 @@ def generate_section_flowchart(section_id: str, section_name: str,
     omitted_nodes = max(0, len(nodes) - len(selected_nodes))
     omitted_edges = max(0, len(visible_edges) - included)
     if omitted_nodes or omitted_edges:
-        lines.append(f"    %% Omitted for readability: {omitted_nodes} nodes, {omitted_edges} edges")
+        lines.append(
+            f"    %% Omitted for readability: {omitted_nodes} nodes, {omitted_edges} edges"
+        )
     lines.extend(class_lines)
     lines.extend(mermaid_class_defs())
     return "\n".join(lines)
@@ -1171,6 +1395,7 @@ def generate_section_flowchart(section_id: str, section_name: str,
 # ──────────────────────────────────────────────
 # 7. HTML generators
 # ──────────────────────────────────────────────
+
 
 def generate_nav(sections: list) -> str:
     """Generate the sticky navigation bar."""
@@ -1188,21 +1413,33 @@ def node_display_name(node: dict | None, fallback: str = "") -> str:
     return humanize_label(label, node.get("source_file", ""))
 
 
-def format_node_refs(node_ids: set, node_by_id: dict, lang: str, empty_text: str, limit: int = 3) -> str:
+def format_node_refs(
+    node_ids: set, node_by_id: dict, lang: str, empty_text: str, limit: int = 3
+) -> str:
     """Render node references as readable labels instead of internal IDs."""
     if not node_ids:
         return escape(empty_text)
     parts = []
-    for nid in sorted(node_ids, key=lambda item: node_display_name(node_by_id.get(item), item).lower())[:limit]:
+    for nid in sorted(
+        node_ids, key=lambda item: node_display_name(node_by_id.get(item), item).lower()
+    )[:limit]:
         node = node_by_id.get(nid)
         label = node_display_name(node, nid)
         source = safe_file_path((node or {}).get("source_file", ""))
         if source:
-            parts.append(f"<code>{escape(label)}</code><br><small style=\"color:var(--muted)\">{escape(source)}</small>")
+            parts.append(
+                f'<code>{escape(label)}</code><br><small style="color:var(--muted)">{escape(source)}</small>'
+            )
         else:
             parts.append(f"<code>{escape(label)}</code>")
     if len(node_ids) > limit:
-        parts.append(escape(pick_text(lang, f"+{len(node_ids) - limit} 个更多", f"+{len(node_ids) - limit} more")))
+        parts.append(
+            escape(
+                pick_text(
+                    lang, f"+{len(node_ids) - limit} 个更多", f"+{len(node_ids) - limit} more"
+                )
+            )
+        )
     return "<br>".join(parts)
 
 
@@ -1299,31 +1536,71 @@ def _describe_node(label: str, source_file: str, file_type: str, lang: str) -> s
     if file_type == "rationale":
         return pick_text(lang, f"设计说明：{label}", f"Design note for {label}.")
     if file_type == "document":
-        return pick_text(lang, f"文档入口，描述 {label} 相关能力。", f"Documentation node describing {label}.")
+        return pick_text(
+            lang, f"文档入口，描述 {label} 相关能力。", f"Documentation node describing {label}."
+        )
     if label.endswith(".py") or label.endswith(".tsx") or label.endswith(".ts"):
-        return pick_text(lang, f"{source} 中的模块文件，承载该层主要实现。", f"Module file in {source}.")
+        return pick_text(
+            lang, f"{source} 中的模块文件，承载该层主要实现。", f"Module file in {source}."
+        )
     if "config" in lower:
-        return pick_text(lang, "读取、解析或持久化项目配置。", "Reads, resolves, or persists project configuration.")
+        return pick_text(
+            lang,
+            "读取、解析或持久化项目配置。",
+            "Reads, resolves, or persists project configuration.",
+        )
     if "scan" in lower:
-        return pick_text(lang, "触发项目扫描或处理扫描状态。", "Starts scanning or handles scan status.")
+        return pick_text(
+            lang, "触发项目扫描或处理扫描状态。", "Starts scanning or handles scan status."
+        )
     if "ingest" in lower or "clone" in lower or "git" in lower:
-        return pick_text(lang, "把本地目录或远程仓库转换为分析上下文。", "Turns a local path or remote repository into analysis context.")
+        return pick_text(
+            lang,
+            "把本地目录或远程仓库转换为分析上下文。",
+            "Turns a local path or remote repository into analysis context.",
+        )
     if "prompt" in lower:
-        return pick_text(lang, "构造发送给 LLM 的结构化提示。", "Builds structured prompts for model calls.")
+        return pick_text(
+            lang, "构造发送给 LLM 的结构化提示。", "Builds structured prompts for model calls."
+        )
     if "analy" in lower:
-        return pick_text(lang, "编排分析流程并产出结构化文档数据。", "Orchestrates analysis and returns structured documentation data.")
+        return pick_text(
+            lang,
+            "编排分析流程并产出结构化文档数据。",
+            "Orchestrates analysis and returns structured documentation data.",
+        )
     if "graph" in lower or "dependency" in lower:
-        return pick_text(lang, "构建依赖关系并提供排序或图形化数据。", "Builds dependency relationships and graph data.")
+        return pick_text(
+            lang,
+            "构建依赖关系并提供排序或图形化数据。",
+            "Builds dependency relationships and graph data.",
+        )
     if "export" in lower or "markdown" in lower or "html" in lower:
-        return pick_text(lang, "将文档数据导出为目标格式。", "Exports documentation data to a target format.")
+        return pick_text(
+            lang, "将文档数据导出为目标格式。", "Exports documentation data to a target format."
+        )
     if "chat" in lower or "rag" in lower or "retrieve" in lower:
-        return pick_text(lang, "支撑检索增强问答或流式聊天。", "Supports retrieval-augmented Q&A or streaming chat.")
+        return pick_text(
+            lang,
+            "支撑检索增强问答或流式聊天。",
+            "Supports retrieval-augmented Q&A or streaming chat.",
+        )
     if "wiki" in lower or "page" in lower or "sidebar" in lower:
-        return pick_text(lang, "组织文档页面、侧边栏或内容读取。", "Organizes documentation pages, navigation, or content lookup.")
+        return pick_text(
+            lang,
+            "组织文档页面、侧边栏或内容读取。",
+            "Organizes documentation pages, navigation, or content lookup.",
+        )
     if "cache" in lower or "hash" in lower:
-        return pick_text(lang, "缓存分析结果或生成缓存键。", "Caches analysis results or computes cache keys.")
+        return pick_text(
+            lang, "缓存分析结果或生成缓存键。", "Caches analysis results or computes cache keys."
+        )
     if "test" in lower:
-        return pick_text(lang, "验证导入、入口点或版本等基础行为。", "Verifies imports, entry points, or version behavior.")
+        return pick_text(
+            lang,
+            "验证导入、入口点或版本等基础行为。",
+            "Verifies imports, entry points, or version behavior.",
+        )
     return pick_text(lang, f"{source} 中的 {label} 节点。", f"{label} node in {source}.")
 
 
@@ -1372,7 +1649,9 @@ def derive_flow_chain(sections: list, classified_edges: dict) -> str:
     seen = {start}
     current = start
     while len(chain) < min(7, len(order)):
-        candidates = [(count, tgt) for tgt, count in outgoing.get(current, {}).items() if tgt not in seen]
+        candidates = [
+            (count, tgt) for tgt, count in outgoing.get(current, {}).items() if tgt not in seen
+        ]
         if candidates:
             _, nxt = max(candidates)
         else:
@@ -1386,9 +1665,14 @@ def derive_flow_chain(sections: list, classified_edges: dict) -> str:
     return " -> ".join(section_names.get(sid, sid) for sid in chain)
 
 
-def generate_overview_cards(meta: dict, report_text: str, sections: list,
-                            section_nodes_map: dict, classified_edges: dict,
-                            lang: str) -> str:
+def generate_overview_cards(
+    meta: dict,
+    report_text: str,
+    sections: list,
+    section_nodes_map: dict,
+    classified_edges: dict,
+    lang: str,
+) -> str:
     """Generate generic overview cards."""
     rows = []
     for sec in sections:
@@ -1402,14 +1686,18 @@ def generate_overview_cards(meta: dict, report_text: str, sections: list,
 
     flow = derive_flow_chain(sections, classified_edges)
     layer_title = pick_text(lang, "架构层次", "Architecture Layers")
-    layer_cols = pick_text(lang, "<tr><th>层</th><th>节点</th><th>社区</th></tr>", "<tr><th>Layer</th><th>Nodes</th><th>Communities</th></tr>")
+    layer_cols = pick_text(
+        lang,
+        "<tr><th>层</th><th>节点</th><th>社区</th></tr>",
+        "<tr><th>Layer</th><th>Nodes</th><th>Communities</th></tr>",
+    )
     flow_title = pick_text(lang, "核心数据流", "Core Flow")
     return f"""<div class="grid">
   <div class="card">
     <h4>{layer_title}</h4>
     <table style="width:100%;font-size:0.85rem;">
       {layer_cols}
-      {''.join(rows)}
+      {"".join(rows)}
     </table>
   </div>
   <div class="card">
@@ -1423,12 +1711,40 @@ def section_keywords(nodes: list, limit: int = 5) -> list:
     """Pick representative words from labels and file names."""
     counts = Counter()
     stopwords = {
-        "the", "and", "for", "with", "from", "this", "that", "class", "function",
-        "method", "file", "src", "lib", "core", "index", "main", "init", "py",
-        "ts", "tsx", "js", "jsx", "go", "rs", "java", "html", "css",
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+        "that",
+        "class",
+        "function",
+        "method",
+        "file",
+        "src",
+        "lib",
+        "core",
+        "index",
+        "main",
+        "init",
+        "py",
+        "ts",
+        "tsx",
+        "js",
+        "jsx",
+        "go",
+        "rs",
+        "java",
+        "html",
+        "css",
     }
     for node in nodes:
-        text = f"{node.get('label', '')} {node.get('source_file', '')}".replace("/", " ").replace("_", " ").replace("-", " ")
+        text = (
+            f"{node.get('label', '')} {node.get('source_file', '')}".replace("/", " ")
+            .replace("_", " ")
+            .replace("-", " ")
+        )
         for raw in text.split():
             word = "".join(ch for ch in raw.lower() if ch.isalnum())
             if len(word) < 3 or word in stopwords:
@@ -1477,10 +1793,16 @@ def generate_section_cards(sec: dict, nodes: list, section_edges: list, lang: st
     else:
         file_rows = f'<tr><td colspan="2">{escape(pick_text(lang, "无源文件映射", "No source file mapping"))}</td></tr>'
 
-    relation_counts = Counter(edge.get("relation", "relates") for edge in section_edges if should_include_edge(edge))
-    relation_text = ", ".join(f"{relation_label(rel, lang)} x{count}" for rel, count in relation_counts.most_common(4))
+    relation_counts = Counter(
+        edge.get("relation", "relates") for edge in section_edges if should_include_edge(edge)
+    )
+    relation_text = ", ".join(
+        f"{relation_label(rel, lang)} x{count}" for rel, count in relation_counts.most_common(4)
+    )
     if not relation_text:
-        relation_text = pick_text(lang, "未检测到高置信调用边", "No high-confidence call edges detected")
+        relation_text = pick_text(
+            lang, "未检测到高置信调用边", "No high-confidence call edges detected"
+        )
     note = pick_text(
         lang,
         f"本节由 graphify 社区聚类生成。关系概况：{relation_text}。图表优先展示高置信、跨节点调用或使用关系，完整节点清单位于表格中。",
@@ -1507,6 +1829,7 @@ def generate_section_cards(sec: dict, nodes: list, section_edges: list, lang: st
 # ──────────────────────────────────────────────
 # 8. Main entry point
 # ──────────────────────────────────────────────
+
 
 class CallflowOptions:
     """Options for call-flow architecture HTML generation."""
@@ -1617,27 +1940,39 @@ def write_callflow_html(
 
     # Load data
     nodes, edges, hyperedges, meta = load_graph(paths["graph"])
-    labels = load_labels(paths["labels"])
-    lang = detect_lang(args.lang, nodes, labels)
+    community_labels = load_labels(paths["labels"])
+    lang = detect_lang(args.lang, nodes, community_labels)
     if paths["sections"]:
-        sections = load_sections(paths["sections"])
+        loaded_sections = load_sections(paths["sections"])
     else:
-        sections = derive_sections_from_communities(nodes, labels, lang, args.max_sections)
-    sections = normalize_sections(sections, lang)
+        loaded_sections = derive_sections_from_communities(
+            nodes, community_labels, lang, args.max_sections
+        )
+    resolved_sections = normalize_sections(loaded_sections, lang)
     report_text = load_report(paths["report"])
 
     if not nodes:
         raise ValueError("graph.json contains 0 nodes")
-    if len(sections) <= 1:
+    if len(resolved_sections) <= 1:
         raise ValueError("no sections defined")
 
     if verbose and len(nodes) >= 5000:
-        print("WARNING: Large graph -- Mermaid rendering may be slow. Consider --max-sections 5.", file=sys.stderr)
+        print(
+            "WARNING: Large graph -- Mermaid rendering may be slow. Consider --max-sections 5.",
+            file=sys.stderr,
+        )
 
     node_ids = {node.get("id") for node in nodes}
-    missing_endpoint_edges = [edge for edge in edges if edge.get("source") not in node_ids or edge.get("target") not in node_ids]
+    missing_endpoint_edges = [
+        edge
+        for edge in edges
+        if edge.get("source") not in node_ids or edge.get("target") not in node_ids
+    ]
     if verbose and missing_endpoint_edges:
-        print(f"WARNING: {len(missing_endpoint_edges)} edges reference nodes not present in graph.json.", file=sys.stderr)
+        print(
+            f"WARNING: {len(missing_endpoint_edges)} edges reference nodes not present in graph.json.",
+            file=sys.stderr,
+        )
 
     meta["project_name"] = infer_project_name(str(paths["graph"]), meta)
     meta["node_count"] = len(nodes)
@@ -1652,13 +1987,13 @@ def write_callflow_html(
         output_path = paths["graphify_out"] / f"{safe_filename(meta['project_name'])}-callflow.html"
 
     if verbose:
-        print(f"Loaded: {len(nodes)} nodes, {len(edges)} edges, {len(sections)} sections")
+        print(f"Loaded: {len(nodes)} nodes, {len(edges)} edges, {len(resolved_sections)} sections")
         print(f"Graph: {paths['graph']}")
 
     # Build index
     comm_idx = build_community_index(nodes)
     meta["community_count"] = len(comm_idx)
-    section_nodes_map = build_section_node_map(sections, comm_idx)
+    section_nodes_map = build_section_node_map(resolved_sections, comm_idx)
     classified = classify_edges(edges, section_nodes_map)
 
     # Build HTML
@@ -1686,19 +2021,36 @@ def write_callflow_html(
 """)
 
     # Header + nav
-    html.append(generate_header(sections, meta, lang))
+    html.append(generate_header(resolved_sections, meta, lang))
 
     # ── Architecture Overview (Section "overview") ──
-    overview_name = sections[0].get("name", "Architecture Overview") if sections else "Architecture Overview"
+    overview_name = (
+        resolved_sections[0].get("name", "Architecture Overview")
+        if resolved_sections
+        else "Architecture Overview"
+    )
     html.append(f"""<!-- ====== Architecture Overview ====== -->
 <h2 id="overview">1. {escape(str(overview_name))}</h2>
 
 <div class="mermaid">
 """)
-    html.append(generate_overview_graph(sections, section_nodes_map, classified, labels, lang, args.diagram_scale))
+    html.append(
+        generate_overview_graph(
+            resolved_sections,
+            section_nodes_map,
+            classified,
+            community_labels,
+            lang,
+            args.diagram_scale,
+        )
+    )
     html.append("""</div>
 """)
-    html.append(generate_overview_cards(meta, report_text, sections, section_nodes_map, classified, lang))
+    html.append(
+        generate_overview_cards(
+            meta, report_text, resolved_sections, section_nodes_map, classified, lang
+        )
+    )
     report_card = _report_highlights(report_text, lang)
     if report_card:
         html.append(f'<div class="grid">\n  {report_card}\n</div>')
@@ -1706,7 +2058,7 @@ def write_callflow_html(
 
     # ── Per-section content ──
     section_num = 1  # overview was #1
-    for sec in sections:
+    for sec in resolved_sections:
         if sec["id"] == "overview":
             continue
         section_num += 1
@@ -1771,7 +2123,7 @@ def write_callflow_html(
         html.append("</div>\n<hr>")
 
     # ── Section: Statistics ──
-    total_sections = sum(1 for s in sections if s["id"] != "overview")
+    total_sections = sum(1 for s in resolved_sections if s["id"] != "overview")
     html.append(f"""<h2 id="stats">Project Statistics</h2>
 
 <div class="grid">
@@ -1788,9 +2140,9 @@ def write_callflow_html(
   <div class="card">
     <h4>Edge Confidence</h4>
     <table style="width:100%;font-size:0.85rem;">
-      <tr><td>EXTRACTED</td><td>{sum(1 for e in edges if e.get('confidence') == 'EXTRACTED')}</td></tr>
-      <tr><td>INFERRED</td><td>{sum(1 for e in edges if e.get('confidence') == 'INFERRED')}</td></tr>
-      <tr><td>AMBIGUOUS</td><td>{sum(1 for e in edges if e.get('confidence') == 'AMBIGUOUS')}</td></tr>
+      <tr><td>EXTRACTED</td><td>{sum(1 for e in edges if e.get("confidence") == "EXTRACTED")}</td></tr>
+      <tr><td>INFERRED</td><td>{sum(1 for e in edges if e.get("confidence") == "INFERRED")}</td></tr>
+      <tr><td>AMBIGUOUS</td><td>{sum(1 for e in edges if e.get("confidence") == "AMBIGUOUS")}</td></tr>
     </table>
   </div>
 </div>
@@ -1798,8 +2150,8 @@ def write_callflow_html(
 
     # ── Footer ──
     html.append(f"""<div style="text-align:center; padding:40px 0; color: var(--muted); font-size:0.9rem;">
-  <p>{escape(str(meta.get('project_name', 'Project')))} — Architecture Documentation</p>
-  <p>Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} · graphify callflow-html</p>
+  <p>{escape(str(meta.get("project_name", "Project")))} — Architecture Documentation</p>
+  <p>Generated: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")} · graphify callflow-html</p>
 </div>
 """)
 
@@ -1969,11 +2321,13 @@ def write_callflow_html(
     # Summary
     mermaid_count = output.count('<div class="mermaid">')
     table_count = output.count('<table class="call-table">')
-    section_count = output.count('<h2 id=')
+    section_count = output.count("<h2 id=")
 
     if verbose:
         print(f"Call-flow HTML written: {output_path}")
-        print(f"  Sections: {section_count}  |  Mermaid diagrams: {mermaid_count}  |  Call tables: {table_count}")
+        print(
+            f"  Sections: {section_count}  |  Mermaid diagrams: {mermaid_count}  |  Call tables: {table_count}"
+        )
         print("  Diagrams use Mermaid init directives plus interactive zoom/pan controls.")
 
     return output_path
@@ -1983,18 +2337,44 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate call-flow architecture HTML from graphify knowledge graph outputs"
     )
-    parser.add_argument("project", nargs="?", default=None, help="Project root or graphify output directory")
+    parser.add_argument(
+        "project", nargs="?", default=None, help="Project root or graphify output directory"
+    )
     parser.add_argument("--graphify-out", default=None, help="Path to graphify output directory")
     parser.add_argument("--graph", default=None, help="Path to graph.json")
     parser.add_argument("--report", default=None, help="Path to GRAPH_REPORT.md")
     parser.add_argument("--labels", default=None, help="Path to .graphify_labels.json")
-    parser.add_argument("--sections", default=None, help="Path to sections JSON file; auto-derived when omitted")
+    parser.add_argument(
+        "--sections", default=None, help="Path to sections JSON file; auto-derived when omitted"
+    )
     parser.add_argument("--output", default=None, help="Output HTML path")
-    parser.add_argument("--lang", default="auto", help="HTML language: auto, zh-CN, en, etc. (default: auto)")
-    parser.add_argument("--max-sections", type=int, default=15, help="Maximum auto-derived sections, excluding overview")
-    parser.add_argument("--diagram-scale", type=float, default=1.0, help="Mermaid-native diagram scale via init directive (0.65-1.8)")
-    parser.add_argument("--max-diagram-nodes", type=int, default=18, help="Maximum representative nodes per section diagram")
-    parser.add_argument("--max-diagram-edges", type=int, default=24, help="Maximum representative edges per section diagram")
+    parser.add_argument(
+        "--lang", default="auto", help="HTML language: auto, zh-CN, en, etc. (default: auto)"
+    )
+    parser.add_argument(
+        "--max-sections",
+        type=int,
+        default=15,
+        help="Maximum auto-derived sections, excluding overview",
+    )
+    parser.add_argument(
+        "--diagram-scale",
+        type=float,
+        default=1.0,
+        help="Mermaid-native diagram scale via init directive (0.65-1.8)",
+    )
+    parser.add_argument(
+        "--max-diagram-nodes",
+        type=int,
+        default=18,
+        help="Maximum representative nodes per section diagram",
+    )
+    parser.add_argument(
+        "--max-diagram-edges",
+        type=int,
+        default=24,
+        help="Maximum representative edges per section diagram",
+    )
     args = parser.parse_args()
 
     try:

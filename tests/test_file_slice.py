@@ -18,6 +18,7 @@ from graphify.file_slice import (
 
 # ── slice_boundaries: coverage + bounds invariants ──────────────────────────
 
+
 def test_slice_boundaries_small_text_is_one_range():
     text = "short doc"
     assert slice_boundaries(text, 100) == [(0, len(text))]
@@ -53,10 +54,11 @@ def test_slice_boundaries_prefers_heading_boundary():
     bounds = slice_boundaries(text, len(a) + 5)  # forces a split near the A/B seam
     # the second slice should start at the "# B" heading
     second_start = bounds[1][0]
-    assert text[second_start:second_start + 3] == "# B"
+    assert text[second_start : second_start + 3] == "# B"
 
 
 # ── expand_oversized_files ──────────────────────────────────────────────────
+
 
 def _write(p: Path, text: str) -> Path:
     p.write_text(text, encoding="utf-8")
@@ -99,8 +101,10 @@ def test_expand_unreadable_file_passes_through(tmp_path):
 
 # ── anti-fragmentation: slices share one source_file in the prompt ──────────
 
+
 def test_read_files_keys_every_slice_to_parent_path(tmp_path):
     import re
+
     text = ("# H\n\n" + "lorem " * 300 + "\n\n") * 20
     f = _write(tmp_path / "doc.md", text)
     units = expand_oversized_files([f], max_chars=llm._FILE_CHAR_CAP)
@@ -113,6 +117,7 @@ def test_read_files_keys_every_slice_to_parent_path(tmp_path):
 
 
 # ── unit helpers, estimation, partition, packing ────────────────────────────
+
 
 def test_unit_path_resolves_slice_and_path(tmp_path):
     f = tmp_path / "a.md"
@@ -148,6 +153,7 @@ def test_pack_chunks_handles_slices(tmp_path):
 
 
 # ── bisect_slice (adaptive-retry path) ──────────────────────────────────────
+
 
 def test_bisect_slice_splits_at_newline(tmp_path):
     f = _write(tmp_path / "a.md", "alpha\n" * 100)

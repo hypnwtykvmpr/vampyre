@@ -2,14 +2,15 @@
   <a href="https://graphifylabs.ai"><img src="https://raw.githubusercontent.com/safishamsi/graphify/v4/docs/logo-text.svg" width="260" height="64" alt="Graphify"/></a>
 </p>
 
+> **Vampyre fork:** This translation covers upstream-derived features and may lag behind the active fork. The English README is authoritative for current behavior and installation. Install Vampyre from the `v9` branch; the `graphifyy` registry package is upstream Graphify, not this fork.
+
 <p align="center">
   🇺🇸 <a href="../../README.md">English</a> | 🇨🇳 <a href="README.zh-CN.md">简体中文</a> | 🇯🇵 <a href="README.ja-JP.md">日本語</a> | 🇰🇷 <a href="README.ko-KR.md">한국어</a> | 🇩🇪 <a href="README.de-DE.md">Deutsch</a> | 🇫🇷 <a href="README.fr-FR.md">Français</a> | 🇪🇸 <a href="README.es-ES.md">Español</a> | 🇮🇳 <a href="README.hi-IN.md">हिन्दी</a> | 🇧🇷 <a href="README.pt-BR.md">Português</a> | 🇷🇺 <a href="README.ru-RU.md">Русский</a> | 🇸🇦 <a href="README.ar-SA.md">العربية</a> | 🇮🇷 <a href="README.fa-IR.md">فارسی</a> | 🇮🇹 <a href="README.it-IT.md">Italiano</a> | 🇵🇱 <a href="README.pl-PL.md">Polski</a> | 🇳🇱 <a href="README.nl-NL.md">Nederlands</a> | 🇹🇷 <a href="README.tr-TR.md">Türkçe</a> | 🇺🇦 <a href="README.uk-UA.md">Українська</a> | 🇻🇳 <a href="README.vi-VN.md">Tiếng Việt</a> | 🇮🇩 <a href="README.id-ID.md">Bahasa Indonesia</a> | 🇸🇪 <a href="README.sv-SE.md">Svenska</a> | 🇬🇷 <a href="README.el-GR.md">Ελληνικά</a> | 🇷🇴 <a href="README.ro-RO.md">Română</a> | 🇨🇿 <a href="README.cs-CZ.md">Čeština</a> | 🇫🇮 <a href="README.fi-FI.md">Suomi</a> | 🇩🇰 <a href="README.da-DK.md">Dansk</a> | 🇳🇴 <a href="README.no-NO.md">Norsk</a> | 🇭🇺 <a href="README.hu-HU.md">Magyar</a> | 🇹🇭 <a href="README.th-TH.md">ภาษาไทย</a> | 🇺🇿 <a href="README.uz-UZ.md">Oʻzbekcha</a> | 🇹🇼 <a href="README.zh-TW.md">繁體中文</a> | 🇵🇭 <a href="README.fil-PH.md">Filipino</a>
 </p>
 
 <p align="center">
   <a href="https://www.ycombinator.com/companies/graphify"><img src="https://img.shields.io/badge/Y%20Combinator-S26-F0652F?style=flat&logo=ycombinator&logoColor=white" alt="YC S26"/></a>
-  <a href="https://github.com/safishamsi/graphify/actions/workflows/ci.yml"><img src="https://github.com/safishamsi/graphify/actions/workflows/ci.yml/badge.svg?branch=v8" alt="CI"/></a>
-  <a href="https://pypi.org/project/graphifyy/"><img src="https://img.shields.io/pypi/v/graphifyy" alt="PyPI"/></a>
+  <a href="https://github.com/hypnwtykvmpr/vampyre/actions/workflows/ci.yml"><img src="https://github.com/hypnwtykvmpr/vampyre/actions/workflows/ci.yml/badge.svg?branch=v9" alt="CI"/></a>
   <a href="https://pepy.tech/project/graphifyy"><img src="https://img.shields.io/pepy/dt/graphifyy?color=blue&label=downloads" alt="Downloads"/></a>
   <a href="https://github.com/sponsors/safishamsi"><img src="https://img.shields.io/badge/sponsor-safishamsi-ea4aaa?logo=github-sponsors" alt="Sponsor"/></a>
   <a href="https://www.linkedin.com/company/graphify-labs"><img src="https://img.shields.io/badge/LinkedIn-Graphify%20Labs-0077B5?logo=linkedin" alt="LinkedIn"/></a>
@@ -65,7 +66,6 @@ graphify export callflow-html
 |---|---|---|---|
 | Python | ۳.۱۰+ | `python --version` | [python.org](https://www.python.org/downloads/) |
 | uv *(پیشنهادی)* | هر نسخه | `uv --version` | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| pipx *(جایگزین)* | هر نسخه | `pipx --version` | `pip install pipx` |
 
 <div dir="rtl">
 
@@ -94,7 +94,6 @@ winget install astral-sh.uv
 </div>
 
 ```bash
-sudo apt install python3.12 python3-pip pipx
 # یا نصب uv:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
@@ -105,7 +104,6 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## نصب
 
-> **بسته رسمی:** بسته PyPI به نام `graphifyy` است (با دو y). سایر بسته‌های `graphify*` در PyPI وابسته به این پروژه نیستند. دستور CLI همچنان `graphify` است.
 
 **مرحله ۱ — نصب بسته:**
 
@@ -113,11 +111,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ```bash
 # پیشنهادی (uv به‌طور خودکار graphify را در PATH قرار می‌دهد):
-uv tool install graphifyy
+uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
 
 # جایگزین‌ها:
-pipx install graphifyy
-pip install graphifyy  # ممکن است نیاز به تنظیم PATH داشته باشد — یادداشت زیر را ببینید
 ```
 
 <div dir="rtl">
@@ -147,7 +143,6 @@ graphify install --project --platform codex
 
 > **یادداشت PowerShell:** از `graphify .` استفاده کنید نه `/graphify .` — اسلش ابتدایی در PowerShell جداکننده مسیر است.
 
-> **`graphify: command not found`؟** از `uv tool install graphifyy` یا `pipx install graphifyy` استفاده کنید — هر دو CLI را به‌طور خودکار در PATH قرار می‌دهند.
 
 ### انتخاب پلتفرم
 
@@ -188,19 +183,19 @@ graphify install --project --platform codex
 
 | افزونه | چه چیزی اضافه می‌کند | نصب |
 |---|---|---|
-| `pdf` | استخراج PDF | `uv tool install "graphifyy[pdf]"` |
-| `office` | پشتیبانی از `.docx` و `.xlsx` | `uv tool install "graphifyy[office]"` |
-| `google` | رندرینگ Google Sheets | `uv tool install "graphifyy[google]"` |
-| `video` | رونویسی ویدئو/صوت | `uv tool install "graphifyy[video]"` |
-| `mcp` | سرور MCP stdio | `uv tool install "graphifyy[mcp]"` |
-| `neo4j` | پشتیبانی از Neo4j | `uv tool install "graphifyy[neo4j]"` |
-| `ollama` | استنتاج محلی Ollama | `uv tool install "graphifyy[ollama]"` |
-| `openai` | OpenAI / APIهای سازگار با OpenAI | `uv tool install "graphifyy[openai]"` |
-| `gemini` | Google Gemini API | `uv tool install "graphifyy[gemini]"` |
-| `anthropic` | Anthropic Claude API | `uv tool install "graphifyy[anthropic]"` |
-| `bedrock` | AWS Bedrock (از IAM استفاده می‌کند) | `uv tool install "graphifyy[bedrock]"` |
-| `sql` | استخراج طرح SQL | `uv tool install "graphifyy[sql]"` |
-| `all` | همه موارد بالا | `uv tool install "graphifyy[all]"` |
+| `pdf` | استخراج PDF | `uv tool install --force "graphifyy[pdf] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `office` | پشتیبانی از `.docx` و `.xlsx` | `uv tool install --force "graphifyy[office] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `google` | رندرینگ Google Sheets | `uv tool install --force "graphifyy[google] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `video` | رونویسی ویدئو/صوت | `uv tool install --force "graphifyy[video] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `mcp` | سرور MCP stdio | `uv tool install --force "graphifyy[mcp] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `neo4j` | پشتیبانی از Neo4j | `uv tool install --force "graphifyy[neo4j] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `ollama` | استنتاج محلی Ollama | `uv tool install --force "graphifyy[ollama] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `openai` | OpenAI / APIهای سازگار با OpenAI | `uv tool install --force "graphifyy[openai] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `gemini` | Google Gemini API | `uv tool install --force "graphifyy[gemini] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `anthropic` | Anthropic Claude API | `uv tool install --force "graphifyy[anthropic] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `bedrock` | AWS Bedrock (از IAM استفاده می‌کند) | `uv tool install --force "graphifyy[bedrock] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `sql` | استخراج طرح SQL | `uv tool install --force "graphifyy[sql] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `all` | همه موارد بالا | `uv tool install --force "graphifyy[all] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
 
 ---
 
@@ -405,11 +400,9 @@ python -m graphify.serve graphify-out/graph.json --transport http --host 0.0.0.0
 
 ## عیب‌یابی
 
-**`graphify: command not found` پس از `pip install graphifyy`**
 pip اسکریپت‌ها را در دایرکتوری bin کاربر نصب می‌کند که ممکن است در PATH نباشد:
 - macOS: `~/Library/Python/3.x/bin` را به PATH در `~/.zshrc` اضافه کنید
 - Linux: `~/.local/bin` را به PATH در `~/.bashrc` اضافه کنید
-- یا از `uv tool install graphifyy` / `pipx install graphifyy` استفاده کنید.
 
 **`/graphify .` در PowerShell "path not recognized" نشان می‌دهد**
 PowerShell `/` ابتدایی را به‌عنوان جداکننده مسیر در نظر می‌گیرد. از `graphify .` (بدون اسلش) در Windows استفاده کنید.
@@ -533,7 +526,7 @@ graphify --version
 </div>
 
 ```bash
-git clone https://github.com/safishamsi/graphify.git
+git clone https://github.com/hypnwtykvmpr/vampyre.git
 cd graphify
 git checkout v8                        # شاخه توسعه فعال
 

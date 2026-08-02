@@ -5,6 +5,7 @@ affected.load_graph (`graphify prs`), and diagnostics._read_json_file
 (`graphify diagnose`). A truncated / invalid file (incomplete write, power loss,
 manual edit) must raise a clear RuntimeError with recovery guidance at each.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -13,7 +14,7 @@ from graphify.build import build_merge
 from graphify.affected import load_graph
 from graphify.diagnostics import _read_json_file
 
-_CORRUPT = '{"nodes": [{"id": "a", "labe'   # truncated mid-object
+_CORRUPT = '{"nodes": [{"id": "a", "labe'  # truncated mid-object
 
 
 def _corrupt(tmp_path):

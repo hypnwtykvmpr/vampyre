@@ -13,12 +13,14 @@ the canonical id and merge at build time).
 Mirrors ``mcp_ingest``: recognized by filename, routed to the deterministic AST
 path (never the LLM), so a manifest is extracted exactly once.
 """
+
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
+
+from defusedxml import ElementTree as ET
 
 from graphify.ids import make_id
 
@@ -71,7 +73,7 @@ def extract_package_manifest(path: Path) -> dict[str, Any]:
     node: dict[str, Any] = {
         "id": pkg_nid,
         "label": name,
-        "file_type": "code",   # valid schema type; `type` distinguishes packages
+        "file_type": "code",  # valid schema type; `type` distinguishes packages
         "type": "package",
         "ecosystem": eco,
         "source_file": str_path,
@@ -95,21 +97,24 @@ def extract_package_manifest(path: Path) -> dict[str, Any]:
         # the dependency is external, build_from_json prunes the dangling edge. We
         # deliberately do NOT emit a stub node — a stub with an empty source_file
         # would risk clobbering the real node's source_file under id-dedup.
-        edges.append({
-            "source": pkg_nid,
-            "target": dep_nid,
-            "relation": "depends_on",
-            "context": "dependency",
-            "confidence": "EXTRACTED",
-            "confidence_score": 1.0,
-            "source_file": str_path,
-            "source_location": "L1",
-            "weight": 1.0,
-        })
+        edges.append(
+            {
+                "source": pkg_nid,
+                "target": dep_nid,
+                "relation": "depends_on",
+                "context": "dependency",
+                "confidence": "EXTRACTED",
+                "confidence_score": 1.0,
+                "source_file": str_path,
+                "source_location": "L1",
+                "weight": 1.0,
+            }
+        )
     return {"nodes": nodes, "edges": edges}
 
 
 # ── per-ecosystem parsers: text -> {"name", "version"?, "deps": [str]} | None ──
+
 
 def _coerce_deps(value: Any) -> list[str]:
     """A dependency block may be a list of names or a name->spec map."""
@@ -153,22 +158,23 @@ def _parse_apm_fallback(text: str) -> dict | None:
             if m:
                 name = m.group(1)
                 continue
-        if re.match(r'^dependencies:\s*$', line):
+        if re.match(r"^dependencies:\s*$", line):
             in_deps = True
             continue
         if in_deps:
-            dm = (re.match(r'^\s*-\s*["\']?([^"\'\s#:]+)', line)
-                  or re.match(r'^\s{2,}([A-Za-z0-9._/@-]+)\s*:', line))
+            dm = re.match(r'^\s*-\s*["\']?([^"\'\s#:]+)', line) or re.match(
+                r"^\s{2,}([A-Za-z0-9._/@-]+)\s*:", line
+            )
             if dm:
                 deps.append(dm.group(1))
-            elif re.match(r'^\S', line):  # next top-level key ends the block
+            elif re.match(r"^\S", line):  # next top-level key ends the block
                 in_deps = False
     return {"name": name, "version": None, "deps": deps} if name else None
 
 
 def _pep508_name(spec: str) -> str:
     """`requests>=2.0` -> `requests`; `pkg[extra]==1; python_version<'3.9'` -> `pkg`."""
-    return re.split(r'[\s<>=!~;\[\(]', spec.strip(), maxsplit=1)[0]
+    return re.split(r"[\s<>=!~;\[\(]", spec.strip(), maxsplit=1)[0]
 
 
 def _parse_pyproject(text: str) -> dict | None:
@@ -181,16 +187,25 @@ def _parse_pyproject(text: str) -> dict | None:
             return None
     data = _toml.loads(text)
     proj = data.get("project", {}) if isinstance(data.get("project"), dict) else {}
-    poetry = (data.get("tool", {}) or {}).get("poetry", {}) if isinstance(data.get("tool"), dict) else {}
+    poetry = (
+        (data.get("tool", {}) or {}).get("poetry", {}) if isinstance(data.get("tool"), dict) else {}
+    )
     name = proj.get("name") or (poetry.get("name") if isinstance(poetry, dict) else None)
     if not name:
         return None
-    deps: list[str] = [_pep508_name(s) for s in (proj.get("dependencies") or []) if isinstance(s, str)]
+    deps: list[str] = [
+        _pep508_name(s) for s in (proj.get("dependencies") or []) if isinstance(s, str)
+    ]
     if isinstance(poetry, dict):
-        for dep in (poetry.get("dependencies") or {}):
+        for dep in poetry.get("dependencies") or {}:
             if str(dep).lower() != "python":
                 deps.append(str(dep))
-    return {"name": name, "version": proj.get("version") or (poetry.get("version") if isinstance(poetry, dict) else None), "deps": deps}
+    return {
+        "name": name,
+        "version": proj.get("version")
+        or (poetry.get("version") if isinstance(poetry, dict) else None),
+        "deps": deps,
+    }
 
 
 def _parse_gomod(text: str) -> dict | None:
@@ -200,22 +215,22 @@ def _parse_gomod(text: str) -> dict | None:
     for line in text.splitlines():
         s = line.strip()
         if name is None:
-            m = re.match(r'^module\s+(\S+)', s)
+            m = re.match(r"^module\s+(\S+)", s)
             if m:
                 name = m.group(1)
                 continue
-        if re.match(r'^require\s*\(', s):
+        if re.match(r"^require\s*\(", s):
             in_block = True
             continue
         if in_block:
-            if s.startswith(')'):
+            if s.startswith(")"):
                 in_block = False
                 continue
-            dm = re.match(r'^(\S+)\s+v\S+', s)
+            dm = re.match(r"^(\S+)\s+v\S+", s)
             if dm:
                 deps.append(dm.group(1))
         else:
-            dm = re.match(r'^require\s+(\S+)\s+v\S+', s)
+            dm = re.match(r"^require\s+(\S+)\s+v\S+", s)
             if dm:
                 deps.append(dm.group(1))
     return {"name": name, "version": None, "deps": deps} if name else None
@@ -223,7 +238,7 @@ def _parse_gomod(text: str) -> dict | None:
 
 def _parse_pom(text: str) -> dict | None:
     # Drop the default namespace so findtext/findall don't need the {uri} prefix.
-    text = re.sub(r'\sxmlns="[^"]*"', '', text, count=1)
+    text = re.sub(r'\sxmlns="[^"]*"', "", text, count=1)
     root = ET.fromstring(text)
     aid = root.findtext("artifactId")
     gid = root.findtext("groupId")

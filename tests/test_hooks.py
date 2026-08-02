@@ -1,4 +1,5 @@
 """Tests for hooks.py - git hook install/uninstall."""
+
 import os
 import subprocess
 from types import SimpleNamespace
@@ -120,7 +121,6 @@ def test_status_shows_both_hooks(tmp_path):
     assert result.count("installed") >= 2
 
 
-
 def test_hooks_dir_resolves_relative_git_hooks_path(tmp_path, monkeypatch):
     repo = _make_git_repo(tmp_path)
 
@@ -155,24 +155,28 @@ def test_hooks_dir_accepts_absolute_git_hooks_path(tmp_path, monkeypatch):
 
     assert _hooks_dir(repo) == hooks.resolve()
 
+
 def test_hook_skips_head_on_exe():
     """Hook script must skip shebang extraction for .exe binaries (Windows)."""
     from graphify.hooks import _PYTHON_DETECT
-    assert "*.exe) _SHEBANG=" in _PYTHON_DETECT or '*.exe)' in _PYTHON_DETECT
+
+    assert "*.exe) _SHEBANG=" in _PYTHON_DETECT or "*.exe)" in _PYTHON_DETECT
 
 
 def test_install_embeds_pinned_interpreter(tmp_path):
     """Hook scripts must embed sys.executable so the hook works without the
-    graphify launcher on PATH (uv tool / pipx isolation, #1127).
+    graphify launcher on PATH (managed-tool isolation, #1127).
 
-    When graphify is installed via `uv tool install graphifyy` or `pipx install
-    graphifyy`, the interpreter lives in an isolated venv and the launcher is in
+    When graphify is installed as an isolated uv tool, the interpreter lives in
+    an isolated venv and the launcher is in
     ~/.local/bin.  GUI git clients and CI runners often run with a minimal PATH
     that omits that directory, so `command -v graphify` fails, the python3/python
     fallbacks cannot import graphify (wrong venv), and the hook silently exits 0.
     Pinning sys.executable at install time makes the hook work regardless of PATH.
     """
-    import re, sys
+    import re
+    import sys
+
     repo = _make_git_repo(tmp_path)
     install(repo)
     commit_hook = (repo / ".git" / "hooks" / "post-commit").read_text()
@@ -194,6 +198,7 @@ def test_install_fallback_is_loud_not_silent(tmp_path):
     that the hook ran but found nothing, making the bug extremely hard to diagnose.
     """
     from graphify.hooks import _PYTHON_DETECT
+
     assert "could not locate" in _PYTHON_DETECT, (
         "fallback branch must print a diagnostic message; bare 'exit 0' is silent and unhelpful"
     )
@@ -202,6 +207,7 @@ def test_install_fallback_is_loud_not_silent(tmp_path):
 def test_hook_check_no_additionalContext(tmp_path):
     """graphify hook-check must not emit additionalContext — Codex Desktop rejects it."""
     import sys
+
     out = tmp_path / "graphify-out"
     out.mkdir()
     (out / "graph.json").write_text("{}", encoding="utf-8")
@@ -329,9 +335,7 @@ def test_rebuild_bodies_with_graphify_root_are_valid_python():
 
 
 @pytest.mark.parametrize("body", [_REBUILD_BODY_COMMIT, _REBUILD_BODY_CHECKOUT])
-def test_rebuild_bodies_resolve_portable_marker_from_unrelated_cwd(
-    body, tmp_path, monkeypatch
-):
+def test_rebuild_bodies_resolve_portable_marker_from_unrelated_cwd(body, tmp_path, monkeypatch):
     import graphify.watch as watch
 
     source_root = tmp_path / "project" / "Sources"
@@ -339,9 +343,7 @@ def test_rebuild_bodies_resolve_portable_marker_from_unrelated_cwd(
     output = tmp_path / "canonical" / "graphify-out"
     output.mkdir(parents=True)
     relative = os.path.relpath(source_root, output).replace(os.sep, "/")
-    (output / ".graphify_root").write_text(
-        f"marker-relative:{relative}", encoding="utf-8"
-    )
+    (output / ".graphify_root").write_text(f"marker-relative:{relative}", encoding="utf-8")
     unrelated = tmp_path / "unrelated"
     unrelated.mkdir()
     captured: list[Path] = []
@@ -382,17 +384,24 @@ def test_installed_hooks_contain_no_nohup(tmp_path):
 
 # ── #1385: reject Windows-style hooks paths instead of creating a junk dir ───
 
+
 def _set_hookspath(repo: Path, value: str) -> None:
-    subprocess.run(["git", "-C", str(repo), "config", "--local", "core.hooksPath", value],
-                   check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "--local", "core.hooksPath", value],
+        check=True,
+        capture_output=True,
+    )
 
 
-@pytest.mark.parametrize("winpath", [
-    r"C:\Users\u\repo\.git\hooks",
-    r"c:/Users/u/.git/hooks",
-    r"D:\hooks",
-    r"some\back\slashed\path",
-])
+@pytest.mark.parametrize(
+    "winpath",
+    [
+        r"C:\Users\u\repo\.git\hooks",
+        r"c:/Users/u/.git/hooks",
+        r"D:\hooks",
+        r"some\back\slashed\path",
+    ],
+)
 def test_windows_hookspath_rejected_no_junk_dir_on_posix(tmp_path, monkeypatch, winpath):
     """A Windows-style core.hooksPath must raise (loud failure), not silently
     create a backslash-named junk directory and report success on POSIX/WSL (#1385)."""
@@ -424,6 +433,7 @@ def test_default_hooks_dir_unaffected(tmp_path):
 
 # ── foreground hook cost: probes must be cheap and quiet ─────────────────────
 
+
 def test_probes_use_find_spec_not_full_import():
     """`python -c "import graphify"` executes the FULL package import — 10s+ on a
     cold cache or AV-scanned site-packages — and could run up to four times
@@ -432,6 +442,7 @@ def test_probes_use_find_spec_not_full_import():
     importlib.util.find_spec (no execution); the detached rebuild still reports
     a broken install loudly in its log."""
     from graphify.hooks import _PYTHON_DETECT
+
     assert '-c "import graphify"' not in _PYTHON_DETECT, (
         "interpreter probe still imports the full package in the hook foreground"
     )
@@ -445,6 +456,7 @@ def test_shebang_read_is_null_byte_safe():
     the extracted garbage always falls through to the slow fallbacks. The read
     must strip NULs before the command substitution sees them."""
     from graphify.hooks import _PYTHON_DETECT
+
     assert "tr -d '\\000'" in _PYTHON_DETECT, "shebang read is not NUL-safe"
 
 
@@ -453,6 +465,7 @@ def test_probe_prefers_sibling_python_exe_on_windows_layouts():
     .\\python.exe in a venv). Resolving that directly beats shebang-parsing a
     binary launcher — and works whether or not command -v kept the suffix."""
     from graphify.hooks import _PYTHON_DETECT
+
     assert "/../python.exe" in _PYTHON_DETECT
     assert "/python.exe" in _PYTHON_DETECT
 

@@ -9,6 +9,7 @@ They also pin the soundness guards: an argument that is a PARAMETER or a LOCAL b
 enclosing function is a local value, not the module-level function it shares a name with, and a
 non-callable same-named node is never a dispatch target — neither may manufacture an edge.
 """
+
 import os
 from pathlib import Path
 
@@ -17,7 +18,7 @@ import networkx as nx
 from graphify.affected import affected_nodes
 from graphify.extract import extract, extract_python
 
-SRC = '''\
+SRC = """\
 import threading
 
 
@@ -39,13 +40,13 @@ def via_thread():
 
 def via_map(xs):
     return map(handler, xs)                    # indirect: map(fn, xs)
-'''
+"""
 
 
 def _build(tmp_path):
     (tmp_path / "dispatch.py").write_text(SRC)
     r = extract_python(tmp_path / "dispatch.py")
-    nid = {n["label"].rstrip("()"): n["id"] for n in r["nodes"]}   # labels are "handler()"
+    nid = {n["label"].rstrip("()"): n["id"] for n in r["nodes"]}  # labels are "handler()"
     return r, nid
 
 
@@ -91,6 +92,7 @@ def test_affected_includes_indirect_callers(tmp_path):
 
 # ── Soundness: the guards that kill the PR's false positives ──────────────────
 
+
 def _extract(tmp_path, src):
     (tmp_path / "m.py").write_text(src)
     r = extract_python(tmp_path / "m.py")
@@ -98,14 +100,14 @@ def _extract(tmp_path, src):
     return r, nid
 
 
-PARAM_SHADOW = '''\
+PARAM_SHADOW = """\
 def handler():
     return 1
 
 
 def via(pool, handler):
     pool.submit(handler)        # `handler` is a PARAMETER, not the module fn
-'''
+"""
 
 
 def test_param_shadow_emits_no_indirect_call(tmp_path):
@@ -116,7 +118,7 @@ def test_param_shadow_emits_no_indirect_call(tmp_path):
     assert all(t != nid["handler"] for _s, t in indirect)
 
 
-LOCAL_SHADOW = '''\
+LOCAL_SHADOW = """\
 def handler():
     return 1
 
@@ -128,7 +130,7 @@ def make():
 def via(pool):
     handler = make()            # `handler` is a LOCAL binding, not the module fn
     pool.submit(handler)
-'''
+"""
 
 
 def test_local_assignment_shadow_emits_no_indirect_call(tmp_path):
@@ -138,7 +140,7 @@ def test_local_assignment_shadow_emits_no_indirect_call(tmp_path):
     assert all(t != nid["handler"] for _s, t in indirect)
 
 
-DATA_VAR = '''\
+DATA_VAR = """\
 def config():
     return {"k": "v"}
 
@@ -150,7 +152,7 @@ def process(x):
 def use():
     config = {"k": "v"}         # local DATA var that happens to match `config()`
     process(config)             # arg resolves to a non-callable local, not the fn
-'''
+"""
 
 
 def test_data_var_matching_function_name_emits_no_indirect_call(tmp_path):
@@ -160,14 +162,14 @@ def test_data_var_matching_function_name_emits_no_indirect_call(tmp_path):
     assert (nid["use"], nid["config"]) not in indirect
 
 
-REAL_PASS = '''\
+REAL_PASS = """\
 def handler():
     return 1
 
 
 def via(pool):
     pool.submit(handler)        # genuine module-level fn passed by name
-'''
+"""
 
 
 def test_genuine_module_function_still_emits_indirect_call(tmp_path):
@@ -183,6 +185,7 @@ def test_genuine_module_function_still_emits_indirect_call(tmp_path):
 # cross-file resolver, which emits a distinct INFERRED `indirect_call` only when
 # the name resolves to exactly one real callable (the single-definition guard).
 
+
 def _extract_dir(tmp_path, files: dict[str, str]):
     base = tmp_path / "pkg"
     base.mkdir()
@@ -193,7 +196,8 @@ def _extract_dir(tmp_path, files: dict[str, str]):
         os.chdir(tmp_path)
         r = extract(
             [Path("pkg") / name for name in files],
-            cache_root=Path(".cache"), parallel=False,
+            cache_root=Path(".cache"),
+            parallel=False,
         )
     finally:
         os.chdir(old)
@@ -218,8 +222,9 @@ def test_cross_file_indirect_survives_id_relativization(tmp_path):
     try:
         os.chdir(base)
         # cache_root == project root triggers source_file relativization + id-remap
-        r = extract([Path("handlers/__init__.py"), Path("scheduler.py")],
-                    cache_root=base, parallel=False)
+        r = extract(
+            [Path("handlers/__init__.py"), Path("scheduler.py")], cache_root=base, parallel=False
+        )
     finally:
         os.chdir(old)
     nid = {n["label"].rstrip("()"): n["id"] for n in r["nodes"]}
@@ -229,14 +234,17 @@ def test_cross_file_indirect_survives_id_relativization(tmp_path):
 
 
 def test_cross_file_imported_callback_emits_indirect_call(tmp_path):
-    r, nid = _extract_dir(tmp_path, {
-        "handlers.py": "def on_event(x):\n    return x\n",
-        "scheduler.py": (
-            "from handlers import on_event\n\n\n"
-            "def schedule(pool):\n"
-            "    pool.submit(on_event)\n"   # callback imported from another module
-        ),
-    })
+    r, nid = _extract_dir(
+        tmp_path,
+        {
+            "handlers.py": "def on_event(x):\n    return x\n",
+            "scheduler.py": (
+                "from handlers import on_event\n\n\n"
+                "def schedule(pool):\n"
+                "    pool.submit(on_event)\n"  # callback imported from another module
+            ),
+        },
+    )
     indirect = _rels(r, "indirect_call")
     calls = _rels(r, "calls")
     assert (nid["schedule"], nid["on_event"]) in indirect
@@ -249,14 +257,17 @@ def test_cross_file_imported_callback_emits_indirect_call(tmp_path):
 
 
 def test_cross_file_affected_includes_importing_dispatcher(tmp_path):
-    r, nid = _extract_dir(tmp_path, {
-        "handlers.py": "def on_event(x):\n    return x\n",
-        "scheduler.py": (
-            "from handlers import on_event\n\n\n"
-            "def schedule(pool):\n"
-            "    pool.submit(on_event)\n"
-        ),
-    })
+    r, nid = _extract_dir(
+        tmp_path,
+        {
+            "handlers.py": "def on_event(x):\n    return x\n",
+            "scheduler.py": (
+                "from handlers import on_event\n\n\n"
+                "def schedule(pool):\n"
+                "    pool.submit(on_event)\n"
+            ),
+        },
+    )
     g = nx.DiGraph()
     for n in r["nodes"]:
         g.add_node(n["id"], **n)
@@ -271,14 +282,17 @@ def test_cross_file_affected_includes_importing_dispatcher(tmp_path):
 def test_cross_file_param_shadow_emits_no_indirect_call(tmp_path):
     """Soundness carries across files: an imported name shadowed by a parameter
     is the local value, so no cross-file indirect edge is manufactured."""
-    r, nid = _extract_dir(tmp_path, {
-        "handlers.py": "def on_event(x):\n    return x\n",
-        "scheduler.py": (
-            "from handlers import on_event\n\n\n"
-            "def schedule(pool, on_event):\n"   # on_event is the PARAMETER here
-            "    pool.submit(on_event)\n"
-        ),
-    })
+    r, nid = _extract_dir(
+        tmp_path,
+        {
+            "handlers.py": "def on_event(x):\n    return x\n",
+            "scheduler.py": (
+                "from handlers import on_event\n\n\n"
+                "def schedule(pool, on_event):\n"  # on_event is the PARAMETER here
+                "    pool.submit(on_event)\n"
+            ),
+        },
+    )
     indirect = _rels(r, "indirect_call")
     assert (nid["schedule"], nid["on_event"]) not in indirect
 
@@ -288,12 +302,16 @@ def test_cross_file_param_shadow_emits_no_indirect_call(tmp_path):
 # registry) is an indirect dependency. Same INFERRED relation, same guards:
 # callable-target-only, not shadowed, dict keys excluded.
 
+
 def test_module_level_dict_registry_emits_indirect_call(tmp_path):
-    r, nid = _extract(tmp_path, (
-        "def create(x):\n    return x\n\n\n"
-        "def delete(x):\n    return x\n\n\n"
-        'ROUTES = {"create": create, "delete": delete}\n'
-    ))
+    r, nid = _extract(
+        tmp_path,
+        (
+            "def create(x):\n    return x\n\n\n"
+            "def delete(x):\n    return x\n\n\n"
+            'ROUTES = {"create": create, "delete": delete}\n'
+        ),
+    )
     indirect = _rels(r, "indirect_call")
     file_nid = next(n["id"] for n in r["nodes"] if n["label"] == "m.py")
     # the module references both handlers through the table
@@ -304,11 +322,14 @@ def test_module_level_dict_registry_emits_indirect_call(tmp_path):
 
 
 def test_module_level_list_registry_emits_indirect_call(tmp_path):
-    r, nid = _extract(tmp_path, (
-        "def on_start():\n    pass\n\n\n"
-        "def on_stop():\n    pass\n\n\n"
-        "HOOKS = [on_start, on_stop]\n"
-    ))
+    r, nid = _extract(
+        tmp_path,
+        (
+            "def on_start():\n    pass\n\n\n"
+            "def on_stop():\n    pass\n\n\n"
+            "HOOKS = [on_start, on_stop]\n"
+        ),
+    )
     indirect = _rels(r, "indirect_call")
     file_nid = next(n["id"] for n in r["nodes"] if n["label"] == "m.py")
     assert (file_nid, nid["on_start"]) in indirect
@@ -316,34 +337,28 @@ def test_module_level_list_registry_emits_indirect_call(tmp_path):
 
 
 def test_function_scoped_dispatch_table_attributes_to_function(tmp_path):
-    r, nid = _extract(tmp_path, (
-        "def cb(x):\n    return x\n\n\n"
-        "def build():\n    return {\"k\": cb}\n"
-    ))
+    r, nid = _extract(
+        tmp_path, ('def cb(x):\n    return x\n\n\ndef build():\n    return {"k": cb}\n')
+    )
     assert (nid["build"], nid["cb"]) in _rels(r, "indirect_call")
 
 
 def test_dict_keys_are_not_dispatch_targets(tmp_path):
     """Only VALUES are references; a function used as a dict KEY is not invoked
     through the table and must not produce an edge."""
-    r, nid = _extract(tmp_path, (
-        "def keyfn():\n    pass\n\n\n"
-        "def valfn():\n    pass\n\n\n"
-        "T = {keyfn: valfn}\n"
-    ))
+    r, nid = _extract(
+        tmp_path, ("def keyfn():\n    pass\n\n\ndef valfn():\n    pass\n\n\nT = {keyfn: valfn}\n")
+    )
     indirect = _rels(r, "indirect_call")
     assert all(t != nid["keyfn"] for _s, t in indirect)
     file_nid = next(n["id"] for n in r["nodes"] if n["label"] == "m.py")
-    assert (file_nid, nid["valfn"]) in indirect   # the value still resolves
+    assert (file_nid, nid["valfn"]) in indirect  # the value still resolves
 
 
 def test_non_callable_collection_value_emits_no_indirect_call(tmp_path):
     """A data value in the table (a number, a string) is not a callable and must
     never become a dispatch target."""
-    r, nid = _extract(tmp_path, (
-        "def use():\n    pass\n\n\n"
-        'CONF = {"timeout": 30, "name": use}\n'
-    ))
+    r, nid = _extract(tmp_path, ('def use():\n    pass\n\n\nCONF = {"timeout": 30, "name": use}\n'))
     indirect = _rels(r, "indirect_call")
     file_nid = next(n["id"] for n in r["nodes"] if n["label"] == "m.py")
     # only the genuine callable resolves; the int value contributes nothing
@@ -354,23 +369,21 @@ def test_non_callable_collection_value_emits_no_indirect_call(tmp_path):
 def test_module_level_reassigned_name_shadows_dispatch_value(tmp_path):
     """If the name is rebound to data at module scope, the table value is that
     data, not the same-named function — no edge."""
-    r, nid = _extract(tmp_path, (
-        "def handler():\n    pass\n\n\n"
-        "handler = object()\n"
-        'T = {"h": handler}\n'
-    ))
+    r, nid = _extract(
+        tmp_path, ('def handler():\n    pass\n\n\nhandler = object()\nT = {"h": handler}\n')
+    )
     indirect = _rels(r, "indirect_call")
     assert all(t != nid["handler"] for _s, t in indirect)
 
 
 def test_cross_file_dict_registry_emits_indirect_call(tmp_path):
-    r, nid = _extract_dir(tmp_path, {
-        "handlers.py": "def on_event(x):\n    return x\n",
-        "registry.py": (
-            "from handlers import on_event\n\n\n"
-            'ROUTES = {"event": on_event}\n'
-        ),
-    })
+    r, nid = _extract_dir(
+        tmp_path,
+        {
+            "handlers.py": "def on_event(x):\n    return x\n",
+            "registry.py": ('from handlers import on_event\n\n\nROUTES = {"event": on_event}\n'),
+        },
+    )
     indirect = _rels(r, "indirect_call")
     reg_file = next(n["id"] for n in r["nodes"] if n["label"] == "registry.py")
     assert (reg_file, nid["on_event"]) in indirect
@@ -382,6 +395,7 @@ def test_cross_file_dict_registry_emits_indirect_call(tmp_path):
 # object/array dispatch tables. Same INFERRED relation, same guards, plus arrow-
 # const functions (`const cb = () => {}`) count as callables.
 
+
 def _extract_js_dir(tmp_path, files: dict[str, str]):
     base = tmp_path / "src"
     base.mkdir()
@@ -392,7 +406,8 @@ def _extract_js_dir(tmp_path, files: dict[str, str]):
         os.chdir(tmp_path)
         r = extract(
             [Path("src") / name for name in files],
-            cache_root=Path(".cache"), parallel=False,
+            cache_root=Path(".cache"),
+            parallel=False,
         )
     finally:
         os.chdir(old)
@@ -401,22 +416,31 @@ def _extract_js_dir(tmp_path, files: dict[str, str]):
 
 
 def test_js_function_scoped_call_argument(tmp_path):
-    r, nid = _extract_js_dir(tmp_path, {"a.js": (
-        "function handler(x){ return x; }\n"
-        "function via(pool){ pool.submit(handler); }\n"
-    )})
+    r, nid = _extract_js_dir(
+        tmp_path,
+        {
+            "a.js": (
+                "function handler(x){ return x; }\nfunction via(pool){ pool.submit(handler); }\n"
+            )
+        },
+    )
     indirect = _rels(r, "indirect_call")
     assert (nid["via"], nid["handler"]) in indirect
     assert (nid["via"], nid["handler"]) not in _rels(r, "calls")
 
 
 def test_js_module_object_and_array_registry(tmp_path):
-    r, nid = _extract_js_dir(tmp_path, {"a.js": (
-        "function handler(x){ return x; }\n"
-        "const cb = () => {};\n"
-        "const ROUTES = { create: handler, run: cb };\n"
-        "const HOOKS = [handler, cb];\n"
-    )})
+    r, nid = _extract_js_dir(
+        tmp_path,
+        {
+            "a.js": (
+                "function handler(x){ return x; }\n"
+                "const cb = () => {};\n"
+                "const ROUTES = { create: handler, run: cb };\n"
+                "const HOOKS = [handler, cb];\n"
+            )
+        },
+    )
     indirect = _rels(r, "indirect_call")
     file_nid = next(n["id"] for n in r["nodes"] if n["label"] == "a.js")
     # both a plain function and an arrow-const resolve, from object and array
@@ -426,13 +450,18 @@ def test_js_module_object_and_array_registry(tmp_path):
 
 def test_js_module_level_callback_registration(tmp_path):
     """Express routes / event wiring / timers live at module scope in JS."""
-    r, nid = _extract_js_dir(tmp_path, {"r.js": (
-        "function home(req, res){}\n"
-        "const list = () => {};\n"
-        'app.get("/", home);\n'
-        'emitter.on("evt", list);\n'
-        "setTimeout(home, 100);\n"
-    )})
+    r, nid = _extract_js_dir(
+        tmp_path,
+        {
+            "r.js": (
+                "function home(req, res){}\n"
+                "const list = () => {};\n"
+                'app.get("/", home);\n'
+                'emitter.on("evt", list);\n'
+                "setTimeout(home, 100);\n"
+            )
+        },
+    )
     indirect = _rels(r, "indirect_call")
     file_nid = next(n["id"] for n in r["nodes"] if n["label"] == "r.js")
     assert (file_nid, nid["home"]) in indirect
@@ -442,50 +471,55 @@ def test_js_module_level_callback_registration(tmp_path):
 def test_js_inline_arrow_argument_is_not_a_reference(tmp_path):
     """An inline arrow / function expression is a direct definition, not a
     by-name reference — it must not emit an indirect_call."""
-    r, nid = _extract_js_dir(tmp_path, {"i.js": (
-        "function via(arr){ arr.map(x => x * 2); arr.forEach(function(y){}); }\n"
-    )})
+    r, nid = _extract_js_dir(
+        tmp_path,
+        {"i.js": ("function via(arr){ arr.map(x => x * 2); arr.forEach(function(y){}); }\n")},
+    )
     assert _rels(r, "indirect_call") == set()
 
 
 def test_js_parameter_shadow_emits_no_indirect_call(tmp_path):
-    r, nid = _extract_js_dir(tmp_path, {"s.js": (
-        "function handler(){}\n"
-        "function via(pool, handler){ pool.submit(handler); }\n"
-    )})
+    r, nid = _extract_js_dir(
+        tmp_path,
+        {"s.js": ("function handler(){}\nfunction via(pool, handler){ pool.submit(handler); }\n")},
+    )
     indirect = _rels(r, "indirect_call")
     assert all(t != nid["handler"] for _s, t in indirect)
 
 
 def test_js_object_keys_and_data_values_excluded(tmp_path):
-    r, nid = _extract_js_dir(tmp_path, {"k.js": (
-        "function keyfn(){}\n"
-        "function valfn(){}\n"
-        "const T = { [keyfn]: valfn, timeout: 30 };\n"
-    )})
+    r, nid = _extract_js_dir(
+        tmp_path,
+        {
+            "k.js": (
+                "function keyfn(){}\n"
+                "function valfn(){}\n"
+                "const T = { [keyfn]: valfn, timeout: 30 };\n"
+            )
+        },
+    )
     indirect = _rels(r, "indirect_call")
-    assert all(t != nid["keyfn"] for _s, t in indirect)   # computed key, not a ref
+    assert all(t != nid["keyfn"] for _s, t in indirect)  # computed key, not a ref
     file_nid = next(n["id"] for n in r["nodes"] if n["label"] == "k.js")
     assert (file_nid, nid["valfn"]) in indirect
 
 
 def test_js_shorthand_property_reference(tmp_path):
-    r, nid = _extract_js_dir(tmp_path, {"sh.js": (
-        "function handler(){}\n"
-        "const obj = { handler };\n"
-    )})
+    r, nid = _extract_js_dir(
+        tmp_path, {"sh.js": ("function handler(){}\nconst obj = { handler };\n")}
+    )
     file_nid = next(n["id"] for n in r["nodes"] if n["label"] == "sh.js")
     assert (file_nid, nid["handler"]) in _rels(r, "indirect_call")
 
 
 def test_js_cross_file_imported_callback_in_object(tmp_path):
-    r, nid = _extract_js_dir(tmp_path, {
-        "h.js": "export function onEvent(x){ return x; }\n",
-        "reg.js": (
-            'import { onEvent } from "./h.js";\n'
-            "const ROUTES = { e: onEvent };\n"
-        ),
-    })
+    r, nid = _extract_js_dir(
+        tmp_path,
+        {
+            "h.js": "export function onEvent(x){ return x; }\n",
+            "reg.js": ('import { onEvent } from "./h.js";\nconst ROUTES = { e: onEvent };\n'),
+        },
+    )
     indirect = _rels(r, "indirect_call")
     reg_file = next(n["id"] for n in r["nodes"] if n["label"] == "reg.js")
     # the imports edge to onEvent must NOT suppress the indirect_call
@@ -493,12 +527,17 @@ def test_js_cross_file_imported_callback_in_object(tmp_path):
 
 
 def test_typescript_typed_params_and_arrow_consts(tmp_path):
-    r, nid = _extract_js_dir(tmp_path, {"t.ts": (
-        "function handler(x: number): number { return x; }\n"
-        "const cb = (): void => {};\n"
-        "function via(pool: Pool): void { pool.submit(handler); }\n"
-        "const ROUTES: Record<string, unknown> = { create: handler, run: cb };\n"
-    )})
+    r, nid = _extract_js_dir(
+        tmp_path,
+        {
+            "t.ts": (
+                "function handler(x: number): number { return x; }\n"
+                "const cb = (): void => {};\n"
+                "function via(pool: Pool): void { pool.submit(handler); }\n"
+                "const ROUTES: Record<string, unknown> = { create: handler, run: cb };\n"
+            )
+        },
+    )
     indirect = _rels(r, "indirect_call")
     file_nid = next(n["id"] for n in r["nodes"] if n["label"] == "t.ts")
     assert (nid["via"], nid["handler"]) in indirect

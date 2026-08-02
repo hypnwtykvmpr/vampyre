@@ -2,6 +2,7 @@
 when a community's member list contains an id that has no backing node in G
 (e.g. pruned nodes, stale community assignments, or synthesized/merge-artifact
 ids). Such dangling members must be skipped, not abort the whole vault export."""
+
 import networkx as nx
 
 from graphify.export import to_obsidian

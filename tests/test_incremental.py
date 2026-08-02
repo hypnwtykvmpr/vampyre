@@ -1,4 +1,5 @@
 """Integration tests for incremental graphify extract behavior."""
+
 from __future__ import annotations
 import json
 import os
@@ -6,7 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 PYTHON = sys.executable
 
@@ -15,9 +15,17 @@ PYTHON = sys.executable
 # ANTHROPIC_API_KEY / OPENAI_API_KEY / etc. exported does not make a docs extract
 # succeed and break the "no backend" path. CI has none of these set anyway.
 _LLM_ENV_KEYS = (
-    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-    "MOONSHOT_API_KEY", "DEEPSEEK_API_KEY", "OLLAMA_BASE_URL",
-    "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ACCESS_KEY_ID",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "MOONSHOT_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "OLLAMA_BASE_URL",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_ACCESS_KEY_ID",
 )
 
 
@@ -78,9 +86,7 @@ def test_extract_no_cluster_incremental_noop_preserves_existing_graph(tmp_path):
     """#1347: no-op incremental no-cluster extract must not overwrite graph.json."""
     project = tmp_path / "project"
     project.mkdir()
-    (project / "app.py").write_text(
-        "def alpha():\n    return 1\n", encoding="utf-8"
-    )
+    (project / "app.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
 
     first = _run(["extract", str(project), "--no-cluster"], tmp_path)
     assert first.returncode == 0, first.stderr
@@ -153,9 +159,11 @@ def test_update_prunes_a_removed_imports_edge(tmp_path):
     assert r1.returncode == 0, r1.stderr
     gj = proj / "graphify-out" / "graph.json"
     before = _edges(gj)
-    assert any(e.get("relation") in ("imports", "imports_from") and
-               str(e.get("source_file", "")).endswith("a.py") for e in before), \
-        f"expected an import edge from a.py initially: {before}"
+    assert any(
+        e.get("relation") in ("imports", "imports_from")
+        and str(e.get("source_file", "")).endswith("a.py")
+        for e in before
+    ), f"expected an import edge from a.py initially: {before}"
 
     # remove the import, then update
     (pkg / "a.py").write_text("def use():\n    return 1\n")
@@ -164,7 +172,10 @@ def test_update_prunes_a_removed_imports_edge(tmp_path):
     after = _edges(gj)
 
     # the stale import edge owned by a.py must be gone
-    stale = [e for e in after
-             if e.get("relation") in ("imports", "imports_from")
-             and str(e.get("source_file", "")).endswith("a.py")]
+    stale = [
+        e
+        for e in after
+        if e.get("relation") in ("imports", "imports_from")
+        and str(e.get("source_file", "")).endswith("a.py")
+    ]
     assert not stale, f"removed import's edge survived update (stale): {stale}"

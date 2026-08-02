@@ -5,6 +5,7 @@ match the `package-data` globs would pass `--check`/`--audit-coverage` yet make
 
 This builds the wheel once and asserts every committed skill artifact ships in it.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -22,7 +23,8 @@ def _has_build() -> bool:
     try:
         subprocess.run(
             [sys.executable, "-m", "build", "--version"],
-            check=True, capture_output=True,
+            check=True,
+            capture_output=True,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -58,9 +60,18 @@ def wheel_namelist(tmp_path_factory) -> set[str]:
         pytest.skip("`python -m build` unavailable (dev extra not installed)")
     out = tmp_path_factory.mktemp("wheel")
     proc = subprocess.run(
-        [sys.executable, "-m", "build", "--wheel", "--no-isolation",
-         "--outdir", str(out), str(REPO)],
-        capture_output=True, text=True,
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--wheel",
+            "--no-isolation",
+            "--outdir",
+            str(out),
+            str(REPO),
+        ],
+        capture_output=True,
+        text=True,
     )
     if proc.returncode != 0:
         pytest.skip(f"wheel build failed in this env:\n{proc.stderr[-800:]}")

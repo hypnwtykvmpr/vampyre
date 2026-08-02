@@ -36,9 +36,8 @@ def test_extract_exits_nonzero_when_all_semantic_chunks_fail(monkeypatch, tmp_pa
     """When every semantic chunk errors (e.g. backend SDK not installed),
     the CLI must exit non-zero instead of silently writing an AST-only graph.
 
-    The bug this guards: `pip install graphifyy` doesn't pull in `anthropic`,
-    so `graphify extract --backend claude` would print per-chunk errors and
-    still exit 0 with a graph.json. Callers checking exit status saw success.
+    A missing optional backend dependency must not produce a successful
+    AST-only result after all semantic chunks fail.
     """
     corpus = _make_corpus(tmp_path)
     out_dir = tmp_path / "out"
@@ -441,9 +440,7 @@ def test_extract_out_semantic_cache_survives_prune_and_reloads(monkeypatch, tmp_
             (external_root / "graphify-out" / "manifest.json").unlink()
 
     assert calls == 1
-    entries = list(
-        (external_root / "graphify-out" / "cache" / "semantic").glob("*.json")
-    )
+    entries = list((external_root / "graphify-out" / "cache" / "semantic").glob("*.json"))
     assert len(entries) == 1
     cached = json.loads(entries[0].read_text(encoding="utf-8"))
     assert cached["nodes"][0]["source_file"] == "notes.md"

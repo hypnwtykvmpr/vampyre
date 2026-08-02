@@ -16,6 +16,7 @@ from graphify.detect import (
     _is_ignored,
     _load_graphifyignore,
 )
+from graphify.installation import uv_tool_install_command
 
 # Single source of truth in graphify.paths (#1423); re-exported as _GRAPHIFY_OUT.
 from graphify.paths import (
@@ -196,7 +197,7 @@ def _git_head() -> str | None:
     import subprocess as _sp
 
     try:
-        r = _sp.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=3)  # nosec B603 B607
+        r = _sp.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=3)
         return r.stdout.strip() if r.returncode == 0 else None
     except Exception:
         return None
@@ -1053,12 +1054,13 @@ def _rebuild_code(
         # shrink (a removed function), so the shrink-guard should not block the
         # write when every lost node belongs to one of them (or a deleted file).
         _rebuilt_root = str(project_root)
+        rebuilt_sources: set[str] = set()
         if changed_paths is None:
-            rebuilt_sources = {
-                _nsf(str(p.relative_to(project_root)), _rebuilt_root)
-                for p in code_files
-                if p.is_relative_to(project_root)
-            }
+            for code_file in code_files:
+                if not code_file.is_relative_to(project_root):
+                    continue
+                relative_source = str(code_file.relative_to(project_root))
+                rebuilt_sources.add(_nsf(relative_source, _rebuilt_root) or relative_source)
         else:
             rebuilt_sources = {(_nsf(str(p), _rebuilt_root) or str(p)) for p in extract_targets}
         rebuilt_sources |= set(deleted_paths)
@@ -1419,7 +1421,7 @@ def watch(watch_path: Path, debounce: float = 3.0) -> None:
         from watchdog.observers.polling import PollingObserver
         from watchdog.events import FileSystemEventHandler
     except ImportError as e:
-        raise ImportError("watchdog not installed. Run: pip install watchdog") from e
+        raise ImportError(f"watchdog not installed. Run: {uv_tool_install_command('watch')}") from e
 
     last_trigger: float = 0.0
     pending: bool = False

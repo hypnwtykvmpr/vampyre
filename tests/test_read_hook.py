@@ -6,6 +6,7 @@ Code does - via `sh -c` with crafted stdin JSON - and assert it nudges only for
 a source/doc file outside graphify-out/ when a graph exists, and otherwise stays
 silent and fails open.
 """
+
 import json
 import subprocess
 
@@ -19,9 +20,7 @@ def _run(tool_input, cwd, *, graph: bool):
         (cwd / "graphify-out").mkdir(parents=True, exist_ok=True)
         (cwd / "graphify-out" / "graph.json").write_text("{}", encoding="utf-8")
     stdin = json.dumps({"tool_input": tool_input})
-    return subprocess.run(
-        ["sh", "-c", CMD], input=stdin, capture_output=True, text=True, cwd=cwd
-    )
+    return subprocess.run(["sh", "-c", CMD], input=stdin, capture_output=True, text=True, cwd=cwd)
 
 
 def test_matcher_targets_read_and_glob():

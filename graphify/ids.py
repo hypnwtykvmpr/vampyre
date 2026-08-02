@@ -21,6 +21,7 @@ CJK/Cyrillic/Arabic/accented-Latin letters survive instead of collapsing to a
 per-file node), collapse repeated underscores, strip leading/trailing
 underscores, and casefold.
 """
+
 from __future__ import annotations
 
 import re

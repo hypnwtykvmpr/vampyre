@@ -1,9 +1,9 @@
-import sys
 from unittest.mock import MagicMock, patch
 import pytest
-from pathlib import Path
 
-pytest.importorskip("tree_sitter_sql", reason="tree-sitter-sql not installed; skip pg_introspect tests")
+pytest.importorskip(
+    "tree_sitter_sql", reason="tree-sitter-sql not installed; skip pg_introspect tests"
+)
 
 from graphify.pg_introspect import introspect_postgres
 from graphify.validate import validate_extraction
@@ -13,9 +13,10 @@ from graphify.validate import validate_extraction
 # Shared mock infrastructure
 # ---------------------------------------------------------------------------
 
-def _make_mock_psycopg(tables, views, routines, fks,
-                        host="myhost", dbname="mydb",
-                        connect_raises=None):
+
+def _make_mock_psycopg(
+    tables, views, routines, fks, host="myhost", dbname="mydb", connect_raises=None
+):
     """Return a mock psycopg module wired to the provided catalog data.
 
     ``routines`` rows must be 5-tuples: (schema, name, rtype, body, ext_lang).
@@ -82,6 +83,7 @@ def _make_mock_psycopg(tables, views, routines, fks,
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _q(schema: str, name: str) -> str:
     """Return the label form that tree-sitter produces for a quoted identifier.
 
@@ -95,6 +97,7 @@ def _q(schema: str, name: str) -> str:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_pg_introspect_success():
     """Baseline: tables, views, routines, and a single-column FK all survive."""
@@ -139,8 +142,12 @@ def test_pg_introspect_success():
     # Views keep the schema-qualified label (quoted schema, unquoted body)
     assert _q("public", "active_users") in node_labels, f"active_users missing; got {node_labels}"
     # Functions: label is "<quoted-sig>()"
-    assert f'{_q("public", "calculate_total")}()' in node_labels, f"calculate_total() missing; got {node_labels}"
-    assert f'{_q("public", "do_nothing")}()' in node_labels, f"do_nothing() missing; got {node_labels}"
+    assert f"{_q('public', 'calculate_total')}()" in node_labels, (
+        f"calculate_total() missing; got {node_labels}"
+    )
+    assert f"{_q('public', 'do_nothing')}()" in node_labels, (
+        f"do_nothing() missing; got {node_labels}"
+    )
 
     # 4. File node (label = dbname)
     file_nodes = [n for n in res["nodes"] if n["file_type"] == "code" and n["label"] == "mydb"]
@@ -150,7 +157,8 @@ def test_pg_introspect_success():
     users_nid = next(n["id"] for n in res["nodes"] if n["label"] == _q("public", "users"))
     orders_nid = next(n["id"] for n in res["nodes"] if n["label"] == _q("public", "orders"))
     ref_edges = [
-        e for e in res["edges"]
+        e
+        for e in res["edges"]
         if e["source"] == orders_nid and e["target"] == users_nid and e["relation"] == "references"
     ]
     assert len(ref_edges) == 1, f"Expected exactly 1 references edge, got {len(ref_edges)}"
@@ -164,7 +172,7 @@ def test_pg_introspect_quoted_identifiers():
     those tables and any FK touching them.
     """
     mock_tables = [
-        ("public", "order", "BASE TABLE"),      # reserved word
+        ("public", "order", "BASE TABLE"),  # reserved word
         ("public", "user-data", "BASE TABLE"),  # hyphen
     ]
     mock_views = []
@@ -185,10 +193,10 @@ def test_pg_introspect_quoted_identifiers():
     node_labels = {n["label"] for n in res["nodes"]}
 
     # Both tables must appear as nodes (quoted form expected from tree-sitter)
-    assert _q("public", "order") in node_labels, \
-        f"'order' table missing; labels={node_labels}"
-    assert _q("public", "user-data") in node_labels, \
+    assert _q("public", "order") in node_labels, f"'order' table missing; labels={node_labels}"
+    assert _q("public", "user-data") in node_labels, (
         f"'user-data' table missing; labels={node_labels}"
+    )
 
     # FK references edge must exist
     ref_edges = [e for e in res["edges"] if e["relation"] == "references"]
@@ -211,9 +219,11 @@ def test_pg_introspect_composite_fk():
     mock_fks = [
         (
             "fk_order_items_composite",
-            "public", "order_items",
+            "public",
+            "order_items",
             ["order_id", "product_id"],
-            "public", "products",
+            "public",
+            "products",
             ["order_id", "product_id"],
         ),
     ]
@@ -226,15 +236,14 @@ def test_pg_introspect_composite_fk():
     errors = validate_extraction(res)
     assert errors == [], f"Validation errors: {errors}"
 
-    products_nid = next(
-        n["id"] for n in res["nodes"] if n["label"] == _q("public", "products")
-    )
+    products_nid = next(n["id"] for n in res["nodes"] if n["label"] == _q("public", "products"))
     order_items_nid = next(
         n["id"] for n in res["nodes"] if n["label"] == _q("public", "order_items")
     )
 
     ref_edges = [
-        e for e in res["edges"]
+        e
+        for e in res["edges"]
         if e["source"] == order_items_nid
         and e["target"] == products_nid
         and e["relation"] == "references"

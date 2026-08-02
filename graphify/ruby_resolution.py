@@ -54,7 +54,11 @@ def resolve_ruby_member_calls(
     (god-node guard) so an ambiguous class name resolves to nothing rather than a
     wrong edge.
     """
-    node_by_id: dict[str, dict] = {n.get("id"): n for n in all_nodes}
+    node_by_id: dict[str, dict] = {}
+    for node in all_nodes:
+        node_id = node.get("id")
+        if isinstance(node_id, str) and node_id:
+            node_by_id[node_id] = node
 
     # class label key -> [class node ids]; (class_node_id, method_key) -> method id
     class_def_nids: dict[str, list[str]] = {}
@@ -63,6 +67,8 @@ def resolve_ruby_member_calls(
         if e.get("relation") != "method":
             continue
         src, tgt = e.get("source"), e.get("target")
+        if not isinstance(src, str) or not isinstance(tgt, str):
+            continue
         cnode = node_by_id.get(src)
         if cnode is not None:
             class_def_nids.setdefault(_key(cnode.get("label", "")), []).append(str(src))
@@ -84,17 +90,19 @@ def resolve_ruby_member_calls(
         if (caller, target) in existing_pairs:
             return
         existing_pairs.add((caller, target))
-        all_edges.append({
-            "source": caller,
-            "target": target,
-            "relation": "calls",
-            "context": "call",
-            "confidence": "EXTRACTED",
-            "confidence_score": 1.0,
-            "source_file": rc.get("source_file", ""),
-            "source_location": rc.get("source_location"),
-            "weight": 1.0,
-        })
+        all_edges.append(
+            {
+                "source": caller,
+                "target": target,
+                "relation": "calls",
+                "context": "call",
+                "confidence": "EXTRACTED",
+                "confidence_score": 1.0,
+                "source_file": rc.get("source_file", ""),
+                "source_location": rc.get("source_location"),
+                "weight": 1.0,
+            }
+        )
 
     for rc in _ruby_raw_calls(per_file):
         if not rc.get("is_member_call"):

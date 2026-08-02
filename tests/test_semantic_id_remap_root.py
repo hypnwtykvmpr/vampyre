@@ -7,6 +7,7 @@ final graph assembly AFTER all LLM extraction cost was spent, writing no graph a
 all. A project-level node (source_file == root) has no per-file identity to remap,
 so its id is left untouched.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,14 +17,14 @@ from graphify.extractors.base import _file_stem
 
 
 def test_file_stem_handles_dot_path():
-    assert _file_stem(Path(".")) == ""          # no raise
+    assert _file_stem(Path(".")) == ""  # no raise
     assert _file_stem(Path("src/foo.py")) == "src/foo"
 
 
 def test_semantic_id_remap_root_equal_source_file_no_crash():
     root = "/some/project/root"
     node = {"id": "some_concept", "source_file": root, "_origin": "semantic"}
-    remap = _semantic_id_remap([node], root)   # must not raise
+    remap = _semantic_id_remap([node], root)  # must not raise
     # a root-equal node has no file stem, so its id is left untouched (not remapped)
     assert "some_concept" not in remap
 
@@ -32,19 +33,30 @@ def test_build_from_json_with_root_level_concept_node():
     root = "/proj"
     combined = {
         "nodes": [
-            {"id": "proj_concept", "label": "Project", "file_type": "concept",
-             "source_file": root, "_origin": "semantic"},
-            {"id": "src_foo", "label": "foo", "file_type": "code",
-             "source_file": "src/foo.py", "_origin": "ast"},
+            {
+                "id": "proj_concept",
+                "label": "Project",
+                "file_type": "concept",
+                "source_file": root,
+                "_origin": "semantic",
+            },
+            {
+                "id": "src_foo",
+                "label": "foo",
+                "file_type": "code",
+                "source_file": "src/foo.py",
+                "_origin": "ast",
+            },
         ],
         "edges": [],
     }
-    G = build_from_json(combined, root=root)    # previously crashed here
+    G = build_from_json(combined, root=root)  # previously crashed here
     assert G.number_of_nodes() == 2
 
 
 def test_normal_semantic_remap_still_works():
     # regression guard: a real per-file node still gets remap consideration (#1504)
     remap = _semantic_id_remap(
-        [{"id": "foo", "source_file": "src/foo.py", "_origin": "semantic"}], "/proj")
+        [{"id": "foo", "source_file": "src/foo.py", "_origin": "semantic"}], "/proj"
+    )
     assert isinstance(remap, dict)

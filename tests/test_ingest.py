@@ -1,7 +1,6 @@
 """Tests for graphify.ingest.save_query_result"""
+
 from __future__ import annotations
-import re
-from pathlib import Path
 import pytest
 from graphify.ingest import save_query_result
 
@@ -49,7 +48,7 @@ def test_source_nodes_capped_at_10(tmp_path):
     out = save_query_result("q", "a", mem, source_nodes=nodes)
     content = out.read_text()
     # Only first 10 should appear in frontmatter source_nodes line
-    fm_line = [l for l in content.splitlines() if l.startswith("source_nodes:")][0]
+    fm_line = [line for line in content.splitlines() if line.startswith("source_nodes:")][0]
     assert fm_line.count('"Node') == 10
 
 
@@ -67,6 +66,7 @@ def test_answer_in_body(tmp_path):
     content = out.read_text()
     assert answer in content
 
+
 def test_outcome_in_frontmatter_and_body(tmp_path):
     """An outcome signal is written to both frontmatter (for `reflect`) and an
     ## Outcome body section (so it round-trips into the graph on re-extraction)."""
@@ -79,8 +79,11 @@ def test_outcome_in_frontmatter_and_body(tmp_path):
 
 def test_correction_in_frontmatter_and_body(tmp_path):
     out = save_query_result(
-        "what hashes passwords?", "MD5", tmp_path / "memory",
-        outcome="corrected", correction="It's bcrypt, see PasswordHasher",
+        "what hashes passwords?",
+        "MD5",
+        tmp_path / "memory",
+        outcome="corrected",
+        correction="It's bcrypt, see PasswordHasher",
     )
     content = out.read_text()
     assert 'correction: "It\'s bcrypt, see PasswordHasher"' in content

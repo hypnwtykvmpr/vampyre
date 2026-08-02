@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import ast
-import re
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Sequence
 from typing import Any
 
 from graphify.ids import make_id as _shared_make_id
+from graphify.extractors.base import _file_stem as _bash_file_stem
 from graphify.paths import disambiguate_ambiguous_candidates
 from graphify.security import sanitize_metadata
-
 
 
 @dataclass(frozen=True)
@@ -291,13 +289,15 @@ def resolve_python_import_guided_calls(
                     "source_file": raw_call.get("source_file", source_file),
                     "source_location": raw_call.get("source_location") or imported.source_location,
                     "weight": 1.0,
-                    "metadata": sanitize_metadata({
-                        "resolver": "python_import_guided",
-                        "local_name": imported.local_name,
-                        "imported_name": imported.imported_name,
-                        "module_stem": imported.module_stem,
-                        "import_source_location": imported.source_location,
-                    }),
+                    "metadata": sanitize_metadata(
+                        {
+                            "resolver": "python_import_guided",
+                            "local_name": imported.local_name,
+                            "imported_name": imported.imported_name,
+                            "module_stem": imported.module_stem,
+                            "import_source_location": imported.source_location,
+                        }
+                    ),
                 }
             )
 
@@ -323,9 +323,7 @@ def resolve_cross_file_raw_calls(
     # nid -> source_file, for the shared god-node tie-breakers (#1553) so a
     # same-named test mock no longer erases a real cross-file call.
     nid_to_source_file = {
-        str(n.get("id")): str(n.get("source_file", ""))
-        for n in all_nodes
-        if n.get("id")
+        str(n.get("id")): str(n.get("source_file", "")) for n in all_nodes if n.get("id")
     }
     resolved: list[dict[str, Any]] = []
 
@@ -386,9 +384,6 @@ def _bash_make_id(*parts: str) -> str:
     return _shared_make_id(*parts)
 
 
-from graphify.extractors.base import _file_stem as _bash_file_stem  # canonical recipe (no import cycle: base imports only graphify.ids)
-
-
 def _file_node_id_for_path(path: Path, root: Path) -> str:
     # Produce the canonical {parent_dir}_{stem} file-node ID that extract()'s
     # id_remap generates (#1033), so bash `source` edges land on the real file
@@ -428,7 +423,9 @@ def resolve_bash_source_edges(
           Anything else is silently skipped.
     """
     path_by_index = [Path(p).resolve() for p in paths]
-    file_nid_by_path = {p: _file_node_id_for_path(p, root) for p in path_by_index}  # resolved paths only
+    file_nid_by_path = {
+        p: _file_node_id_for_path(p, root) for p in path_by_index
+    }  # resolved paths only
 
     functions_by_file: dict[str, dict[str, str]] = {}
     for result, path in zip(per_file, path_by_index):

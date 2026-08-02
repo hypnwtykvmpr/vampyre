@@ -1,16 +1,19 @@
 # MCP stdio server - exposes graph query tools to Claude and other agents
 from __future__ import annotations
+
+import ipaddress
 import json
 import math
 import re
 import sys
 from array import array
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
+
 import networkx as nx
 from networkx.readwrite import json_graph
 from graphify.security import sanitize_label, check_graph_file_size_cap
-from graphify.build import edge_data
+from graphify.installation import uv_tool_install_command
 from graphify.paths import default_graph_json as _default_graph_json
 from graphify.projections import (
     format_relationship_envelope,
@@ -18,11 +21,24 @@ from graphify.projections import (
 )
 
 try:
-    from jieba3 import jieba3 as _ChineseTokenizer  # type: ignore[import-untyped]
+    from jieba3 import jieba3 as _ChineseTokenizer
 except ImportError:
     _chinese_tokenizer = None
 else:
     _chinese_tokenizer = _ChineseTokenizer()
+
+
+_IPV4_UNSPECIFIED = str(ipaddress.IPv4Address(0))
+
+
+def _is_wildcard_bind_host(host: str) -> bool:
+    """Return whether a bind host exposes every interface."""
+    if not host:
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_unspecified
+    except ValueError:
+        return False
 
 
 def _load_graph(graph_path: str) -> nx.Graph:
@@ -63,13 +79,13 @@ def _load_graph(graph_path: str) -> nx.Graph:
         except Exception:
             G.graph["_learning_overlay"] = {}
         return G
-    except (ValueError, FileNotFoundError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        sys.exit(1)
     except json.JSONDecodeError as exc:
         print(
             f"error: graph.json is corrupted ({exc}). Re-run /graphify to rebuild.", file=sys.stderr
         )
+        sys.exit(1)
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -794,7 +810,6 @@ def _neighbors_text(G: nx.Graph, label: str, *, relation_filter: str = "") -> st
         return f"No node matching '{label.lower()}' found."
     nid = matches[0]
     lines = [f"Neighbors of {sanitize_label(G.nodes[nid].get('label', nid))}:"]
-    directed_graph = cast(Any, G)
 
     def _passes_filter(relations: list[str]) -> bool:
         # Honour relation_filter against EVERY parallel relation, not just a
@@ -816,27 +831,35 @@ def _neighbors_text(G: nx.Graph, label: str, *, relation_filter: str = "") -> st
             return f"[{rel}] [{confidence}]"
         return f"[{sanitize_label(format_relationship_envelope(G, src, tgt, directed_only=True))}]"
 
-    # successors()/predecessors() yield each neighbour once even on a
-    # MultiDiGraph, so each appears a single time per direction with its full
-    # bundle of parallel relationships rather than one line per parallel edge.
-    # The envelope is computed ONCE per neighbour and reused for both the
-    # relation filter and the rendering.
-    for nb in directed_graph.successors(nid):
-        env = relationship_envelope(G, nid, nb, directed_only=True)
-        if not _passes_filter(env["relations"]):
-            continue
-        lines.append(
-            f"  --> {sanitize_label(G.nodes[nb].get('label', nb))} "
-            f"{_relation_bracket(nid, nb, env)}"
-        )
-    for nb in directed_graph.predecessors(nid):
-        env = relationship_envelope(G, nb, nid, directed_only=True)
-        if not _passes_filter(env["relations"]):
-            continue
-        lines.append(
-            f"  <-- {sanitize_label(G.nodes[nb].get('label', nb))} "
-            f"{_relation_bracket(nb, nid, env)}"
-        )
+    # Directed graphs render each neighbour once per direction; undirected
+    # graphs render each neighbour once. In both cases the envelope is computed
+    # once per neighbour and reused for filtering and rendering.
+    if isinstance(G, nx.DiGraph):
+        for nb in G.successors(nid):
+            env = relationship_envelope(G, nid, nb, directed_only=True)
+            if not _passes_filter(env["relations"]):
+                continue
+            lines.append(
+                f"  --> {sanitize_label(G.nodes[nb].get('label', nb))} "
+                f"{_relation_bracket(nid, nb, env)}"
+            )
+        for nb in G.predecessors(nid):
+            env = relationship_envelope(G, nb, nid, directed_only=True)
+            if not _passes_filter(env["relations"]):
+                continue
+            lines.append(
+                f"  <-- {sanitize_label(G.nodes[nb].get('label', nb))} "
+                f"{_relation_bracket(nb, nid, env)}"
+            )
+    else:
+        for nb in G.neighbors(nid):
+            env = relationship_envelope(G, nid, nb, directed_only=True)
+            if not _passes_filter(env["relations"]):
+                continue
+            lines.append(
+                f"  --> {sanitize_label(G.nodes[nb].get('label', nb))} "
+                f"{_relation_bracket(nid, nb, env)}"
+            )
     return "\n".join(lines)
 
 
@@ -970,9 +993,9 @@ def _build_server(graph_path: str):
     try:
         from mcp.server import Server
         from mcp import types
-        from mcp.types import AnyUrl
+        from pydantic import AnyUrl
     except ImportError as e:
-        raise ImportError('mcp not installed. Run: pip install "graphifyy[mcp]"') from e
+        raise ImportError(f"mcp not installed. Run: {uv_tool_install_command('mcp')}") from e
 
     from graphify import paths as _paths
 
@@ -1043,6 +1066,11 @@ def _build_server(graph_path: str):
         path = _resolve_graph_path(project_path)
         G, communities = _load_ctx(path)
         active_graph_path = path
+
+    def _require_graph() -> nx.Graph:
+        if not isinstance(G, nx.Graph):
+            raise RuntimeError("No graph is selected; provide a project_path with graph.json")
+        return G
 
     server = Server("graphify")
 
@@ -1247,8 +1275,9 @@ def _build_server(graph_path: str):
         budget = int(arguments.get("token_budget", 2000))
         context_filter = arguments.get("context_filter")
         _t0 = _time.perf_counter()
+        graph = _require_graph()
         result = _query_graph_text(
-            G,
+            graph,
             question,
             mode=mode,
             depth=depth,
@@ -1268,10 +1297,11 @@ def _build_server(graph_path: str):
         return result
 
     def _tool_get_node(arguments: dict) -> str:
+        graph = _require_graph()
         label = arguments["label"].lower()
         matches = [
             (nid, d)
-            for nid, d in G.nodes(data=True)
+            for nid, d in graph.nodes(data=True)
             if label in (d.get("label") or "").lower() or label == nid.lower()
         ]
         if not matches:
@@ -1285,26 +1315,27 @@ def _build_server(graph_path: str):
                 f"  Source: {sanitize_label(str(d.get('source_file', '')))} {sanitize_label(str(d.get('source_location', '')))}",
                 f"  Type: {sanitize_label(str(d.get('file_type', '')))}",
                 f"  Community: {sanitize_label(str(d.get('community_name') or d.get('community', '')))}",
-                f"  Degree: {G.degree(nid)}",
+                f"  Degree: {graph.degree(nid)}",
             ]
         )
 
     def _tool_get_neighbors(arguments: dict) -> str:
         return _neighbors_text(
-            G,
+            _require_graph(),
             arguments["label"],
             relation_filter=arguments.get("relation_filter", ""),
         )
 
     def _tool_get_community(arguments: dict) -> str:
+        graph = _require_graph()
         cid = int(arguments["community_id"])
         nodes = communities.get(cid, [])
         if not nodes:
             return f"Community {cid} not found."
-        header = _community_header(cid, G.nodes[nodes[0]].get("community_name"))
+        header = _community_header(cid, graph.nodes[nodes[0]].get("community_name"))
         lines = [f"{header} ({len(nodes)} nodes):"]
         for n in nodes:
-            d = G.nodes[n]
+            d = graph.nodes[n]
             # Sanitise label and source_file (F-010).
             lines.append(
                 f"  {sanitize_label(d.get('label', n))} "
@@ -1315,17 +1346,18 @@ def _build_server(graph_path: str):
     def _tool_god_nodes(arguments: dict) -> str:
         from graphify.analyze import god_nodes as _god_nodes
 
-        nodes = _god_nodes(G, top_n=int(arguments.get("top_n", 10)))
+        nodes = _god_nodes(_require_graph(), top_n=int(arguments.get("top_n", 10)))
         lines = ["God nodes (most connected):"]
         lines += [f"  {i}. {n['label']} - {n['degree']} edges" for i, n in enumerate(nodes, 1)]
         return "\n".join(lines)
 
     def _tool_graph_stats(_: dict) -> str:
-        confs = [d.get("confidence", "EXTRACTED") for _, _, d in G.edges(data=True)]
+        graph = _require_graph()
+        confs = [d.get("confidence", "EXTRACTED") for _, _, d in graph.edges(data=True)]
         total = len(confs) or 1
         return (
-            f"Nodes: {G.number_of_nodes()}\n"
-            f"Edges: {G.number_of_edges()}\n"
+            f"Nodes: {graph.number_of_nodes()}\n"
+            f"Edges: {graph.number_of_edges()}\n"
             f"Communities: {len(communities)}\n"
             f"EXTRACTED: {round(confs.count('EXTRACTED') / total * 100)}%\n"
             f"INFERRED: {round(confs.count('INFERRED') / total * 100)}%\n"
@@ -1334,7 +1366,7 @@ def _build_server(graph_path: str):
 
     def _tool_shortest_path(arguments: dict) -> str:
         return _shortest_path_text(
-            G,
+            _require_graph(),
             arguments["source"],
             arguments["target"],
             max_hops=int(arguments.get("max_hops", 8)),
@@ -1372,15 +1404,33 @@ def _build_server(graph_path: str):
         pr_data = _gh(*view_args)
         if pr_data is None:
             return f"PR #{number} not found or gh not authenticated."
+        if not isinstance(pr_data, dict):
+            return f"PR #{number}: gh returned a malformed response (expected an object)."
+        title = pr_data.get("title")
+        base_ref = pr_data.get("baseRefName")
+        if not isinstance(title, str) or not isinstance(base_ref, str):
+            return f"PR #{number}: gh response is missing a valid title or base branch."
+        rollup = pr_data.get("statusCheckRollup") or []
+        if not isinstance(rollup, list) or not all(isinstance(item, dict) for item in rollup):
+            return f"PR #{number}: gh returned malformed CI status data."
+        review_decision = pr_data.get("reviewDecision")
+        if review_decision is not None and not isinstance(review_decision, str):
+            return f"PR #{number}: gh returned malformed review data."
+        author = pr_data.get("author")
+        if author is not None and not isinstance(author, dict):
+            return f"PR #{number}: gh returned malformed author data."
+        author_login = author.get("login", "?") if author else "?"
+        if not isinstance(author_login, str):
+            return f"PR #{number}: gh returned malformed author data."
         files = fetch_pr_files(number, repo)
         if not files:
             return f"PR #{number}: no changed files found (may require gh auth)."
-        comms, nodes = compute_pr_impact(files, G)
-        ci = _parse_ci(pr_data.get("statusCheckRollup") or [])
+        comms, nodes = compute_pr_impact(files, _require_graph())
+        ci = _parse_ci(rollup)
         lines = [
-            f"PR #{number}: {pr_data['title']}",
-            f"CI: {ci}  Review: {pr_data.get('reviewDecision') or 'none'}",
-            f"Base: {pr_data['baseRefName']}  Author: {(pr_data.get('author') or {}).get('login', '?')}",
+            f"PR #{number}: {title}",
+            f"CI: {ci}  Review: {review_decision or 'none'}",
+            f"Base: {base_ref}  Author: {author_login}",
             f"\nGraph impact: {nodes} nodes across {len(comms)} communities",
             f"Communities touched: {comms}",
             f"Files changed ({len(files)}):",
@@ -1415,7 +1465,8 @@ def _build_server(graph_path: str):
         ]
         if not actionable:
             return f"No actionable PRs targeting {base}."
-        # Fetch diffs concurrently then compute graph impact using in-memory G
+        graph = _require_graph()
+        # Fetch diffs concurrently then compute graph impact using the selected graph.
         workers = min(8, len(actionable))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             future_to_pr = {pool.submit(fetch_pr_files, pr.number, repo): pr for pr in actionable}
@@ -1427,7 +1478,7 @@ def _build_server(graph_path: str):
                     files = []
                 if files:
                     pr.files_changed = files
-                    pr.communities_touched, pr.nodes_affected = compute_pr_impact(files, G)
+                    pr.communities_touched, pr.nodes_affected = compute_pr_impact(files, graph)
         header = (
             f"Actionable PRs targeting {base}: {len(actionable)}\n"
             "Rank these by review priority. Higher blast_radius = more graph communities affected = higher merge risk.\n"
@@ -1514,6 +1565,7 @@ def _build_server(graph_path: str):
     @server.read_resource()
     async def read_resource(uri: AnyUrl) -> str:
         _select_graph(None)  # resources read the server's default graph
+        graph = _require_graph()
         uri_str = str(uri)
         if uri_str == "graphify://report":
             report_path = Path(active_graph_path).parent / "GRAPH_REPORT.md"
@@ -1528,7 +1580,7 @@ def _build_server(graph_path: str):
             try:
                 from graphify.analyze import surprising_connections
 
-                surprises = surprising_connections(G, communities, top_n=10)
+                surprises = surprising_connections(graph, communities, top_n=10)
                 if not surprises:
                     return "No surprising connections found."
                 lines = ["Surprising cross-community connections:"]
@@ -1540,7 +1592,7 @@ def _build_server(graph_path: str):
             except Exception as exc:
                 return f"Could not compute surprising connections: {exc}"
         if uri_str == "graphify://audit":
-            confs = [d.get("confidence", "EXTRACTED") for _, _, d in G.edges(data=True)]
+            confs = [d.get("confidence", "EXTRACTED") for _, _, d in graph.edges(data=True)]
             total = len(confs) or 1
             return (
                 f"Total edges: {total}\n"
@@ -1553,7 +1605,7 @@ def _build_server(graph_path: str):
                 from graphify.analyze import suggest_questions
 
                 community_labels = _load_community_labels()
-                questions = suggest_questions(G, communities, community_labels, top_n=10)
+                questions = suggest_questions(graph, communities, community_labels, top_n=10)
                 if not questions:
                     return "No suggested questions available."
                 lines = ["Suggested questions:"]
@@ -1589,7 +1641,7 @@ def serve(graph_path: str | None = None) -> None:
     try:
         from mcp.server.stdio import stdio_server
     except ImportError as e:
-        raise ImportError('mcp not installed. Run: pip install "graphifyy[mcp]"') from e
+        raise ImportError(f"mcp not installed. Run: {uv_tool_install_command('mcp')}") from e
     import asyncio
 
     server = _build_server(graph_path)
@@ -1695,7 +1747,7 @@ def _build_http_app(
     except ImportError as e:
         raise ImportError(
             "HTTP transport needs the mcp extra (mcp + starlette + uvicorn). "
-            'Run: pip install "graphifyy[mcp]"'
+            f"Run: {uv_tool_install_command('mcp')}"
         ) from e
 
     # A blank key (e.g. --api-key "" or an empty GRAPHIFY_API_KEY) must not be
@@ -1708,7 +1760,7 @@ def _build_http_app(
     # are intentionally exposing the server, so accept any Host header; for a
     # loopback/specific bind, restrict Host to that address (with and without
     # the port) plus the localhost aliases.
-    if host in ("0.0.0.0", "::", ""):
+    if _is_wildcard_bind_host(host):
         security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
     else:
         allowed = {host, "localhost", "127.0.0.1"}
@@ -1774,7 +1826,7 @@ def serve_http(
     except ImportError as e:
         raise ImportError(
             "HTTP transport needs the mcp extra (mcp + starlette + uvicorn). "
-            'Run: pip install "graphifyy[mcp]"'
+            f"Run: {uv_tool_install_command('mcp')}"
         ) from e
 
     api_key = (api_key or "").strip() or None
@@ -1795,9 +1847,9 @@ def serve_http(
         f"graphify MCP server (streamable-http) on http://{host}:{port}{path} - {auth_note}",
         file=sys.stderr,
     )
-    if host in ("0.0.0.0", "::", "") and not api_key:
+    if _is_wildcard_bind_host(host) and not api_key:
         print(
-            f"WARNING: binding {host or '0.0.0.0'} with no api-key exposes the graph "
+            f"WARNING: binding {host or _IPV4_UNSPECIFIED} with no api-key exposes the graph "
             "unauthenticated on the network. Set --api-key (or GRAPHIFY_API_KEY).",
             file=sys.stderr,
         )

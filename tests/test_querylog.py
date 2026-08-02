@@ -1,8 +1,7 @@
 """Tests for graphify.querylog."""
+
 import json
-import os
 import pytest
-from pathlib import Path
 
 from graphify.querylog import log_query, nodes_from_result
 
@@ -10,6 +9,7 @@ from graphify.querylog import log_query, nodes_from_result
 # ---------------------------------------------------------------------------
 # nodes_from_result
 # ---------------------------------------------------------------------------
+
 
 def test_nodes_from_result_parses_header():
     result = "Traversal: BFS depth=2 | Start: ['foo'] | 7 nodes found\n\nNODE foo"
@@ -32,13 +32,21 @@ def test_nodes_from_result_empty():
 # log_query — basic write
 # ---------------------------------------------------------------------------
 
+
 def test_log_query_writes_jsonl(tmp_path, monkeypatch):
     log_file = tmp_path / "q.log"
     monkeypatch.setenv("GRAPHIFY_QUERY_LOG", str(log_file))
     monkeypatch.delenv("GRAPHIFY_QUERY_LOG_DISABLE", raising=False)
 
-    log_query(kind="query", question="what is X", corpus="/some/graph.json",
-              result="3 nodes found\nNODE a", duration_ms=12.5, mode="bfs", depth=2)
+    log_query(
+        kind="query",
+        question="what is X",
+        corpus="/some/graph.json",
+        result="3 nodes found\nNODE a",
+        duration_ms=12.5,
+        mode="bfs",
+        depth=2,
+    )
 
     lines = log_file.read_text().splitlines()
     assert len(lines) == 1
@@ -70,6 +78,7 @@ def test_log_query_appends(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # opt-out / opt-in
 # ---------------------------------------------------------------------------
+
 
 def test_disable_env(tmp_path, monkeypatch):
     log_file = tmp_path / "q.log"
@@ -119,6 +128,7 @@ def test_responses_optin(tmp_path, monkeypatch):
 # robustness — never raises
 # ---------------------------------------------------------------------------
 
+
 def test_log_never_raises(tmp_path, monkeypatch):
     # Point at a directory — open() for append will fail
     bad_path = tmp_path / "is_a_dir"
@@ -144,13 +154,13 @@ def test_log_creates_parent_dirs(tmp_path, monkeypatch):
 # field coverage
 # ---------------------------------------------------------------------------
 
+
 def test_nodes_returned_inferred_from_result(tmp_path, monkeypatch):
     log_file = tmp_path / "q.log"
     monkeypatch.setenv("GRAPHIFY_QUERY_LOG", str(log_file))
     monkeypatch.delenv("GRAPHIFY_QUERY_LOG_DISABLE", raising=False)
 
-    log_query(kind="query", question="q", corpus="/g.json",
-              result="5 nodes found\nNODE a\nNODE b")
+    log_query(kind="query", question="q", corpus="/g.json", result="5 nodes found\nNODE a\nNODE b")
 
     rec = json.loads(log_file.read_text())
     assert rec["nodes_returned"] == 5
@@ -181,6 +191,7 @@ def test_kind_mcp_query(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # fork policy: opt-in (off by default)
 # ---------------------------------------------------------------------------
+
 
 def test_optin_off_by_default(tmp_path, monkeypatch):
     # With no GRAPHIFY_QUERY_LOG set, nothing is logged (fork opt-in policy).

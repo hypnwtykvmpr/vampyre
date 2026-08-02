@@ -18,10 +18,11 @@ def _safe_filename(name: str) -> str:
     chars to stay well under common filesystem limits.
     """
     import re
+
     s = name.replace("/", "-").replace(" ", "_").replace(":", "-")
-    s = re.sub(r'[<>:"/\\|?*]', '_', s)
-    s = s.strip('. ')
-    return s[:200] if s else 'unnamed'
+    s = re.sub(r'[<>:"/\\|?*]', "_", s)
+    s = s.strip(". ")
+    return s[:200] if s else "unnamed"
 
 
 def _md_link(label: str, resolver: dict[str, str]) -> str:
@@ -48,7 +49,13 @@ def _md_link(label: str, resolver: dict[str, str]) -> str:
     return f"[{text}]({quote(f'{slug}.md')})"
 
 
-def _cross_community_links(G: nx.Graph, nodes: list[str], own_cid: int, labels: dict[int, str], node_community: dict[str, int]) -> list[tuple[str, int]]:
+def _cross_community_links(
+    G: nx.Graph,
+    nodes: list[str],
+    own_cid: int,
+    labels: dict[int, str],
+    node_community: dict[str, int],
+) -> list[tuple[str, int]]:
     """Return (community_label, edge_count) pairs for cross-community connections, sorted descending."""
     counts: dict[str, int] = Counter()
     for nid in nodes:
@@ -125,11 +132,21 @@ def _community_article(
         lines.append(f"- {conf}: {n} ({pct}%)")
     lines.append("")
 
-    lines += ["---", "", f"*Part of the graphify knowledge wiki. See {_md_link('index', resolver)} to navigate.*"]
+    lines += [
+        "---",
+        "",
+        f"*Part of the graphify knowledge wiki. See {_md_link('index', resolver)} to navigate.*",
+    ]
     return "\n".join(lines)
 
 
-def _god_node_article(G: nx.Graph, nid: str, labels: dict[int, str], node_community: dict[str, int] | None = None, resolver: dict[str, str] | None = None) -> str:
+def _god_node_article(
+    G: nx.Graph,
+    nid: str,
+    labels: dict[int, str],
+    node_community: dict[str, int] | None = None,
+    resolver: dict[str, str] | None = None,
+) -> str:
     resolver = resolver or {}
     d = G.nodes[nid]
     node_label = d.get("label", nid)
@@ -162,7 +179,11 @@ def _god_node_article(G: nx.Graph, nid: str, labels: dict[int, str], node_commun
             lines.append(f"- {t}")
         lines.append("")
 
-    lines += ["---", "", f"*Part of the graphify knowledge wiki. See {_md_link('index', resolver)} to navigate.*"]
+    lines += [
+        "---",
+        "",
+        f"*Part of the graphify knowledge wiki. See {_md_link('index', resolver)} to navigate.*",
+    ]
     return "\n".join(lines)
 
 
@@ -239,6 +260,7 @@ def to_wiki(
     # NetworkX 3.x returns DegreeView({}) for missing nodes instead of raising,
     # which crashes sorted() with TypeError; G.neighbors()/G.nodes[] also raise.
     import sys as _sys
+
     _g_nodes = set(G.nodes)
     _orig_total = sum(len(ns) for ns in communities.values())
     communities = {cid: [n for n in nodes if n in _g_nodes] for cid, nodes in communities.items()}
@@ -312,14 +334,16 @@ def to_wiki(
     for node_data in god_nodes_data:
         nid = node_data.get("id")
         if nid and nid in G:
-            slug = _unique_slug(_safe_filename(node_data['label']))
+            slug = _unique_slug(_safe_filename(node_data["label"]))
             god_articles.append((nid, slug))
-            resolver.setdefault(node_data['label'], slug)
+            resolver.setdefault(node_data["label"], slug)
 
     # Second pass: render and write each article with the full resolver in hand.
     for cid, nodes in communities.items():
         label = labels.get(cid, f"Community {cid}")
-        article = _community_article(G, cid, nodes, label, labels, cohesion.get(cid), node_community, resolver)
+        article = _community_article(
+            G, cid, nodes, label, labels, cohesion.get(cid), node_community, resolver
+        )
         (out / f"{community_slugs[cid]}.md").write_text(article, encoding="utf-8")
         count += 1
 
@@ -330,7 +354,9 @@ def to_wiki(
 
     # Index
     (out / "index.md").write_text(
-        _index_md(communities, labels, god_nodes_data, G.number_of_nodes(), G.number_of_edges(), resolver),
+        _index_md(
+            communities, labels, god_nodes_data, G.number_of_nodes(), G.number_of_edges(), resolver
+        ),
         encoding="utf-8",
     )
 

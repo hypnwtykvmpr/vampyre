@@ -370,8 +370,6 @@ def test_validate_accepts_node_ids_keyed_hyperedge():
     `nodes` list — validate normalizes first."""
     fragment = _valid_fragment()
     fragment["nodes"].append({"id": "second", "label": "Second", "file_type": "code"})
-    fragment["hyperedges"] = [
-        {"id": "grp", "label": "G", "node_ids": ["module_func", "second"]}
-    ]
+    fragment["hyperedges"] = [{"id": "grp", "label": "G", "node_ids": ["module_func", "second"]}]
     errors = sc.validate_semantic_fragment(fragment)
     assert errors == []

@@ -406,10 +406,13 @@ def test_global_add_rewires_edges_to_deduplicated_externals(tmp_path):
     _graph_to_json(GB, g2)
 
     global_dir = tmp_path / ".graphify"
-    with patch("graphify.global_graph._GLOBAL_DIR", global_dir), \
-         patch("graphify.global_graph._GLOBAL_GRAPH", global_dir / "global-graph.json"), \
-         patch("graphify.global_graph._GLOBAL_MANIFEST", global_dir / "global-manifest.json"):
+    with (
+        patch("graphify.global_graph._GLOBAL_DIR", global_dir),
+        patch("graphify.global_graph._GLOBAL_GRAPH", global_dir / "global-graph.json"),
+        patch("graphify.global_graph._GLOBAL_MANIFEST", global_dir / "global-manifest.json"),
+    ):
         from graphify.global_graph import global_add, _load_global_graph
+
         global_add(g1, "repoA")
         global_add(g2, "repoB")
         G = _load_global_graph()

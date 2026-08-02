@@ -2,6 +2,12 @@
   <a href="https://graphifylabs.ai"><img src="https://raw.githubusercontent.com/safishamsi/graphify/v4/docs/logo-text.svg" width="260" height="64" alt="Graphify"/></a>
 </p>
 
+> **Vampyre** is an independent fork of
+> [Graphify](https://github.com/safishamsi/graphify). We appreciate the upstream
+> project and retain attribution for the foundation it provides. Vampyre's
+> production MultiDiGraph behavior, hardening, release branches, and installation
+> source are maintained independently in this repository.
+
 <p align="center">
   🇺🇸 <a href="README.md">English</a> | 🇨🇳 <a href="docs/translations/README.zh-CN.md">简体中文</a> | 🇯🇵 <a href="docs/translations/README.ja-JP.md">日本語</a> | 🇰🇷 <a href="docs/translations/README.ko-KR.md">한국어</a> | 🇩🇪 <a href="docs/translations/README.de-DE.md">Deutsch</a> | 🇫🇷 <a href="docs/translations/README.fr-FR.md">Français</a> | 🇪🇸 <a href="docs/translations/README.es-ES.md">Español</a> | 🇮🇳 <a href="docs/translations/README.hi-IN.md">हिन्दी</a> | 🇧🇷 <a href="docs/translations/README.pt-BR.md">Português</a> | 🇷🇺 <a href="docs/translations/README.ru-RU.md">Русский</a> | 🇸🇦 <a href="docs/translations/README.ar-SA.md">العربية</a> | 🇮🇷 <a href="docs/translations/README.fa-IR.md">فارسی</a> | 🇮🇹 <a href="docs/translations/README.it-IT.md">Italiano</a> | 🇵🇱 <a href="docs/translations/README.pl-PL.md">Polski</a> | 🇳🇱 <a href="docs/translations/README.nl-NL.md">Nederlands</a> | 🇹🇷 <a href="docs/translations/README.tr-TR.md">Türkçe</a> | 🇺🇦 <a href="docs/translations/README.uk-UA.md">Українська</a> | 🇻🇳 <a href="docs/translations/README.vi-VN.md">Tiếng Việt</a> | 🇮🇩 <a href="docs/translations/README.id-ID.md">Bahasa Indonesia</a> | 🇸🇪 <a href="docs/translations/README.sv-SE.md">Svenska</a> | 🇬🇷 <a href="docs/translations/README.el-GR.md">Ελληνικά</a> | 🇷🇴 <a href="docs/translations/README.ro-RO.md">Română</a> | 🇨🇿 <a href="docs/translations/README.cs-CZ.md">Čeština</a> | 🇫🇮 <a href="docs/translations/README.fi-FI.md">Suomi</a> | 🇩🇰 <a href="docs/translations/README.da-DK.md">Dansk</a> | 🇳🇴 <a href="docs/translations/README.no-NO.md">Norsk</a> | 🇭🇺 <a href="docs/translations/README.hu-HU.md">Magyar</a> | 🇹🇭 <a href="docs/translations/README.th-TH.md">ภาษาไทย</a> | 🇺🇿 <a href="docs/translations/README.uz-UZ.md">Oʻzbekcha</a> | 🇹🇼 <a href="docs/translations/README.zh-TW.md">繁體中文</a> | 🇵🇭 <a href="docs/translations/README.fil-PH.md">Filipino</a>
 </p>
@@ -10,9 +16,7 @@
   <a href="https://www.ycombinator.com/companies/graphify"><img src="https://img.shields.io/badge/Y%20Combinator-S26-F0652F?style=flat&logo=ycombinator&logoColor=white" alt="YC S26"/></a>
   <a href="https://discord.gg/598Ad9zQZ"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"/></a>
   <a href="https://safishamsi.gumroad.com/l/qetvlo"><img src="https://img.shields.io/badge/Book-The%20Memory%20Layer-2ea44f?style=flat&logo=gitbook&logoColor=white" alt="The Memory Layer"/></a>
-  <a href="https://github.com/safishamsi/graphify/actions/workflows/ci.yml"><img src="https://github.com/safishamsi/graphify/actions/workflows/ci.yml/badge.svg?branch=v8" alt="CI"/></a>
-  <a href="https://pypi.org/project/graphifyy/"><img src="https://img.shields.io/pypi/v/graphifyy" alt="PyPI"/></a>
-  <a href="https://pepy.tech/project/graphifyy"><img src="https://img.shields.io/pepy/dt/graphifyy?color=blue&label=downloads" alt="Downloads"/></a>
+  <a href="https://github.com/hypnwtykvmpr/vampyre/actions/workflows/ci.yml"><img src="https://github.com/hypnwtykvmpr/vampyre/actions/workflows/ci.yml/badge.svg?branch=v9" alt="Vampyre CI"/></a>
   <a href="https://github.com/sponsors/safishamsi"><img src="https://img.shields.io/badge/sponsor-safishamsi-ea4aaa?logo=github-sponsors" alt="Sponsor"/></a>
   <a href="https://www.linkedin.com/company/graphify-labs"><img src="https://img.shields.io/badge/LinkedIn-Graphify%20Labs-0077B5?logo=linkedin" alt="LinkedIn"/></a>
   <a href="https://x.com/graphifyy"><img src="https://img.shields.io/badge/X-graphifyy-000000?logo=x&logoColor=white" alt="X"/></a>
@@ -54,8 +58,7 @@ graphify export callflow-html
 | Requirement | Minimum | Check | Install |
 |---|---|---|---|
 | Python | 3.10+ | `python --version` | [python.org](https://www.python.org/downloads/) |
-| uv *(recommended)* | any | `uv --version` | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| pipx *(alternative)* | any | `pipx --version` | `pip install pipx` |
+| uv | any | `uv --version` | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 
 **macOS quick install (Homebrew):**
 ```bash
@@ -69,8 +72,7 @@ winget install astral-sh.uv
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt install python3.12 python3-pip pipx
-# or install uv:
+sudo apt install python3.12
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
@@ -78,37 +80,11 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## Install
 
-> **🦇 This is the `vampyre` fork** of graphify — it adds opt-in **multigraph**
-> support (a keyed `MultiDiGraph` that preserves parallel edges between the same
-> pair of nodes, instead of collapsing them). To install **this fork from source**
-> (instead of the upstream PyPI package below):
->
-> ```bash
-> git clone https://github.com/hypnwtykvmpr/vampyre
-> cd vampyre
-> uv tool install .      # install the `graphify` CLI from this fork
-> graphify install       # register the skill with your AI assistant
-> ```
->
-> Then build a multigraph with `graphify extract . --multigraph` (or
-> `graphify update --force --multigraph` to force-rebuild an existing graph as a
-> multidigraph). `--simple` forces a plain graph; with neither flag the build
-> inherits the existing `graph.json` profile (a multigraph stays a multigraph).
-> See **[FORK.md](FORK.md)** for the full multigraph scope and the upstream-sync
-> workflow. Everything else in this README is upstream graphify documentation and
-> applies to the fork too.
-
-> **Official package:** The PyPI package is `graphifyy` (double-y). Other `graphify*` packages on PyPI are not affiliated. The CLI command is still `graphify`.
-
-**Step 1 — install the package:**
+The registry package named `graphifyy` is upstream Graphify, not Vampyre. Install
+this fork from its active `v9` branch:
 
 ```bash
-# Recommended (isolated env; if 'graphify' isn't found after, run: uv tool update-shell):
-uv tool install graphifyy
-
-# Alternatives:
-pipx install graphifyy
-pip install graphifyy  # may need PATH setup — see note below
+uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
 ```
 
 **Step 2 — register the skill with your AI assistant:**
@@ -136,13 +112,12 @@ for example `graphify claude install --project` or `graphify codex install --pro
 
 > **PowerShell note:** Use `graphify .` not `/graphify .` — the leading slash is a path separator in PowerShell.
 
-> **`graphify: command not found`?** `uv tool install` / `pipx install` put the `graphify` command in their tool bin dir (`~/.local/bin`). If your shell can't find it right after install — common on a fresh macOS + zsh setup — that dir isn't on your `PATH` yet: run `uv tool update-shell` (or `pipx ensurepath`), then open a new terminal. With plain `pip`, add `~/.local/bin` (Linux) or `~/Library/Python/3.x/bin` (Mac) to your PATH, or run `python -m graphify`.
+> **`graphify: command not found`?** Run `uv tool update-shell`, open a new
+> terminal, and retry. `uv tool dir --bin` prints the managed binary directory.
 
-> **Running with `uvx` / `uv tool run` instead of installing?** Name the package, not the command: `uvx --from graphifyy graphify install`. Plain `uvx graphify …` fails (`No solution found … no versions of graphify`) because `uv tool run` reads the first word as a *package*, and the package is `graphifyy` — the `graphify` command lives inside it.
-
-> **Avoid `pip install` on Mac/Windows** if possible. The skill resolves Python at runtime from `graphify-out/.graphify_python`; if that points to a different environment than where `pip` installed the package, you'll get `ModuleNotFoundError: No module named 'graphify'`. `uv tool install` and `pipx install` isolate the package in their own env and avoid this entirely.
-
-> **Git hooks and uv tool / pipx:** `graphify hook install` embeds the current interpreter path directly into the hook scripts at install time, so the post-commit hook fires correctly even in GUI git clients and CI runners where `~/.local/bin` is not on PATH. If you reinstall or upgrade graphify, re-run `graphify hook install` to refresh the embedded path.
+> **Git hooks and uv tools:** `graphify hook install` embeds the current
+> interpreter path into hook scripts. Re-run it after reinstalling or upgrading
+> Vampyre.
 
 ### Pick your platform
 
@@ -184,27 +159,26 @@ Install only what you need:
 
 | Extra | What it adds | Install |
 |---|---|---|
-| `pdf` | PDF extraction | `uv tool install "graphifyy[pdf]"` |
-| `office` | `.docx` and `.xlsx` support | `uv tool install "graphifyy[office]"` |
-| `google` | Google Sheets rendering | `uv tool install "graphifyy[google]"` |
-| `video` | Video/audio transcription (faster-whisper + yt-dlp) | `uv tool install "graphifyy[video]"` |
-| `mcp` | MCP stdio server | `uv tool install "graphifyy[mcp]"` |
-| `neo4j` | Neo4j push support | `uv tool install "graphifyy[neo4j]"` |
-| `falkordb` | FalkorDB push support | `uv tool install "graphifyy[falkordb]"` |
-| `svg` | SVG graph export | `uv tool install "graphifyy[svg]"` |
-| `leiden` | Native Leiden community detection (Python < 3.14) | `uv tool install "graphifyy[leiden]"` |
-| `ollama` | Ollama local inference | `uv tool install "graphifyy[ollama]"` |
-| `openai` | OpenAI / OpenAI-compatible APIs | `uv tool install "graphifyy[openai]"` |
-| `gemini` | Google Gemini API | `uv tool install "graphifyy[gemini]"` |
-| `anthropic` | Anthropic Claude API (`--backend claude`, uses `ANTHROPIC_API_KEY`) | `uv tool install "graphifyy[anthropic]"` |
-| `bedrock` | AWS Bedrock (uses IAM, no API key) | `uv tool install "graphifyy[bedrock]"` |
-| `azure` | Azure OpenAI Service (`--backend azure`, uses `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT`) | `uv tool install "graphifyy[openai]"` |
-| `sql` | SQL schema extraction | `uv tool install "graphifyy[sql]"` |
-| `postgres` | Live PostgreSQL introspection (`--postgres DSN`) | `uv tool install "graphifyy[postgres]"` |
-| `dm` | BYOND DreamMaker `.dm`/`.dme` AST extraction (may need a C compiler + `python3-dev` if no wheel matches your platform) | `uv tool install "graphifyy[dm]"` |
-| `terraform` | Terraform / HCL `.tf`/`.tfvars`/`.hcl` AST extraction | `uv tool install "graphifyy[terraform]"` |
-| `chinese` | Chinese query segmentation (jieba3) | `uv tool install "graphifyy[chinese]"` |
-| `all` | Everything above | `uv tool install "graphifyy[all]"` |
+| `pdf` | PDF extraction | `uv tool install --force "graphifyy[pdf] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `office` | `.docx` and `.xlsx` support | `uv tool install --force "graphifyy[office] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `google` | Google Sheets rendering | `uv tool install --force "graphifyy[google] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `video` | Video/audio transcription (faster-whisper + yt-dlp) | `uv tool install --force "graphifyy[video] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `mcp` | MCP stdio server | `uv tool install --force "graphifyy[mcp] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `neo4j` | Neo4j push support | `uv tool install --force "graphifyy[neo4j] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `svg` | SVG graph export | `uv tool install --force "graphifyy[svg] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `leiden` | Native Leiden community detection (Python < 3.14) | `uv tool install --force "graphifyy[leiden] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `ollama` | Ollama local inference | `uv tool install --force "graphifyy[ollama] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `openai` | OpenAI / OpenAI-compatible APIs | `uv tool install --force "graphifyy[openai] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `gemini` | Google Gemini API | `uv tool install --force "graphifyy[gemini] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `anthropic` | Anthropic Claude API (`--backend claude`, uses `ANTHROPIC_API_KEY`) | `uv tool install --force "graphifyy[anthropic] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `bedrock` | AWS Bedrock (uses IAM, no API key) | `uv tool install --force "graphifyy[bedrock] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `azure` | Azure OpenAI Service (`--backend azure`, uses `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT`) | `uv tool install --force "graphifyy[openai] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `sql` | SQL schema extraction | `uv tool install --force "graphifyy[sql] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `postgres` | Live PostgreSQL introspection (`--postgres DSN`) | `uv tool install --force "graphifyy[postgres] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `dm` | BYOND DreamMaker `.dm`/`.dme` AST extraction (may need a C compiler + `python3-dev` if no wheel matches your platform) | `uv tool install --force "graphifyy[dm] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `terraform` | Terraform / HCL `.tf`/`.tfvars`/`.hcl` AST extraction | `uv tool install --force "graphifyy[terraform] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `chinese` | Chinese query segmentation (jieba3) | `uv tool install --force "graphifyy[chinese] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
+| `all` | Everything above | `uv tool install --force "graphifyy[all] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"` |
 
 ---
 
@@ -265,18 +239,18 @@ To remove graphify from all platforms at once: `graphify uninstall` (add `--purg
 
 | Type | Extensions |
 |------|-----------|
-| Code (36 tree-sitter grammars) | `.py .ts .js .jsx .tsx .mjs .go .rs .java .c .cpp .h .hpp .cu .cuh .metal .rb .cs .kt .scala .php .swift .lua .luau .zig .ps1 .psm1 .ex .exs .m .mm .jl .vue .svelte .astro .groovy .gradle .dart .v .sv .svh .sql .f .f90 .f95 .f03 .f08 .pas .pp .dpr .dpk .lpr .inc .dfm .lfm .lpk .sh .bash .json .dm .dme .dmi .dmm .dmf .sln .slnx .csproj .fsproj .vbproj .xaml .razor .cshtml` (`.dm`/`.dme` requires `uv tool install graphifyy[dm]`; CUDA `.cu`/`.cuh` and Metal `.metal` reuse the C++ grammar) |
+| Code (36 tree-sitter grammars) | `.py .ts .js .jsx .tsx .mjs .go .rs .java .c .cpp .h .hpp .cu .cuh .metal .rb .cs .kt .scala .php .swift .lua .luau .zig .ps1 .psm1 .ex .exs .m .mm .jl .vue .svelte .astro .groovy .gradle .dart .v .sv .svh .sql .f .f90 .f95 .f03 .f08 .pas .pp .dpr .dpk .lpr .inc .dfm .lfm .lpk .sh .bash .json .dm .dme .dmi .dmm .dmf .sln .slnx .csproj .fsproj .vbproj .xaml .razor .cshtml` (`.dm`/`.dme` requires the `dm` extra; CUDA `.cu`/`.cuh` and Metal `.metal` reuse the C++ grammar) |
 | Salesforce Apex | `.cls .trigger` (regex-based; classes, interfaces, enums, methods, triggers, SOQL/DML edges) |
-| Terraform / HCL | `.tf .tfvars .hcl` (requires `uv tool install graphifyy[terraform]`) |
+| Terraform / HCL | `.tf .tfvars .hcl` (requires the `terraform` extra) |
 | MCP configs | `.mcp.json` `mcp.json` `mcp_servers.json` `claude_desktop_config.json` — extracts server nodes, package refs, env var requirements |
 | Package manifests | `apm.yml` `pyproject.toml` `go.mod` `pom.xml` — one canonical package node per package (by name) plus `depends_on` edges, so a package referenced from many manifests is a single hub |
 | Docs | `.md .mdx .qmd .html .txt .rst .yaml .yml` (markdown `[text](./other.md)` links and `[[wikilinks]]` become `references` edges between docs) |
-| Office | `.docx .xlsx` (requires `uv tool install graphifyy[office]`) |
-| Google Workspace | `.gdoc .gsheet .gslides` (opt-in; requires `gws` auth and `--google-workspace`; Sheets need `uv tool install graphifyy[google]`) |
+| Office | `.docx .xlsx` (requires the `office` extra) |
+| Google Workspace | `.gdoc .gsheet .gslides` (opt-in; requires `gws` auth and `--google-workspace`; Sheets need the `google` extra) |
 | PDFs | `.pdf` |
 | Images | `.png .jpg .webp .gif` |
-| Video / Audio | `.mp4 .mov .mp3 .wav` and more (requires `uv tool install graphifyy[video]`) |
-| YouTube / URLs | any video URL (requires `uv tool install graphifyy[video]`) |
+| Video / Audio | `.mp4 .mov .mp3 .wav` and more (requires the `video` extra) |
+| YouTube / URLs | any video URL (requires the `video` extra) |
 
 Code is extracted locally with no API calls (AST via tree-sitter). Everything else goes through your AI assistant's model API.
 
@@ -286,7 +260,7 @@ in a headless extraction, install and authenticate the
 [`gws` CLI](https://github.com/googleworkspace/cli), then run:
 
 ```bash
-uv tool install "graphifyy[google]"  # needed for Google Sheets table rendering
+uv tool install --force "graphifyy[google] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
 gws auth login -s drive
 graphify extract ./docs --google-workspace
 ```
@@ -412,9 +386,9 @@ docker run -p 8080:8080 -v "$(pwd)/graphify-out:/data" graphify \
   /data/graph.json --transport http --host 0.0.0.0 --api-key "$SECRET"
 ```
 
-> **WSL / Linux note:** Ubuntu ships `python3`, not `python`. Use a venv to avoid conflicts:
+> **WSL / Linux note:** install the MCP extra into the managed Vampyre tool:
 > ```bash
-> python3 -m venv .venv && .venv/bin/pip install "graphifyy[mcp]"
+> uv tool install --force "graphifyy[mcp] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
 > ```
 
 ---
@@ -473,16 +447,8 @@ These are only needed for **headless / CI extraction** (`graphify extract`). Whe
 ## Troubleshooting
 
 **`graphify: command not found` after installing**
-The CLI is installed but its bin directory isn't on your shell's `PATH`. Pick the fix for how you installed:
-- **uv** (`uv tool install graphifyy`): the command lands in uv's tool bin dir (`~/.local/bin`), which a fresh macOS/zsh setup often doesn't have on `PATH`. Run `uv tool update-shell`, then open a new terminal. (Find the dir with `uv tool dir --bin`.)
-- **pipx** (`pipx install graphifyy`): run `pipx ensurepath`, then open a new terminal.
-- **pip** (`pip install graphifyy`): pip installs scripts to a user bin dir that may not be on `PATH` — add `~/Library/Python/3.x/bin` (macOS) or `~/.local/bin` (Linux) to your `PATH` in `~/.zshrc`/`~/.bashrc`, or just run `python -m graphify`.
-
-**`uvx graphify …` or `uv tool run graphify …` fails to resolve `graphify`**
-The PyPI package is `graphifyy`; `graphify` is only the command it provides. `uv tool run` treats the first word as a *package name*, so it looks for a package called `graphify` and reports `No solution found … no versions of graphify`. Name the package explicitly: `uvx --from graphifyy graphify install` (same as `uv tool run --from graphifyy graphify install`). Or `uv tool install graphifyy` once and then call `graphify` directly.
-
-**`python -m graphify` works but `graphify` command doesn't**
-Your shell's `PATH` doesn't include the bin directory the command was installed to. Prefer `uv tool install` / `pipx install` over plain `pip`, then run `uv tool update-shell` / `pipx ensurepath` and open a new terminal (see the install notes above).
+The CLI is in uv's managed binary directory. Run `uv tool update-shell`, open a
+new terminal, and retry. `uv tool dir --bin` prints that directory.
 
 **`/graphify .` causes "path not recognized" in PowerShell**
 PowerShell treats a leading `/` as a path separator. Use `graphify .` (no slash) on Windows.
@@ -529,7 +495,7 @@ ANTHROPIC_API_KEY=sk-... graphify extract ./docs --backend claude
 **Skill version mismatch warning in your IDE**
 Your installed graphify version is different from the skill file. Update:
 ```bash
-uv tool upgrade graphifyy
+uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
 graphify install  # overwrites the skill file
 ```
 
@@ -552,8 +518,6 @@ graphify install  # overwrites the skill file
 /graphify ./raw --graphml          # export for Gephi / yEd
 /graphify ./raw --neo4j            # generate cypher.txt for Neo4j
 /graphify ./raw --neo4j-push bolt://localhost:7687
-/graphify ./raw --falkordb         # generate cypher.txt for FalkorDB
-/graphify ./raw --falkordb-push falkordb://localhost:6379
 /graphify ./raw --watch            # auto-sync as files change
 /graphify ./raw --mcp              # start MCP stdio server
 

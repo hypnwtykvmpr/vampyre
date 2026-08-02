@@ -1,7 +1,9 @@
 # Vampyre Fork Notes
 
-This fork tracks upstream Graphify closely while carrying local changes for
-MultiDiGraph evaluation and development.
+Vampyre is an independent fork of upstream Graphify. It preserves upstream's
+useful foundation while carrying a production MultiDiGraph implementation and
+fork-specific hardening. Upstream is credited as the source project; it is a
+read-only reference, not this fork's release channel.
 
 ## Installing This Fork
 
@@ -10,7 +12,7 @@ this fork. To install this fork, use the GitHub branch or a local checkout:
 
 ```bash
 # From GitHub:
-uv tool install --force git+https://github.com/hypnwtykvmpr/vampyre.git@v8
+uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
 
 # Or from a clone of this repository:
 uv tool install --force .
@@ -27,21 +29,22 @@ Optional extras can be installed from a local checkout with commands such as
 as:
 
 ```bash
-uv tool install --force "graphifyy[office] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v8"
+uv tool install --force "graphifyy[office] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
 ```
 
-Use `uv tool install graphifyy` only when you intentionally want upstream's PyPI
-release.
+The `graphifyy` registry package is upstream Graphify, not Vampyre. Vampyre is
+installed from this repository's `v9` branch or from a local checkout.
 
 ## Branches
 
-- `v8` is the active fork branch and is rebased on upstream `v8` when useful
-  upstream changes land.
-- `main` mirrors the active fork line for GitHub visitors who expect a `main`
-  branch.
+- `main` is the sole integration branch.
+- `v9` mirrors `main` as the active version line.
+- `v8` is frozen at the last pre-v9 fork state and is never advanced by current
+  work.
 - `upstream-v8-base` is a clean fork-side reference to upstream `v8` for future
-  rebases and comparison.
-- `upstream` remains read-only unless contribution work is explicitly reopened.
+  comparison.
+- `upstream` remains read-only. Importing future upstream work is a deliberate
+  human decision, not an automatic tracking policy.
 
 ## MultiDiGraph Scope
 
@@ -68,26 +71,15 @@ small, documented, and easy to rebase. When upstream changes touch the same file
 compare both sides directly, preserve useful upstream behavior, and document any
 intentional divergence.
 
-## Upstream Sync Workflow (standing policy)
+## Integrating Upstream Work
 
-Keep a **clean linear history**: rebase the fork stack onto the newer upstream and
-**force-push** the result. Origin does not block force-pushes (no branch
-protection; the only ruleset is Copilot review), so there is no need for the old
-`-s ours` reconcile-merge workaround — that only accumulated duplicate commits in
-ancestry. Flatten every sync instead.
+Upstream changes are evaluated for objective value and compatibility. Nothing is
+imported merely to keep branch counters even, and useful work is not discarded
+merely because it originated upstream. Every conflict is compared directly;
+Vampyre's capabilities and acceptance contract must survive the integration.
 
-1. `git fetch upstream` — if `upstream/v8` has not advanced, just fast-forward-push
-   any pending fork commits and stop.
-2. Rebase the fork's clean commit stack onto `upstream/v8` (replay only the fork
-   delta — rebase the pre-merge tip, not a branch carrying old reconcile merges).
-   Hand-weave conflicts: keep upstream's improvements AND the fork's
-   multigraph/security delta. A commit that upstream has since merged (e.g. our
-   dependabot PR) will drop as empty — that is expected.
-3. Run the full suite env-stripped — it must be **0 failures, 0 skips** (the
-   fork's `conftest.py` treats skips as failures). Confirm `git diff` against the
-   prior deployed tree is empty unless an intentional change was made.
-4. Force-push the flattened linear history:
-   `git push --force-with-lease origin v8:v8 main:main`.
-   The agent's command guard blocks force-push, so a human runs this step (from a
-   normal terminal). Verify `origin == local` afterward.
-5. Trim the temporary work branch.
+1. Fetch and record the exact upstream freeze SHA being evaluated.
+2. Compare every upstream commit and every conflict against the fork contract.
+3. Replay only approved behavior onto `main`; do not advance frozen `v8`.
+4. Run the complete zero-waiver verification battery.
+5. Publish one reviewed commit to `main` and align `v9` to it.

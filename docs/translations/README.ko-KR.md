@@ -1,9 +1,10 @@
 # graphify
 
+> **Vampyre fork:** This translation covers upstream-derived features and may lag behind the active fork. The English README is authoritative for current behavior and installation. Install Vampyre from the `v9` branch; the `graphifyy` registry package is upstream Graphify, not this fork.
+
 🇺🇸 [English](../../README.md) | 🇨🇳 [简体中文](README.zh-CN.md) | 🇯🇵 [日本語](README.ja-JP.md) | 🇰🇷 [한국어](README.ko-KR.md) | 🇩🇪 [Deutsch](README.de-DE.md) | 🇫🇷 [Français](README.fr-FR.md) | 🇪🇸 [Español](README.es-ES.md) | 🇮🇳 [हिन्दी](README.hi-IN.md) | 🇧🇷 [Português](README.pt-BR.md) | 🇷🇺 [Русский](README.ru-RU.md) | 🇸🇦 [العربية](README.ar-SA.md) | 🇮🇹 [Italiano](README.it-IT.md) | 🇵🇱 [Polski](README.pl-PL.md) | 🇳🇱 [Nederlands](README.nl-NL.md) | 🇹🇷 [Türkçe](README.tr-TR.md) | 🇺🇦 [Українська](README.uk-UA.md) | 🇻🇳 [Tiếng Việt](README.vi-VN.md) | 🇮🇩 [Bahasa Indonesia](README.id-ID.md) | 🇸🇪 [Svenska](README.sv-SE.md) | 🇬🇷 [Ελληνικά](README.el-GR.md) | 🇷🇴 [Română](README.ro-RO.md) | 🇨🇿 [Čeština](README.cs-CZ.md) | 🇫🇮 [Suomi](README.fi-FI.md) | 🇩🇰 [Dansk](README.da-DK.md) | 🇳🇴 [Norsk](README.no-NO.md) | 🇭🇺 [Magyar](README.hu-HU.md) | 🇹🇭 [ภาษาไทย](README.th-TH.md) | 🇺🇿 [Oʻzbekcha](README.uz-UZ.md) | 🇹🇼 [繁體中文](README.zh-TW.md)
 
-[![CI](https://github.com/safishamsi/graphify/actions/workflows/ci.yml/badge.svg?branch=v3)](https://github.com/safishamsi/graphify/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/graphifyy)](https://pypi.org/project/graphifyy/)
+[![CI](https://github.com/hypnwtykvmpr/vampyre/actions/workflows/ci.yml/badge.svg?branch=v9)](https://github.com/hypnwtykvmpr/vampyre/actions/workflows/ci.yml)
 [![Sponsor](https://img.shields.io/badge/sponsor-safishamsi-ea4aaa?logo=github-sponsors)](https://github.com/sponsors/safishamsi)
 
 **AI 코딩 어시스턴트를 위한 스킬.** Claude Code, Codex, OpenCode, OpenClaw, Factory Droid, 또는 Trae에서 `/graphify`를 입력하면 파일을 읽고 지식 그래프를 구축하여, 미처 몰랐던 구조를 보여줍니다. 코드베이스를 더 빠르게 이해하고, 아키텍처 결정의 "이유"를 찾아보세요.
@@ -49,10 +50,8 @@ graphify는 두 번의 패스로 실행됩니다. 첫 번째는 결정론적 AST
 **필수 요구사항:** Python 3.10+ 및 다음 중 하나: [Claude Code](https://claude.ai/code), [Codex](https://openai.com/codex), [OpenCode](https://opencode.ai), [OpenClaw](https://openclaw.ai), [Factory Droid](https://factory.ai), 또는 [Trae](https://trae.ai)
 
 ```bash
-pip install graphifyy && graphify install
 ```
 
-> PyPI 패키지는 `graphify` 이름을 되찾는 동안 임시로 `graphifyy`로 명명되어 있습니다. CLI와 스킬 명령은 여전히 `graphify`입니다.
 
 ### 플랫폼 지원
 
@@ -142,7 +141,7 @@ python -m graphify.serve graphify-out/graph.json
 
 ```bash
 mkdir -p ~/.claude/skills/graphify
-curl -fsSL https://raw.githubusercontent.com/safishamsi/graphify/v3/graphify/skill.md \
+curl -fsSL https://raw.githubusercontent.com/hypnwtykvmpr/vampyre/v9/graphify/skill.md \
   > ~/.claude/skills/graphify/SKILL.md
 ```
 
@@ -216,7 +215,6 @@ graphify query "..." --graph path/to/graph.json
 |------|--------|-----------|
 | 코드 | `.py .ts .js .jsx .tsx .go .rs .java .c .cpp .rb .cs .kt .scala .php .swift .lua .zig .ps1 .ex .exs .m .mm .jl` | tree-sitter AST + 콜 그래프 + docstring/주석 근거 |
 | 문서 | `.md .txt .rst` | Claude를 통한 개념 + 관계 + 설계 근거 |
-| 오피스 | `.docx .xlsx` | 마크다운으로 변환 후 Claude를 통해 추출 (`pip install graphifyy[office]` 필요) |
 | 논문 | `.pdf` | 인용 마이닝 + 개념 추출 |
 | 이미지 | `.png .jpg .webp .gif` | Claude Vision - 스크린샷, 다이어그램, 모든 언어 |
 

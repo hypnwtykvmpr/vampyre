@@ -1,14 +1,42 @@
 """Tests for language extractors: Java, C, C++, Ruby, C#, Kotlin, Scala, PHP, Swift, Go, Julia, Fortran, JS/TS, .NET project files, XAML."""
+
 from __future__ import annotations
+import importlib.util as _ilu
 from pathlib import Path
 import pytest
 from graphify.extract import (
-    extract_java, extract_c, extract_cpp, extract_ruby,
-    extract_csharp, extract_kotlin, extract_scala, extract_php,
-    extract_swift, extract_go, extract_julia, extract_js, extract_fortran,
-    extract_groovy, extract_sln, extract_csproj, extract_xaml, extract_razor,
-    extract_dm, extract_dmi, extract_dmm, extract_dmf,
-    extract_powershell, extract_apex, extract_verilog,
+    _get_extractor,
+    _is_cpp_header,
+    _is_objc_header,
+    extract as _extract_corpus,
+    extract_elixir,
+    extract_markdown,
+    extract_objc,
+    extract_java,
+    extract_c,
+    extract_cpp,
+    extract_ruby,
+    extract_csharp,
+    extract_kotlin,
+    extract_scala,
+    extract_php,
+    extract_swift,
+    extract_go,
+    extract_julia,
+    extract_js,
+    extract_fortran,
+    extract_groovy,
+    extract_sln,
+    extract_csproj,
+    extract_xaml,
+    extract_razor,
+    extract_dm,
+    extract_dmi,
+    extract_dmm,
+    extract_dmf,
+    extract_powershell,
+    extract_apex,
+    extract_verilog,
     extract_powershell_manifest,
 )
 
@@ -17,7 +45,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 # tree-sitter-dm is an optional extra (#1104) - it ships no Linux/Mac wheel, so it
 # is not installed by a default `uv sync`. Skip the .dm/.dme grammar tests when the
 # grammar is absent (.dmi/.dmm/.dmf use no tree-sitter and are always tested).
-import importlib.util as _ilu
+
 _needs_dm = pytest.mark.skipif(
     _ilu.find_spec("tree_sitter_dm") is None,
     reason="tree-sitter-dm not installed (optional [dm] extra)",
@@ -27,14 +55,17 @@ _needs_dm = pytest.mark.skipif(
 def _labels(r):
     return [n["label"] for n in r["nodes"]]
 
+
 def _relations(r):
     return {e["relation"] for e in r["edges"]}
+
 
 def _calls(r):
     node_by_id = {n["id"]: n["label"] for n in r["nodes"]}
     return {
         (node_by_id.get(e["source"], e["source"]), node_by_id.get(e["target"], e["target"]))
-        for e in r["edges"] if e["relation"] == "calls"
+        for e in r["edges"]
+        if e["relation"] == "calls"
     }
 
 
@@ -46,7 +77,8 @@ def _references(r):
             node_by_id.get(e["target"], e["target"]),
             e,
         )
-        for e in r["edges"] if e["relation"] == "references"
+        for e in r["edges"]
+        if e["relation"] == "references"
     ]
 
 
@@ -73,29 +105,36 @@ def _edge_labels(result: dict, relation: str, context: str | None = None) -> set
             continue
         if context is not None and edge.get("context") != context:
             continue
-        pairs.add((labels.get(edge["source"], edge["source"]), labels.get(edge["target"], edge["target"])))
+        pairs.add(
+            (labels.get(edge["source"], edge["source"]), labels.get(edge["target"], edge["target"]))
+        )
     return pairs
 
 
 # ── Java ──────────────────────────────────────────────────────────────────────
 
+
 def test_java_no_error():
     r = extract_java(FIXTURES / "sample.java")
     assert "error" not in r
 
+
 def test_java_finds_class():
     r = extract_java(FIXTURES / "sample.java")
-    assert any("DataProcessor" in l for l in _labels(r))
+    assert any("DataProcessor" in label for label in _labels(r))
+
 
 def test_java_finds_interface():
     r = extract_java(FIXTURES / "sample.java")
-    assert any("Processor" in l for l in _labels(r))
+    assert any("Processor" in label for label in _labels(r))
+
 
 def test_java_finds_methods():
     r = extract_java(FIXTURES / "sample.java")
     labels = _labels(r)
-    assert any("addItem" in l for l in labels)
-    assert any("process" in l for l in labels)
+    assert any("addItem" in label for label in labels)
+    assert any("process" in label for label in labels)
+
 
 def test_java_finds_imports():
     r = extract_java(FIXTURES / "sample.java")
@@ -108,6 +147,7 @@ def test_java_import_edges_have_import_context():
     assert import_edges
     assert all(e.get("context") == "import" for e in import_edges)
 
+
 def test_java_no_dangling_edges():
     r = extract_java(FIXTURES / "sample.java")
     node_ids = {n["id"] for n in r["nodes"]}
@@ -117,23 +157,28 @@ def test_java_no_dangling_edges():
 
 # ── C ────────────────────────────────────────────────────────────────────────
 
+
 def test_c_no_error():
     r = extract_c(FIXTURES / "sample.c")
     assert "error" not in r
 
+
 def test_c_finds_functions():
     r = extract_c(FIXTURES / "sample.c")
     labels = _labels(r)
-    assert any("process" in l for l in labels)
-    assert any("main" in l for l in labels)
+    assert any("process" in label for label in labels)
+    assert any("main" in label for label in labels)
+
 
 def test_c_finds_includes():
     r = extract_c(FIXTURES / "sample.c")
     assert "imports" in _relations(r)
 
+
 def test_c_emits_calls():
     r = extract_c(FIXTURES / "sample.c")
     assert any(e["relation"] == "calls" for e in r["edges"])
+
 
 def test_c_calls_are_extracted():
     r = extract_c(FIXTURES / "sample.c")
@@ -164,19 +209,23 @@ def test_c_call_edges_have_call_context():
 
 # ── C++ ───────────────────────────────────────────────────────────────────────
 
+
 def test_cpp_no_error():
     r = extract_cpp(FIXTURES / "sample.cpp")
     assert "error" not in r
 
+
 def test_cpp_finds_class():
     r = extract_cpp(FIXTURES / "sample.cpp")
-    assert any("HttpClient" in l for l in _labels(r))
+    assert any("HttpClient" in label for label in _labels(r))
+
 
 def test_cpp_finds_methods():
     r = extract_cpp(FIXTURES / "sample.cpp")
     labels = _labels(r)
     # C++ extractor captures the constructor and public-visible methods
-    assert any("HttpClient" in l for l in labels)
+    assert any("HttpClient" in label for label in labels)
+
 
 def test_cpp_finds_includes():
     r = extract_cpp(FIXTURES / "sample.cpp")
@@ -210,7 +259,8 @@ def test_cpp_class_inherits_edge():
     found = any(
         "AuthedHttpClient" in node_by_id.get(e["source"], "")
         and "HttpClient" in node_by_id.get(e["target"], "")
-        for e in r["edges"] if e["relation"] == "inherits"
+        for e in r["edges"]
+        if e["relation"] == "inherits"
     )
     assert found, "AuthedHttpClient should have inherits edge to HttpClient"
 
@@ -222,7 +272,8 @@ def test_cpp_struct_inherits_edge():
     found = any(
         "RetryingHttpClient" in node_by_id.get(e["source"], "")
         and "HttpClient" in node_by_id.get(e["target"], "")
-        for e in r["edges"] if e["relation"] == "inherits"
+        for e in r["edges"]
+        if e["relation"] == "inherits"
     )
     assert found, "RetryingHttpClient (struct) should have inherits edge to HttpClient"
 
@@ -241,23 +292,28 @@ def test_cpp_generic_parents_include_type_argument_references():
 # extractor. These tests guard that __global__/__device__ kernels, host
 # functions, structs and includes are all extracted.
 
+
 def test_cuda_no_error():
     r = extract_cpp(FIXTURES / "sample.cu")
     assert "error" not in r
 
+
 def test_cuda_finds_kernel_and_device_functions():
     r = extract_cpp(FIXTURES / "sample.cu")
     labels = _labels(r)
-    assert any("saxpy" in l for l in labels)   # __global__ kernel
-    assert any("dot" in l for l in labels)     # __device__ function
+    assert any("saxpy" in label for label in labels)  # __global__ kernel
+    assert any("dot" in label for label in labels)  # __device__ function
+
 
 def test_cuda_finds_struct():
     r = extract_cpp(FIXTURES / "sample.cu")
-    assert any("Vec3" in l for l in _labels(r))
+    assert any("Vec3" in label for label in _labels(r))
+
 
 def test_cuda_finds_includes():
     r = extract_cpp(FIXTURES / "sample.cu")
     assert "imports" in _relations(r)
+
 
 def test_cuda_host_call_edges():
     r = extract_cpp(FIXTURES / "sample.cu")
@@ -269,8 +325,10 @@ def test_cuda_host_call_edges():
 # Metal Shading Language is a C++14-derived language, so .metal files route
 # through the C++ extractor just like CUDA does.
 
+
 def test_metal_is_code_extension():
     from graphify.detect import CODE_EXTENSIONS
+
     assert ".metal" in CODE_EXTENSIONS
 
 
@@ -282,30 +340,34 @@ def test_metal_no_error():
 def test_metal_finds_kernel_function_and_struct():
     r = extract_cpp(FIXTURES / "sample.metal")
     labels = _labels(r)
-    assert any("Vec3" in l for l in labels)
-    assert any("dot3" in l for l in labels)
-    assert any("saxpy" in l for l in labels)
+    assert any("Vec3" in label for label in labels)
+    assert any("dot3" in label for label in labels)
+    assert any("saxpy" in label for label in labels)
 
 
 # ── Ruby ─────────────────────────────────────────────────────────────────────
+
 
 def test_ruby_no_error():
     r = extract_ruby(FIXTURES / "sample.rb")
     assert "error" not in r
 
+
 def test_ruby_finds_class():
     r = extract_ruby(FIXTURES / "sample.rb")
-    assert any("ApiClient" in l for l in _labels(r))
+    assert any("ApiClient" in label for label in _labels(r))
+
 
 def test_ruby_finds_methods():
     r = extract_ruby(FIXTURES / "sample.rb")
     labels = _labels(r)
-    assert any("get" in l for l in labels)
-    assert any("post" in l for l in labels)
+    assert any("get" in label for label in labels)
+    assert any("post" in label for label in labels)
+
 
 def test_ruby_finds_function():
     r = extract_ruby(FIXTURES / "sample.rb")
-    assert any("parse_response" in l for l in _labels(r))
+    assert any("parse_response" in label for label in _labels(r))
 
 
 def test_ruby_inherits_edge():
@@ -319,46 +381,55 @@ def test_ruby_inherits_edge():
     found = any(
         "TimeoutApiClient" in node_by_id.get(e["source"], "")
         and node_by_id.get(e["target"], "") == "ApiClient"
-        for e in r["edges"] if e["relation"] == "inherits"
+        for e in r["edges"]
+        if e["relation"] == "inherits"
     )
     assert found, "TimeoutApiClient should have inherits edge to ApiClient"
 
 
 # ── C# ───────────────────────────────────────────────────────────────────────
 
+
 def test_csharp_no_error():
     r = extract_csharp(FIXTURES / "sample.cs")
     assert "error" not in r
 
+
 def test_csharp_finds_class():
     r = extract_csharp(FIXTURES / "sample.cs")
-    assert any("DataProcessor" in l for l in _labels(r))
+    assert any("DataProcessor" in label for label in _labels(r))
+
 
 def test_csharp_finds_interface():
     r = extract_csharp(FIXTURES / "sample.cs")
-    assert any("IProcessor" in l for l in _labels(r))
+    assert any("IProcessor" in label for label in _labels(r))
+
 
 def test_csharp_finds_methods():
     r = extract_csharp(FIXTURES / "sample.cs")
     labels = _labels(r)
-    assert any("Process" in l for l in labels)
+    assert any("Process" in label for label in labels)
+
 
 def test_csharp_finds_usings():
     r = extract_csharp(FIXTURES / "sample.cs")
     assert "imports" in _relations(r)
+
 
 def test_csharp_inherits_edge():
     r = extract_csharp(FIXTURES / "sample.cs")
     inherits = [e for e in r["edges"] if e["relation"] == "inherits"]
     assert len(inherits) >= 1
 
+
 def test_csharp_implements_iprocessor():
     r = extract_csharp(FIXTURES / "sample.cs")
     node_by_id = {n["id"]: n["label"] for n in r["nodes"]}
     found = any(
-        "DataProcessor" in node_by_id.get(e["source"], "") and
-        "IProcessor" in node_by_id.get(e["target"], "")
-        for e in r["edges"] if e["relation"] == "implements"
+        "DataProcessor" in node_by_id.get(e["source"], "")
+        and "IProcessor" in node_by_id.get(e["target"], "")
+        for e in r["edges"]
+        if e["relation"] == "implements"
     )
     assert found, "DataProcessor should have implements edge to IProcessor"
 
@@ -451,12 +522,8 @@ def test_java_field_type_references_have_field_context(tmp_path):
         "}\n"
     )
     result = extract_java(source)
-    assert ("CheckoutService", "PaymentGateway") in _edge_labels(
-        result, "references", "field"
-    )
-    assert ("CheckoutService", "Handler") in _edge_labels(
-        result, "references", "generic_arg"
-    )
+    assert ("CheckoutService", "PaymentGateway") in _edge_labels(result, "references", "field")
+    assert ("CheckoutService", "Handler") in _edge_labels(result, "references", "generic_arg")
 
 
 def test_java_record_component_type_references(tmp_path):
@@ -489,9 +556,7 @@ def test_java_record_components_skip_type_parameters(tmp_path):
 
     assert ("Batch", "T") not in _edge_labels(result, "references")
     assert not [
-        node
-        for node in result["nodes"]
-        if node.get("label") == "T" and not node.get("source_file")
+        node for node in result["nodes"] if node.get("label") == "T" and not node.get("source_file")
     ]
     assert ("Batch", "Box") in _edge_labels(result, "references", "field")
     assert ("Batch", "Payload") in _edge_labels(result, "references", "generic_arg")
@@ -499,11 +564,7 @@ def test_java_record_components_skip_type_parameters(tmp_path):
 
 def test_java_type_annotations_have_attribute_context(tmp_path):
     source = tmp_path / "TypeAnnotations.java"
-    source.write_text(
-        '@Service\n'
-        '@Entity(name = "checkout")\n'
-        'class CheckoutService {}\n'
-    )
+    source.write_text('@Service\n@Entity(name = "checkout")\nclass CheckoutService {}\n')
 
     result = extract_java(source)
 
@@ -523,16 +584,10 @@ def test_java_enum_and_annotation_declarations_are_type_nodes(tmp_path):
 
     result = extract_java(source)
 
-    assert ("TypeDeclarations.java", "PaymentStatus") in _edge_labels(
-        result, "contains"
-    )
+    assert ("TypeDeclarations.java", "PaymentStatus") in _edge_labels(result, "contains")
     assert ("TypeDeclarations.java", "Audited") in _edge_labels(result, "contains")
-    assert ("Order", "PaymentStatus") in _edge_labels(
-        result, "references", "field"
-    )
-    assert ("CheckoutService", "Audited") in _edge_labels(
-        result, "references", "attribute"
-    )
+    assert ("Order", "PaymentStatus") in _edge_labels(result, "references", "field")
+    assert ("CheckoutService", "Audited") in _edge_labels(result, "references", "attribute")
     definitions = {
         node["label"]: node
         for node in result["nodes"]
@@ -569,7 +624,8 @@ def test_csharp_call_edges_have_call_context():
         "Process" in node_by_id.get(e["source"], "")
         and "Validate" in node_by_id.get(e["target"], "")
         and e.get("context") == "call"
-        for e in r["edges"] if e["relation"] == "calls"
+        for e in r["edges"]
+        if e["relation"] == "calls"
     ), "C# call edges should retain call context"
 
 
@@ -582,27 +638,33 @@ def test_csharp_import_edges_have_import_context():
 
 # ── Kotlin ───────────────────────────────────────────────────────────────────
 
+
 def test_kotlin_no_error():
     r = extract_kotlin(FIXTURES / "sample.kt")
     assert "error" not in r
 
+
 def test_kotlin_finds_class():
     r = extract_kotlin(FIXTURES / "sample.kt")
-    assert any("HttpClient" in l for l in _labels(r))
+    assert any("HttpClient" in label for label in _labels(r))
+
 
 def test_kotlin_finds_data_class():
     r = extract_kotlin(FIXTURES / "sample.kt")
-    assert any("Config" in l for l in _labels(r))
+    assert any("Config" in label for label in _labels(r))
+
 
 def test_kotlin_finds_methods():
     r = extract_kotlin(FIXTURES / "sample.kt")
     labels = _labels(r)
-    assert any("get" in l for l in labels)
-    assert any("post" in l for l in labels)
+    assert any("get" in label for label in labels)
+    assert any("post" in label for label in labels)
+
 
 def test_kotlin_finds_function():
     r = extract_kotlin(FIXTURES / "sample.kt")
-    assert any("createClient" in l for l in _labels(r))
+    assert any("createClient" in label for label in _labels(r))
+
 
 def test_kotlin_emits_in_file_calls():
     """Regression test for the call-walker `simple_identifier` /
@@ -633,23 +695,27 @@ def test_kotlin_parameter_return_generic_and_field_contexts():
 
 # ── Scala ─────────────────────────────────────────────────────────────────────
 
+
 def test_scala_no_error():
     r = extract_scala(FIXTURES / "sample.scala")
     assert "error" not in r
 
+
 def test_scala_finds_class():
     r = extract_scala(FIXTURES / "sample.scala")
-    assert any("HttpClient" in l for l in _labels(r))
+    assert any("HttpClient" in label for label in _labels(r))
+
 
 def test_scala_finds_object():
     r = extract_scala(FIXTURES / "sample.scala")
-    assert any("HttpClientFactory" in l for l in _labels(r))
+    assert any("HttpClientFactory" in label for label in _labels(r))
+
 
 def test_scala_finds_methods():
     r = extract_scala(FIXTURES / "sample.scala")
     labels = _labels(r)
-    assert any("get" in l for l in labels)
-    assert any("post" in l for l in labels)
+    assert any("get" in label for label in labels)
+    assert any("post" in label for label in labels)
 
 
 def test_scala_import_edges_have_import_context():
@@ -694,23 +760,28 @@ def test_scala_call_edges_have_call_context():
 
 # ── PHP ───────────────────────────────────────────────────────────────────────
 
+
 def test_php_no_error():
     r = extract_php(FIXTURES / "sample.php")
     assert "error" not in r
 
+
 def test_php_finds_class():
     r = extract_php(FIXTURES / "sample.php")
-    assert any("ApiClient" in l for l in _labels(r))
+    assert any("ApiClient" in label for label in _labels(r))
+
 
 def test_php_finds_methods():
     r = extract_php(FIXTURES / "sample.php")
     labels = _labels(r)
-    assert any("get" in l for l in labels)
-    assert any("post" in l for l in labels)
+    assert any("get" in label for label in labels)
+    assert any("post" in label for label in labels)
+
 
 def test_php_finds_function():
     r = extract_php(FIXTURES / "sample.php")
-    assert any("parseResponse" in l for l in _labels(r))
+    assert any("parseResponse" in label for label in _labels(r))
+
 
 def test_php_finds_imports():
     r = extract_php(FIXTURES / "sample.php")
@@ -730,55 +801,67 @@ def test_php_call_edges_have_call_context():
     assert call_edges
     assert all(e.get("context") == "call" for e in call_edges)
 
+
 def test_php_finds_static_property_access():
     r = extract_php(FIXTURES / "sample_php_static_prop.php")
     assert "uses_static_prop" in _relations(r)
+
 
 def test_php_static_prop_target_is_holding_class():
     r = extract_php(FIXTURES / "sample_php_static_prop.php")
     node_by_id = {n["id"]: n["label"] for n in r["nodes"]}
     uses_prop = [
         (node_by_id.get(e["source"], e["source"]), node_by_id.get(e["target"], e["target"]))
-        for e in r["edges"] if e["relation"] == "uses_static_prop"
+        for e in r["edges"]
+        if e["relation"] == "uses_static_prop"
     ]
     assert any("DefaultPalette" in tgt for _, tgt in uses_prop)
+
 
 def test_php_finds_config_helper_call():
     r = extract_php(FIXTURES / "sample_php_config.php")
     assert "uses_config" in _relations(r)
+
 
 def test_php_config_helper_target_matches_first_segment():
     r = extract_php(FIXTURES / "sample_php_config.php")
     node_by_id = {n["id"]: n["label"] for n in r["nodes"]}
     uses_cfg = [
         (node_by_id.get(e["source"], e["source"]), node_by_id.get(e["target"], e["target"]))
-        for e in r["edges"] if e["relation"] == "uses_config"
+        for e in r["edges"]
+        if e["relation"] == "uses_config"
     ]
     assert any("Throttle" in tgt for _, tgt in uses_cfg)
+
 
 def test_php_finds_container_bind():
     r = extract_php(FIXTURES / "sample_php_container.php")
     assert "bound_to" in _relations(r)
+
 
 def test_php_container_bind_links_contract_to_implementation():
     r = extract_php(FIXTURES / "sample_php_container.php")
     node_by_id = {n["id"]: n["label"] for n in r["nodes"]}
     bound = [
         (node_by_id.get(e["source"], e["source"]), node_by_id.get(e["target"], e["target"]))
-        for e in r["edges"] if e["relation"] == "bound_to"
+        for e in r["edges"]
+        if e["relation"] == "bound_to"
     ]
     assert any("PaymentGateway" in src and "StripeGateway" in tgt for src, tgt in bound)
+
 
 def test_php_finds_event_listeners():
     r = extract_php(FIXTURES / "sample_php_listen.php")
     assert "listened_by" in _relations(r)
+
 
 def test_php_event_listener_links_event_to_listener():
     r = extract_php(FIXTURES / "sample_php_listen.php")
     node_by_id = {n["id"]: n["label"] for n in r["nodes"]}
     listened = [
         (node_by_id.get(e["source"], e["source"]), node_by_id.get(e["target"], e["target"]))
-        for e in r["edges"] if e["relation"] == "listened_by"
+        for e in r["edges"]
+        if e["relation"] == "listened_by"
     ]
     assert any("UserRegistered" in src and "SendWelcomeEmail" in tgt for src, tgt in listened)
 
@@ -809,31 +892,38 @@ def test_php_constructor_property_promotion_contexts():
 
 # ── Swift ────────────────────────────────────────────────────────────────────
 
+
 def test_swift_no_error():
     r = extract_swift(FIXTURES / "sample.swift")
     assert "error" not in r
 
+
 def test_swift_finds_class():
     r = extract_swift(FIXTURES / "sample.swift")
-    assert any("DataProcessor" in l for l in _labels(r))
+    assert any("DataProcessor" in label for label in _labels(r))
+
 
 def test_swift_finds_protocol():
     r = extract_swift(FIXTURES / "sample.swift")
-    assert any("Processor" in l for l in _labels(r))
+    assert any("Processor" in label for label in _labels(r))
+
 
 def test_swift_finds_struct():
     r = extract_swift(FIXTURES / "sample.swift")
-    assert any("Config" in l for l in _labels(r))
+    assert any("Config" in label for label in _labels(r))
+
 
 def test_swift_finds_methods():
     r = extract_swift(FIXTURES / "sample.swift")
     labels = _labels(r)
-    assert any("addItem" in l for l in labels)
-    assert any("process" in l for l in labels)
+    assert any("addItem" in label for label in labels)
+    assert any("process" in label for label in labels)
+
 
 def test_swift_finds_function():
     r = extract_swift(FIXTURES / "sample.swift")
-    assert any("createProcessor" in l for l in _labels(r))
+    assert any("createProcessor" in label for label in _labels(r))
+
 
 def test_swift_finds_imports():
     r = extract_swift(FIXTURES / "sample.swift")
@@ -845,6 +935,7 @@ def test_swift_import_edges_have_import_context():
     import_edges = _edges_with_relation(r, "imports", "imports_from")
     assert import_edges
     assert all(e.get("context") == "import" for e in import_edges)
+
 
 def test_swift_no_dangling_edges():
     r = extract_swift(FIXTURES / "sample.swift")
@@ -859,6 +950,7 @@ def test_swift_imports_survive_build():
     # #1327: `import Foundation` / `import UIKit` previously emitted edges to bare
     # module ids with no backing node, so build.py dropped 100% of Swift imports.
     from graphify.build import build_from_json
+
     r = extract_swift(FIXTURES / "sample.swift")
     import_edges = [e for e in r["edges"] if e["relation"] == "imports"]
     assert import_edges, "extractor should emit Swift import edges"
@@ -872,45 +964,52 @@ def test_swift_imports_survive_build():
     assert all("_import_label" not in e for e in r["edges"])
     # Edges must survive the build (which prunes edges with unknown endpoints).
     G = build_from_json(r)
-    surviving = [
-        (u, v) for u, v, d in G.edges(data=True) if d.get("relation") == "imports"
-    ]
+    surviving = [(u, v) for u, v, d in G.edges(data=True) if d.get("relation") == "imports"]
     assert surviving, "Swift import edges must survive build_from_json (#1327)"
+
 
 def test_swift_finds_actor():
     r = extract_swift(FIXTURES / "sample.swift")
-    assert any("CacheManager" in l for l in _labels(r))
+    assert any("CacheManager" in label for label in _labels(r))
+
 
 def test_swift_finds_enum():
     r = extract_swift(FIXTURES / "sample.swift")
-    assert any("NetworkError" in l for l in _labels(r))
+    assert any("NetworkError" in label for label in _labels(r))
+
 
 def test_swift_finds_enum_methods():
     r = extract_swift(FIXTURES / "sample.swift")
-    assert any("describe" in l for l in _labels(r))
+    assert any("describe" in label for label in _labels(r))
+
 
 def test_swift_finds_enum_cases():
     r = extract_swift(FIXTURES / "sample.swift")
     labels = _labels(r)
-    assert any("timeout" in l for l in labels)
-    assert any("connectionFailed" in l for l in labels)
+    assert any("timeout" in label for label in labels)
+    assert any("connectionFailed" in label for label in labels)
+
 
 def test_swift_enum_cases_have_case_of_edge():
     r = extract_swift(FIXTURES / "sample.swift")
     case_edges = [e for e in r["edges"] if e["relation"] == "case_of"]
     assert len(case_edges) >= 2
 
+
 def test_swift_enum_associated_value_type_emits_references():
     r = extract_swift(FIXTURES / "sample.swift")
     assert ("NetworkError", "Config") in _edge_labels(r, "references", "type")
 
+
 def test_swift_finds_deinit():
     r = extract_swift(FIXTURES / "sample.swift")
-    assert any("deinit" in l for l in _labels(r))
+    assert any("deinit" in label for label in _labels(r))
+
 
 def test_swift_finds_subscript():
     r = extract_swift(FIXTURES / "sample.swift")
-    assert any("subscript" in l for l in _labels(r))
+    assert any("subscript" in label for label in _labels(r))
+
 
 def test_swift_extension_methods_attach_to_type():
     r = extract_swift(FIXTURES / "sample.swift")
@@ -925,10 +1024,12 @@ def test_swift_extension_methods_attach_to_type():
             break
     assert found, "extension method isValid should attach to Config"
 
+
 def test_swift_extension_does_not_duplicate_type_node():
     r = extract_swift(FIXTURES / "sample.swift")
     config_nodes = [n for n in r["nodes"] if n["label"] == "Config"]
     assert len(config_nodes) == 1, f"Config should appear once, got {len(config_nodes)}"
+
 
 def test_swift_protocol_conformance_emits_implements():
     r = extract_swift(FIXTURES / "sample.swift")
@@ -953,10 +1054,12 @@ def test_swift_parameter_return_generic_and_field_contexts():
     assert ("run", "DataProcessor") in _edge_labels(r, "references", "generic_arg")
     assert ("DataProcessor", "Result") in _edge_labels(r, "references", "field")
 
+
 def test_swift_emits_calls():
     r = extract_swift(FIXTURES / "sample.swift")
     calls = _calls(r)
     assert any("process" in src and "validate" in tgt for src, tgt in calls)
+
 
 def test_swift_call_edges_have_call_context():
     r = extract_swift(FIXTURES / "sample.swift")
@@ -971,36 +1074,43 @@ def test_swift_extension_across_files_merges_into_canonical_type():
     node ids carry the file stem, so without a corpus-level merge each file
     would emit its own Foo."""
     from graphify.extract import extract
+
     paths = sorted((FIXTURES / "swift_cross_file").glob("*.swift"))
     r = extract(paths, cache_root=Path("/tmp/graphify-test-no-cache"))
     foo_nodes = [n for n in r["nodes"] if n["label"] == "Foo"]
-    assert len(foo_nodes) == 1, f"Foo should appear once, got {len(foo_nodes)}: {[n['id'] for n in foo_nodes]}"
+    assert len(foo_nodes) == 1, (
+        f"Foo should appear once, got {len(foo_nodes)}: {[n['id'] for n in foo_nodes]}"
+    )
     foo_id = foo_nodes[0]["id"]
     method_targets = {
-        e["target"] for e in r["edges"]
-        if e["relation"] == "method" and e["source"] == foo_id
+        e["target"] for e in r["edges"] if e["relation"] == "method" and e["source"] == foo_id
     }
     method_labels = {n["label"] for n in r["nodes"] if n["id"] in method_targets}
-    assert any("one" in l for l in method_labels), f"one() should attach to Foo, got {method_labels}"
-    assert any("two" in l for l in method_labels), f"extension method two() should attach to Foo, got {method_labels}"
+    assert any("one" in method_label for method_label in method_labels), (
+        f"one() should attach to Foo, got {method_labels}"
+    )
+    assert any("two" in method_label for method_label in method_labels), (
+        f"extension method two() should attach to Foo, got {method_labels}"
+    )
 
 
 # ── Elixir ────────────────────────────────────────────────────────────────────
 
-from graphify.extract import extract_elixir
 
 def test_elixir_finds_module():
     r = extract_elixir(FIXTURES / "sample.ex")
     assert "error" not in r
     labels = [n["label"] for n in r["nodes"]]
-    assert any("MyApp.Accounts.User" in l for l in labels)
+    assert any("MyApp.Accounts.User" in label for label in labels)
+
 
 def test_elixir_finds_functions():
     r = extract_elixir(FIXTURES / "sample.ex")
     labels = [n["label"] for n in r["nodes"]]
-    assert any("create" in l for l in labels)
-    assert any("find" in l for l in labels)
-    assert any("validate" in l for l in labels)
+    assert any("create" in label for label in labels)
+    assert any("find" in label for label in labels)
+    assert any("validate" in label for label in labels)
+
 
 def test_elixir_finds_imports():
     r = extract_elixir(FIXTURES / "sample.ex")
@@ -1023,19 +1133,19 @@ def test_elixir_multi_alias_expands():
     silently dropped.
     """
     r = extract_elixir(FIXTURES / "sample.ex")
-    import_segs = [
-        e["target"].rsplit("_", 1)[-1]
-        for e in r["edges"] if e["relation"] == "imports"
-    ]
+    import_segs = [e["target"].rsplit("_", 1)[-1] for e in r["edges"] if e["relation"] == "imports"]
     # from `alias MyApp.Schemas.{Account, Token}`
     assert "account" in import_segs, "MyApp.Schemas.Account import missing"
     assert "token" in import_segs, "MyApp.Schemas.Token import missing"
+
 
 def test_elixir_finds_calls():
     r = extract_elixir(FIXTURES / "sample.ex")
     calls = {(e["source"], e["target"]) for e in r["edges"] if e["relation"] == "calls"}
     labels = {n["id"]: n["label"] for n in r["nodes"]}
-    assert any("create" in labels.get(src, "") and "validate" in labels.get(tgt, "") for src, tgt in calls)
+    assert any(
+        "create" in labels.get(src, "") and "validate" in labels.get(tgt, "") for src, tgt in calls
+    )
 
 
 def test_elixir_call_edges_have_call_context():
@@ -1044,6 +1154,7 @@ def test_elixir_call_edges_have_call_context():
     assert call_edges
     assert all(e.get("context") == "call" for e in call_edges)
 
+
 def test_elixir_method_edges():
     r = extract_elixir(FIXTURES / "sample.ex")
     methods = [e for e in r["edges"] if e["relation"] == "method"]
@@ -1051,9 +1162,6 @@ def test_elixir_method_edges():
 
 
 # ── Objective-C ──────────────────────────────────────────────────────────────
-from graphify.extract import extract_objc
-
-
 def test_objc_finds_interface():
     r = extract_objc(FIXTURES / "sample.m")
     labels = [n["label"] for n in r["nodes"]]
@@ -1069,7 +1177,7 @@ def test_objc_finds_subclass():
 def test_objc_finds_methods():
     r = extract_objc(FIXTURES / "sample.m")
     labels = [n["label"] for n in r["nodes"]]
-    assert any("speak" in l or "fetch" in l or "initWithName" in l for l in labels)
+    assert any("speak" in label or "fetch" in label or "initWithName" in label for label in labels)
 
 
 def test_objc_finds_imports():
@@ -1133,7 +1241,9 @@ def test_objc_resolves_self_method_calls():
 def test_objc_class_method_labeled_with_plus(tmp_path):
     """`+ (…)shared` is a class method and must be labeled +shared, not -shared (#1475)."""
     p = tmp_path / "S.m"
-    p.write_text("@implementation S\n+ (instancetype)shared { return nil; }\n- (void)go { }\n@end\n")
+    p.write_text(
+        "@implementation S\n+ (instancetype)shared { return nil; }\n- (void)go { }\n@end\n"
+    )
     labels = {n["label"] for n in extract_objc(p)["nodes"]}
     assert "+shared" in labels and "-go" in labels
 
@@ -1166,6 +1276,7 @@ def test_objc_generic_property_type_extracted(tmp_path):
 def test_objc_module_import_edge(tmp_path):
     """`@import Foundation;` / `@import UIKit.UIView;` produce imports edges (#1475)."""
     from graphify.extract import _make_id
+
     p = tmp_path / "X.m"
     p.write_text("@import Foundation;\n@import UIKit.UIView;\n@implementation X\n@end\n")
     targets = {e["target"] for e in extract_objc(p)["edges"] if e["relation"] == "imports"}
@@ -1176,6 +1287,7 @@ def test_objc_header_dispatch_routes_objc_not_c(tmp_path):
     """An ObjC `.h` (has @interface) routes to extract_objc; a plain C `.h` stays
     on extract_c, so C/C++ headers are never hijacked by the sniff (#1475)."""
     from graphify.extract import _get_extractor, extract_objc as _eo, extract_c as _ec
+
     objc_h = tmp_path / "AppDelegate.h"
     objc_h.write_text("@interface AppDelegate : NSObject <UIApplicationDelegate>\n@end\n")
     c_h = tmp_path / "util.h"
@@ -1209,11 +1321,7 @@ def test_objc_ns_assume_nonnull_macro_does_not_break_parsing(tmp_path):
 def test_objc_macro_free_header_unchanged(tmp_path):
     """A macro-free header still parses exactly as before (regression)."""
     p = tmp_path / "Plain.h"
-    p.write_text(
-        "@interface Plain : NSObject\n"
-        "- (void)go;\n"
-        "@end\n"
-    )
+    p.write_text("@interface Plain : NSObject\n- (void)go;\n@end\n")
     r = extract_objc(p)
     labels = {n["label"] for n in r["nodes"]}
     assert "Plain" in labels
@@ -1225,18 +1333,22 @@ def test_objc_quoted_import_edges_resolve_to_real_nodes(tmp_path):
     not the bare stem, which gets salted away when a `.h`/`.m` pair exists and left
     the import edge dangling (#1475)."""
     from graphify.extract import extract
+
     (tmp_path / "Product.h").write_text("@interface Product : NSObject\n@end\n")
-    (tmp_path / "Product.m").write_text("#import \"Product.h\"\n@implementation Product\n@end\n")
+    (tmp_path / "Product.m").write_text('#import "Product.h"\n@implementation Product\n@end\n')
     (tmp_path / "Order.h").write_text("@interface Order : NSObject\n@end\n")
-    (tmp_path / "Order.m").write_text("#import \"Order.h\"\n@implementation Order\n@end\n")
+    (tmp_path / "Order.m").write_text('#import "Order.h"\n@implementation Order\n@end\n')
     consumer_a = tmp_path / "ConsumerA.m"
-    consumer_a.write_text("#import \"Product.h\"\n@implementation ConsumerA\n@end\n")
+    consumer_a.write_text('#import "Product.h"\n@implementation ConsumerA\n@end\n')
     consumer_b = tmp_path / "ConsumerB.m"
-    consumer_b.write_text("#import \"Order.h\"\n@implementation ConsumerB\n@end\n")
+    consumer_b.write_text('#import "Order.h"\n@implementation ConsumerB\n@end\n')
     files = [
-        tmp_path / "Product.h", tmp_path / "Product.m",
-        tmp_path / "Order.h", tmp_path / "Order.m",
-        consumer_a, consumer_b,
+        tmp_path / "Product.h",
+        tmp_path / "Product.m",
+        tmp_path / "Order.h",
+        tmp_path / "Order.m",
+        consumer_a,
+        consumer_b,
     ]
     r = extract(files, parallel=False)
     node_ids = {n["id"] for n in r["nodes"]}
@@ -1254,8 +1366,12 @@ def test_objc_quoted_import_edges_resolve_to_real_nodes(tmp_path):
             f"import target is not a header file node: {e} -> {id_to_label.get(e['target'])}"
         )
     # the self-import (Product.m -> Product.h) specifically lands on the .h variant
-    prod_imports = [e for e in import_edges if id_to_label.get(e["source"], "").endswith("Product.m")]
-    assert prod_imports and all(id_to_label.get(e["target"]) == "Product.h" for e in prod_imports), (
+    prod_imports = [
+        e for e in import_edges if id_to_label.get(e["source"], "").endswith("Product.m")
+    ]
+    assert prod_imports and all(
+        id_to_label.get(e["target"]) == "Product.h" for e in prod_imports
+    ), (
         f"Product.m should import the Product.h node, got {[(id_to_label.get(e['source']), id_to_label.get(e['target'])) for e in prod_imports]}"
     )
 
@@ -1263,11 +1379,12 @@ def test_objc_quoted_import_edges_resolve_to_real_nodes(tmp_path):
 def test_objc_alloc_init_emits_type_reference(tmp_path):
     """`[[Foo alloc] init]` must emit a `references` edge to the project class Foo (#1475)."""
     from graphify.extract import extract
+
     (tmp_path / "Foo.h").write_text("@interface Foo : NSObject\n@end\n")
-    (tmp_path / "Foo.m").write_text("#import \"Foo.h\"\n@implementation Foo\n@end\n")
+    (tmp_path / "Foo.m").write_text('#import "Foo.h"\n@implementation Foo\n@end\n')
     user = tmp_path / "User.m"
     user.write_text(
-        "#import \"Foo.h\"\n"
+        '#import "Foo.h"\n'
         "@implementation User\n"
         "- (void)build { Foo *x = [[Foo alloc] init]; }\n"
         "@end\n"
@@ -1301,13 +1418,12 @@ def test_objc_dot_syntax_property_accesses_edge(tmp_path):
     p = tmp_path / "Dog.m"
     p.write_text(
         "@implementation Dog\n"
-        "- (NSString *)name { return @\"Rex\"; }\n"
-        "- (void)greet { NSLog(@\"%@\", self.name); }\n"
+        '- (NSString *)name { return @"Rex"; }\n'
+        '- (void)greet { NSLog(@"%@", self.name); }\n'
         "@end\n"
     )
     r = extract_objc(p)
-    accesses = [(e["source"], e["target"]) for e in r["edges"]
-                if e["relation"] == "accesses"]
+    accesses = [(e["source"], e["target"]) for e in r["edges"] if e["relation"] == "accesses"]
     nid2label = {n["id"]: n["label"] for n in r["nodes"]}
     assert len(accesses) == 1
     assert nid2label[accesses[0][1]] == "-name"
@@ -1318,12 +1434,12 @@ def test_objc_dot_syntax_no_fanout_two_same_named_properties(tmp_path):
     p = tmp_path / "AB.m"
     p.write_text(
         "@implementation A\n"
-        "- (NSString *)name { return @\"A\"; }\n"
-        "- (void)show { NSLog(@\"%@\", self.name); }\n"
+        '- (NSString *)name { return @"A"; }\n'
+        '- (void)show { NSLog(@"%@", self.name); }\n'
         "@end\n"
         "@implementation B\n"
-        "- (NSString *)name { return @\"B\"; }\n"
-        "- (void)show { NSLog(@\"%@\", self.name); }\n"
+        '- (NSString *)name { return @"B"; }\n'
+        '- (void)show { NSLog(@"%@", self.name); }\n'
         "@end\n"
     )
     r = extract_objc(p)
@@ -1339,11 +1455,7 @@ def test_objc_dot_syntax_no_fanout_two_same_named_properties(tmp_path):
 def test_objc_dot_syntax_unresolvable_property_zero_edges(tmp_path):
     """Accessing a property not defined in the current class produces zero accesses edges."""
     p = tmp_path / "X.m"
-    p.write_text(
-        "@implementation X\n"
-        "- (void)run { NSLog(@\"%@\", self.missing); }\n"
-        "@end\n"
-    )
+    p.write_text('@implementation X\n- (void)run { NSLog(@"%@", self.missing); }\n@end\n')
     r = extract_objc(p)
     accesses = [e for e in r["edges"] if e["relation"] == "accesses"]
     assert len(accesses) == 0
@@ -1360,9 +1472,11 @@ def test_objc_selector_expression_calls_edge(tmp_path):
     )
     r = extract_objc(p)
     nid2label = {n["id"]: n["label"] for n in r["nodes"]}
-    sel_calls = [(nid2label.get(e["source"]), nid2label.get(e["target"]))
-                 for e in r["edges"]
-                 if e["relation"] == "calls" and e.get("context") == "call"]
+    sel_calls = [
+        (nid2label.get(e["source"]), nid2label.get(e["target"]))
+        for e in r["edges"]
+        if e["relation"] == "calls" and e.get("context") == "call"
+    ]
     assert ("-schedule", "-fetch") in sel_calls
 
 
@@ -1380,9 +1494,11 @@ def test_objc_selector_no_fanout_two_same_named_methods(tmp_path):
     )
     r = extract_objc(p)
     nid2label = {n["id"]: n["label"] for n in r["nodes"]}
-    sel_edges = [e for e in r["edges"]
-                 if e["relation"] == "calls"
-                 and nid2label.get(e["target"], "").endswith("doThing")]
+    sel_edges = [
+        e
+        for e in r["edges"]
+        if e["relation"] == "calls" and nid2label.get(e["target"], "").endswith("doThing")
+    ]
     assert len(sel_edges) == 0, f"expected 0 selector edges with ambiguous name, got {sel_edges}"
 
 
@@ -1393,15 +1509,18 @@ def test_objc_dot_syntax_substring_sibling_exact_match(tmp_path):
     p = tmp_path / "Person.m"
     p.write_text(
         "@implementation Person\n"
-        "- (NSString *)name { return @\"n\"; }\n"
-        "- (NSString *)surname { return @\"s\"; }\n"
-        "- (void)show { NSLog(@\"%@\", self.name); }\n"
+        '- (NSString *)name { return @"n"; }\n'
+        '- (NSString *)surname { return @"s"; }\n'
+        '- (void)show { NSLog(@"%@", self.name); }\n'
         "@end\n"
     )
     r = extract_objc(p)
     nid2label = {n["id"]: n["label"] for n in r["nodes"]}
-    accesses = [(nid2label.get(e["source"]), nid2label.get(e["target"]))
-                for e in r["edges"] if e["relation"] == "accesses"]
+    accesses = [
+        (nid2label.get(e["source"]), nid2label.get(e["target"]))
+        for e in r["edges"]
+        if e["relation"] == "accesses"
+    ]
     assert ("-show", "-name") in accesses, f"self.name must resolve to -name: {accesses}"
     assert ("-show", "-surname") not in accesses, f"self.name must NOT match -surname: {accesses}"
 
@@ -1419,10 +1538,14 @@ def test_objc_selector_substring_method_exact_match(tmp_path):
     )
     r = extract_objc(p)
     nid2label = {n["id"]: n["label"] for n in r["nodes"]}
-    sel_calls = [(nid2label.get(e["source"]), nid2label.get(e["target"]))
-                 for e in r["edges"]
-                 if e["relation"] == "calls" and e.get("context") == "call"]
-    assert ("-run", "-doThing") in sel_calls, f"@selector(doThing) must resolve to -doThing: {sel_calls}"
+    sel_calls = [
+        (nid2label.get(e["source"]), nid2label.get(e["target"]))
+        for e in r["edges"]
+        if e["relation"] == "calls" and e.get("context") == "call"
+    ]
+    assert ("-run", "-doThing") in sel_calls, (
+        f"@selector(doThing) must resolve to -doThing: {sel_calls}"
+    )
     assert ("-run", "-reallyDoThing") not in sel_calls
 
 
@@ -1430,12 +1553,14 @@ def test_objc_selector_substring_method_exact_match(tmp_path):
 # Go
 # ---------------------------------------------------------------------------
 
+
 def test_go_receiver_methods_share_type_node():
     """Methods on the same receiver type must share one canonical type node."""
     r = extract_go(FIXTURES / "sample.go")
     server_nodes = [n for n in r["nodes"] if n["label"] == "Server"]
     # Both Start() and Stop() are on *Server — should produce exactly one Server node
     assert len(server_nodes) == 1
+
 
 def test_go_receiver_uses_pkg_scope():
     """Type node id should be scoped to directory, not file stem."""
@@ -1449,6 +1574,7 @@ def test_go_receiver_uses_pkg_scope():
 # ---------------------------------------------------------------------------
 # Julia
 # ---------------------------------------------------------------------------
+
 
 def test_julia_finds_module():
     r = extract_julia(FIXTURES / "sample.jl")
@@ -1472,14 +1598,14 @@ def test_julia_finds_abstract_type():
 def test_julia_finds_functions():
     r = extract_julia(FIXTURES / "sample.jl")
     labels = [n["label"] for n in r["nodes"]]
-    assert any("area" in l for l in labels)
-    assert any("distance" in l for l in labels)
+    assert any("area" in label for label in labels)
+    assert any("distance" in label for label in labels)
 
 
 def test_julia_finds_short_function():
     r = extract_julia(FIXTURES / "sample.jl")
     labels = [n["label"] for n in r["nodes"]]
-    assert any("perimeter" in l for l in labels)
+    assert any("perimeter" in label for label in labels)
 
 
 def test_julia_finds_imports():
@@ -1550,6 +1676,7 @@ def test_julia_no_dangling_edges():
 
 # ── Fortran extractor ────────────────────────────────────────────────────────
 
+
 def test_fortran_finds_module():
     r = extract_fortran(FIXTURES / "sample.f90")
     assert "error" not in r
@@ -1560,14 +1687,14 @@ def test_fortran_finds_module():
 def test_fortran_finds_subroutines():
     r = extract_fortran(FIXTURES / "sample.f90")
     labels = [n["label"] for n in r["nodes"]]
-    assert any("circle_area" in l for l in labels)
-    assert any("print_area" in l for l in labels)
+    assert any("circle_area" in label for label in labels)
+    assert any("print_area" in label for label in labels)
 
 
 def test_fortran_finds_function():
     r = extract_fortran(FIXTURES / "sample.f90")
     labels = [n["label"] for n in r["nodes"]]
-    assert any("distance" in l for l in labels)
+    assert any("distance" in label for label in labels)
 
 
 def test_fortran_finds_program():
@@ -1605,9 +1732,9 @@ def test_fortran_finds_function_call():
     r = extract_fortran(FIXTURES / "sample.f90")
     labels = {n["id"]: n["label"] for n in r["nodes"]}
     found = any(
-        "report" in labels.get(e["source"], "")
-        and "double_val" in labels.get(e["target"], "")
-        for e in r["edges"] if e["relation"] == "calls"
+        "report" in labels.get(e["source"], "") and "double_val" in labels.get(e["target"], "")
+        for e in r["edges"]
+        if e["relation"] == "calls"
     )
     assert found, "report() should have a calls edge to double_val()"
 
@@ -1615,7 +1742,11 @@ def test_fortran_finds_function_call():
 def test_fortran_case_insensitive_names():
     r = extract_fortran(FIXTURES / "sample.f90")
     labels = [n["label"] for n in r["nodes"]]
-    assert all(l == l.lower() or "(" in l for l in labels if l.endswith(("()", "")) and not "." in l)
+    assert all(
+        label == label.lower() or "(" in label
+        for label in labels
+        if label.endswith(("()", "")) and "." not in label
+    )
     assert "geometry" in labels
     assert "main" in labels
 
@@ -1644,10 +1775,11 @@ def test_fortran_capital_F_parses_preprocessed():
     assert "error" not in r
     labels = [n["label"] for n in r["nodes"]]
     assert "shapes" in labels
-    assert any("compute_volume" in l for l in labels)
+    assert any("compute_volume" in label for label in labels)
 
 
 # ── PowerShell ───────────────────────────────────────────────────────────────
+
 
 def test_powershell_no_error():
     r = extract_powershell(FIXTURES / "sample.ps1")
@@ -1657,9 +1789,10 @@ def test_powershell_no_error():
 def test_powershell_psm1_dispatched_and_extracted(tmp_path):
     # #1315: .psm1 modules were never indexed — no dispatch entry, no CODE_EXTENSIONS.
     from graphify.extract import _get_extractor
+
     mod = tmp_path / "Utils.psm1"
     mod.write_text(
-        "function Get-Greeting { param([string]$Name) return \"Hi $Name\" }\n",
+        'function Get-Greeting { param([string]$Name) return "Hi $Name" }\n',
         encoding="utf-8",
     )
     assert _get_extractor(mod) is extract_powershell
@@ -1672,7 +1805,7 @@ def test_powershell_finds_class_and_method():
     r = extract_powershell(FIXTURES / "sample.ps1")
     labels = [n["label"] for n in r["nodes"]]
     assert "DataProcessor" in labels
-    assert any("Transform" in l for l in labels)
+    assert any("Transform" in label for label in labels)
 
 
 def test_powershell_class_base_type_emits_inherits_edge():
@@ -1696,6 +1829,7 @@ def test_powershell_method_parameter_and_return_type_contexts():
 
 # ── PowerShell: Import-Module + dot-source (#1331) ───────────────────────────
 
+
 def test_powershell_import_module_emits_edge():
     """Import-Module Foo at top level emits an imports_from edge."""
     r = extract_powershell(FIXTURES / "sample_import.ps1")
@@ -1708,7 +1842,9 @@ def test_powershell_import_module_with_name_param():
     """Import-Module -Name Bar.psm1 resolves to module stem 'bar'."""
     r = extract_powershell(FIXTURES / "sample_import.ps1")
     targets = {e["target"] for e in r["edges"] if e["relation"] == "imports_from"}
-    assert any("bar" in t for t in targets), f"Missing Import-Module -Name Bar edge; targets={targets}"
+    assert any("bar" in t for t in targets), (
+        f"Missing Import-Module -Name Bar edge; targets={targets}"
+    )
 
 
 def test_powershell_dot_source_forward_slash_emits_edge():
@@ -1738,8 +1874,7 @@ def test_powershell_import_module_not_a_raw_call():
     """Import-Module must not appear in raw_calls (it is an import, not a function call)."""
     r = extract_powershell(FIXTURES / "sample_import.ps1")
     import_module_calls = [
-        rc for rc in r.get("raw_calls", [])
-        if rc.get("callee", "").lower() == "import-module"
+        rc for rc in r.get("raw_calls", []) if rc.get("callee", "").lower() == "import-module"
     ]
     assert not import_module_calls, (
         f"Import-Module appeared in raw_calls but should be emitted as import edge: {import_module_calls}"
@@ -1757,10 +1892,13 @@ def test_powershell_dot_source_inside_function_emits_edge():
 
 # ── PowerShell manifest (.psd1) (#1331) ──────────────────────────────────────
 
+
 def test_powershell_psd1_dispatched():
     """_get_extractor should route .psd1 to extract_powershell_manifest."""
     from graphify.extract import _get_extractor
-    import tempfile, os
+    import tempfile
+    import os
+
     with tempfile.NamedTemporaryFile(suffix=".psd1", delete=False) as f:
         f.write(b"@{ RootModule = 'X.psm1' }")
         path = f.name
@@ -1795,8 +1933,12 @@ def test_powershell_psd1_nested_modules():
     """NestedModules = @('Helpers.psm1', 'Logger.psm1') produces edges for both."""
     r = extract_powershell_manifest(FIXTURES / "sample.psd1")
     targets = {e["target"] for e in r["edges"] if e["relation"] == "imports_from"}
-    assert any("helpers" in t for t in targets), f"Missing NestedModules Helpers edge; targets={targets}"
-    assert any("logger" in t for t in targets), f"Missing NestedModules Logger edge; targets={targets}"
+    assert any("helpers" in t for t in targets), (
+        f"Missing NestedModules Helpers edge; targets={targets}"
+    )
+    assert any("logger" in t for t in targets), (
+        f"Missing NestedModules Logger edge; targets={targets}"
+    )
 
 
 def test_powershell_psd1_required_modules_string():
@@ -1836,9 +1978,11 @@ def test_powershell_psd1_no_dangling_edges():
 
 # ── TypeScript dynamic imports ───────────────────────────────────────────────
 
+
 def test_ts_dynamic_import_no_error():
     r = extract_js(FIXTURES / "dynamic_import.ts")
     assert "error" not in r
+
 
 def test_ts_dynamic_import_extracts_edges():
     """Dynamic import() calls inside functions should produce imports_from edges."""
@@ -1847,28 +1991,37 @@ def test_ts_dynamic_import_extracts_edges():
     targets = {e["target"] for e in dyn_edges}
     # Should find: static ./logger, dynamic ./mayaEngine.js, dynamic ./queue.js
     assert any("logger" in t for t in targets), f"Missing static import of logger: {targets}"
-    assert any("mayaengine" in t.lower() for t in targets), f"Missing dynamic import of mayaEngine: {targets}"
+    assert any("mayaengine" in t.lower() for t in targets), (
+        f"Missing dynamic import of mayaEngine: {targets}"
+    )
     assert any("queue" in t.lower() for t in targets), f"Missing dynamic import of queue: {targets}"
+
 
 def test_ts_dynamic_import_confidence():
     """Dynamic imports should have EXTRACTED confidence (they are deterministic string literals)."""
     r = extract_js(FIXTURES / "dynamic_import.ts")
-    dyn_edges = [e for e in r["edges"]
-                 if e["relation"] == "imports_from"
-                 and "mayaengine" in e["target"].lower()]
+    dyn_edges = [
+        e
+        for e in r["edges"]
+        if e["relation"] == "imports_from" and "mayaengine" in e["target"].lower()
+    ]
     assert len(dyn_edges) >= 1
     assert dyn_edges[0]["confidence"] == "EXTRACTED"
+
 
 def test_ts_dynamic_import_source_is_function():
     """Dynamic import edge source should be the enclosing function, not the file."""
     r = extract_js(FIXTURES / "dynamic_import.ts")
     node_labels = {n["id"]: n["label"] for n in r["nodes"]}
-    dyn_edges = [e for e in r["edges"]
-                 if e["relation"] == "imports_from"
-                 and "mayaengine" in e["target"].lower()]
+    dyn_edges = [
+        e
+        for e in r["edges"]
+        if e["relation"] == "imports_from" and "mayaengine" in e["target"].lower()
+    ]
     assert len(dyn_edges) >= 1
     src_label = node_labels.get(dyn_edges[0]["source"], "")
     assert "processInbound" in src_label, f"Expected processInbound as source, got {src_label}"
+
 
 def test_ts_no_dynamic_import_in_sync_fn():
     """Functions without dynamic imports should not get spurious imports_from edges."""
@@ -1876,27 +2029,33 @@ def test_ts_no_dynamic_import_in_sync_fn():
     node_ids = {n["label"]: n["id"] for n in r["nodes"]}
     sync_nid = node_ids.get("syncOnly()")
     if sync_nid:
-        sync_imports = [e for e in r["edges"]
-                        if e["source"] == sync_nid and e["relation"] == "imports_from"]
+        sync_imports = [
+            e for e in r["edges"] if e["source"] == sync_nid and e["relation"] == "imports_from"
+        ]
         assert len(sync_imports) == 0
+
 
 def test_ts_dynamic_template_literal_skipped():
     """Dynamic template literals (with ${}) must not produce an imports_from edge."""
     r = extract_js(FIXTURES / "dynamic_import.ts")
     targets = {e["target"] for e in r["edges"] if e["relation"] == "imports_from"}
     # loadHandler uses `./handlers/${handlerName}` — no static path, must be absent
-    assert not any("handler" in t.lower() and "$" in t for t in targets), \
+    assert not any("handler" in t.lower() and "$" in t for t in targets), (
         f"Garbage edge from dynamic template literal found: {targets}"
+    )
     # More robust: no target should contain a brace character
-    assert not any("{" in t or "}" in t for t in targets), \
+    assert not any("{" in t or "}" in t for t in targets), (
         f"Target contains unresolved template expression: {targets}"
+    )
+
 
 def test_ts_static_template_literal_resolved():
     """Static template literals (no ${}) should resolve the same as a plain string."""
     r = extract_js(FIXTURES / "dynamic_import.ts")
     targets = {e["target"] for e in r["edges"] if e["relation"] == "imports_from"}
-    assert any("statichelper" in t.lower() for t in targets), \
+    assert any("statichelper" in t.lower() for t in targets), (
         f"Static template literal import not resolved: {targets}"
+    )
 
 
 def test_js_local_const_does_not_emit_phantom_node(tmp_path):
@@ -1934,19 +2093,16 @@ def test_js_module_level_arrow_produces_node_and_call_edges(tmp_path):
 
     The scope guard must not accidentally suppress top-level arrow functions.
     """
-    src = (
-        "function helper() { return 1; }\n"
-        "const handler = () => {\n"
-        "  helper();\n"
-        "};\n"
-    )
+    src = "function helper() { return 1; }\nconst handler = () => {\n  helper();\n};\n"
     f = tmp_path / "arrows.js"
     f.write_text(src)
     r = extract_js(f)
     labels = _labels(r)
     relations = _relations(r)
 
-    assert any("handler" in l for l in labels), f"module-level arrow 'handler' missing: {labels}"
+    assert any("handler" in label for label in labels), (
+        f"module-level arrow 'handler' missing: {labels}"
+    )
     assert "calls" in relations, f"expected 'calls' edge from handler->helper: {relations}"
 
 
@@ -1972,6 +2128,7 @@ def test_ts_constructor_injection_calls_edge(tmp_path):
     """this.repo.findById() in a class with constructor(private repo: IUserRepository)
     must produce a calls edge from getUser() to findById() (#1316)."""
     from graphify.extract import extract
+
     repo_ts = tmp_path / "repo.ts"
     repo_ts.write_text(
         "export interface IUserRepository {\n"
@@ -1992,18 +2149,13 @@ def test_ts_constructor_injection_calls_edge(tmp_path):
         "}\n"
     )
     r = extract([repo_ts, svc_ts], cache_root=tmp_path / "cache")
-    edge_triples = {
-        (e["source"], e["relation"], e["target"])
-        for e in r["edges"]
-    }
+    edge_triples = {(e["source"], e["relation"], e["target"]) for e in r["edges"]}
     labels_by_id = {n["id"]: n["label"] for n in r["nodes"]}
     label_triples = {
-        (labels_by_id.get(s, s), rel, labels_by_id.get(t, t))
-        for s, rel, t in edge_triples
+        (labels_by_id.get(s, s), rel, labels_by_id.get(t, t)) for s, rel, t in edge_triples
     }
     calls_from_get_user = [
-        (s, rel, t) for s, rel, t in label_triples
-        if "getUser" in s and rel == "calls"
+        (s, rel, t) for s, rel, t in label_triples if "getUser" in s and rel == "calls"
     ]
     assert any("findById" in t for _, _, t in calls_from_get_user), (
         f"expected getUser()->findById() calls edge, got: {calls_from_get_user}"
@@ -2025,13 +2177,11 @@ def test_ts_this_field_receiver_not_same_file_collision(tmp_path):
         "}\n"
     )
     r = extract_js(f)
-    calls_edges = [
-        e for e in r["edges"]
-        if e["relation"] == "calls"
-    ]
+    calls_edges = [e for e in r["edges"] if e["relation"] == "calls"]
     caller_labels = {n["id"]: n["label"] for n in r["nodes"]}
     run_to_query = [
-        e for e in calls_edges
+        e
+        for e in calls_edges
         if "run" in caller_labels.get(e["source"], "")
         and "query" in caller_labels.get(e["target"], "")
     ]
@@ -2054,6 +2204,7 @@ def test_ts_injected_field_resolves_to_typed_class_not_same_named_collision(tmp_
     injected field is typed `Database`, so `this.db.query()` must resolve to
     Database.query ONLY — never HttpClient.query (no global name-match fan-out)."""
     from graphify.extract import extract
+
     (tmp_path / "database.ts").write_text(
         "export class Database {\n  query(sql: string) { return sql; }\n}\n"
     )
@@ -2073,12 +2224,10 @@ def test_ts_injected_field_resolves_to_typed_class_not_same_named_collision(tmp_
     )
     labels = {n["id"]: n["label"] for n in r["nodes"]}
     # Find the run()->query calls edge and confirm its target is owned by Database.
-    method_owner = {
-        e["target"]: e["source"]
-        for e in r["edges"] if e["relation"] == "method"
-    }
+    method_owner = {e["target"]: e["source"] for e in r["edges"] if e["relation"] == "method"}
     run_query_targets = [
-        e["target"] for e in r["edges"]
+        e["target"]
+        for e in r["edges"]
         if e["relation"] == "calls"
         and "run" in labels.get(e["source"], "")
         and "query" in labels.get(e["target"], "")
@@ -2095,7 +2244,8 @@ def test_ts_injected_field_ambiguous_type_emits_no_edge(tmp_path):
     """If the injected field's type name is ambiguous (two classes named Database),
     the god-node guard bails — no calls edge rather than a guess (#1316)."""
     from graphify.extract import extract
-    (tmp_path / "a" ).mkdir()
+
+    (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
     (tmp_path / "a" / "database.ts").write_text(
         "export class Database {\n  query(sql: string) { return sql; }\n}\n"
@@ -2118,25 +2268,27 @@ def test_ts_injected_field_ambiguous_type_emits_no_edge(tmp_path):
 
 # ── Markdown ─────────────────────────────────────────────────────────────────
 
-from graphify.extract import extract_markdown
 
 def test_markdown_no_error():
     r = extract_markdown(FIXTURES / "deploy_guide.md")
     assert "error" not in r
 
+
 def test_markdown_finds_headings():
     r = extract_markdown(FIXTURES / "deploy_guide.md")
     labels = _labels(r)
-    assert any("Deploy Guide" in l for l in labels)
-    assert any("Prerequisites" in l for l in labels)
-    assert any("Full Deploy" in l for l in labels)
-    assert any("Rollback" in l for l in labels)
+    assert any("Deploy Guide" in label for label in labels)
+    assert any("Prerequisites" in label for label in labels)
+    assert any("Full Deploy" in label for label in labels)
+    assert any("Rollback" in label for label in labels)
+
 
 def test_markdown_finds_nested_heading():
     """### Database Migration is nested under ## Full Deploy."""
     r = extract_markdown(FIXTURES / "deploy_guide.md")
     labels = _labels(r)
-    assert any("Database Migration" in l for l in labels)
+    assert any("Database Migration" in label for label in labels)
+
 
 def test_markdown_skips_fenced_code_blocks():
     """Fenced code blocks should NOT emit nodes (#1077).
@@ -2148,8 +2300,11 @@ def test_markdown_skips_fenced_code_blocks():
     """
     r = extract_markdown(FIXTURES / "deploy_guide.md")
     labels = _labels(r)
-    assert not any(l.startswith("code:") for l in labels), \
-        f"Expected no code:* nodes after #1077 fix, got: {[l for l in labels if l.startswith('code:')]}"
+    assert not any(label.startswith("code:") for label in labels), (
+        "Expected no code:* nodes after #1077 fix, got: "
+        f"{[label for label in labels if label.startswith('code:')]}"
+    )
+
 
 def test_markdown_contains_edges():
     """Headings should be connected via 'contains' edges (file->h, h->h)."""
@@ -2167,16 +2322,11 @@ def test_markdown_fenced_heading_not_parsed():
     The fence-toggle skips over fenced contents so interior markdown syntax
     is not misread as document structure.
     """
-    import tempfile, os
+    import tempfile
+    import os
+
     src = (
-        "# Real Heading\n"
-        "\n"
-        "```bash\n"
-        "## Not A Heading\n"
-        "echo hello\n"
-        "```\n"
-        "\n"
-        "## Another Real Heading\n"
+        "# Real Heading\n\n```bash\n## Not A Heading\necho hello\n```\n\n## Another Real Heading\n"
     )
     with tempfile.NamedTemporaryFile(suffix=".md", mode="w", delete=False) as fh:
         fh.write(src)
@@ -2187,10 +2337,14 @@ def test_markdown_fenced_heading_not_parsed():
     finally:
         os.unlink(fpath)
 
-    assert any("Real Heading" in l for l in labels), f"'Real Heading' missing: {labels}"
-    assert any("Another Real Heading" in l for l in labels), f"'Another Real Heading' missing: {labels}"
-    assert not any("Not A Heading" in l for l in labels), \
+    assert any("Real Heading" in label for label in labels), f"'Real Heading' missing: {labels}"
+    assert any("Another Real Heading" in label for label in labels), (
+        f"'Another Real Heading' missing: {labels}"
+    )
+    assert not any("Not A Heading" in label for label in labels), (
         f"fenced '## Not A Heading' was incorrectly parsed as a node: {labels}"
+    )
+
 
 def test_markdown_no_dangling_edges():
     r = extract_markdown(FIXTURES / "deploy_guide.md")
@@ -2247,6 +2401,7 @@ def test_markdown_link_edges_resolve_to_real_nodes(tmp_path):
     """End-to-end: after extract()'s ID remap, link targets are real doc nodes,
     so the hub doc gains edges into existing nodes instead of ghost nodes (#1376)."""
     from graphify.extract import extract
+
     pkg = _md_link_fixture(tmp_path)
     paths = sorted(pkg.glob("*.md"))
     res = extract(paths, cache_root=tmp_path, parallel=False)
@@ -2271,14 +2426,14 @@ def test_groovy_no_error():
 
 def test_groovy_finds_class():
     r = extract_groovy(FIXTURES / "sample.groovy")
-    assert any("SampleService" in l for l in _labels(r))
+    assert any("SampleService" in label for label in _labels(r))
 
 
 def test_groovy_finds_methods():
     r = extract_groovy(FIXTURES / "sample.groovy")
     labels = _labels(r)
-    assert any("process" in l for l in labels)
-    assert any("reset" in l for l in labels)
+    assert any("process" in label for label in labels)
+    assert any("reset" in label for label in labels)
 
 
 def test_groovy_finds_imports():
@@ -2312,7 +2467,8 @@ def test_groovy_extends_edge():
     found = any(
         "ExtendedService" in node_by_id.get(e["source"], "")
         and "SampleService" in node_by_id.get(e["target"], "")
-        for e in r["edges"] if e["relation"] == "inherits"
+        for e in r["edges"]
+        if e["relation"] == "inherits"
     )
     assert found, "ExtendedService should have inherits edge to SampleService"
 
@@ -2324,25 +2480,26 @@ def test_groovy_implements_edge():
     found = any(
         "ExtendedService" in node_by_id.get(e["source"], "")
         and "Resettable" in node_by_id.get(e["target"], "")
-        for e in r["edges"] if e["relation"] == "implements"
+        for e in r["edges"]
+        if e["relation"] == "implements"
     )
     assert found, "ExtendedService should have implements edge to Resettable"
 
 
 def test_groovy_spock_finds_class():
     r = extract_groovy(FIXTURES / "sample_spock.groovy")
-    assert any("SampleSpec" in l for l in _labels(r))
+    assert any("SampleSpec" in label for label in _labels(r))
 
 
 def test_groovy_spock_finds_feature_methods():
     r = extract_groovy(FIXTURES / "sample_spock.groovy")
-    feature_labels = [l for l in _labels(r) if l.startswith('"')]
+    feature_labels = [label for label in _labels(r) if label.startswith('"')]
     assert len(feature_labels) >= 2
 
 
 def test_groovy_spock_finds_method_with_apostrophe():
     r = extract_groovy(FIXTURES / "sample_spock.groovy")
-    assert any("it's" in l for l in _labels(r))
+    assert any("it's" in label for label in _labels(r))
 
 
 def test_groovy_spock_preserves_import_edges():
@@ -2359,17 +2516,20 @@ def test_groovy_spock_no_dangling_edges():
 
 # ── DM (BYOND DreamMaker) ────────────────────────────────────────────────────
 
+
 @_needs_dm
 def test_dm_no_error():
     r = extract_dm(FIXTURES / "sample.dm")
     assert "error" not in r
 
+
 @_needs_dm
 def test_dm_finds_global_proc():
     r = extract_dm(FIXTURES / "sample.dm")
     labels = _labels(r)
-    assert any(l == "log_event()" for l in labels)
-    assert any(l == "RunTest()" for l in labels)
+    assert any(label == "log_event()" for label in labels)
+    assert any(label == "RunTest()" for label in labels)
+
 
 @_needs_dm
 def test_dm_finds_type_definition():
@@ -2378,6 +2538,7 @@ def test_dm_finds_type_definition():
     assert "/datum/weapon" in labels
     assert "/datum/weapon/sword" in labels
 
+
 @_needs_dm
 def test_dm_qualifies_proc_with_type_path():
     r = extract_dm(FIXTURES / "sample.dm")
@@ -2385,10 +2546,12 @@ def test_dm_qualifies_proc_with_type_path():
     assert "/datum/weapon/attack()" in labels
     assert "/datum/weapon/sword/attack()" in labels
 
+
 @_needs_dm
 def test_dm_finds_path_form_proc_definition():
     r = extract_dm(FIXTURES / "sample.dm")
     assert "/datum/weapon/sword/sharpen()" in _labels(r)
+
 
 @_needs_dm
 def test_dm_emits_include_edge():
@@ -2396,6 +2559,7 @@ def test_dm_emits_include_edge():
     import_edges = _edges_with_relation(r, "imports", "imports_from")
     assert import_edges
     assert all(e.get("context") == "import" for e in import_edges)
+
 
 @_needs_dm
 def test_dm_unresolved_include_flagged_external():
@@ -2405,6 +2569,7 @@ def test_dm_unresolved_include_flagged_external():
     assert helpers
     assert all(e.get("external") is True for e in helpers)
 
+
 @_needs_dm
 def test_dm_resolves_in_file_calls():
     r = extract_dm(FIXTURES / "sample.dm")
@@ -2412,22 +2577,27 @@ def test_dm_resolves_in_file_calls():
     assert any(callee == "log_event()" for _, callee in calls)
     assert ("/datum/weapon/sword/attack()", "/datum/weapon/sword/sharpen()") in calls
 
+
 @_needs_dm
 def test_dm_ambiguous_member_call_left_unresolved():
     r = extract_dm(FIXTURES / "sample.dm")
     calls = _calls(r)
-    runtest_to_attack = [c for s, c in calls
-                         if s == "RunTest()" and "attack" in c]
+    runtest_to_attack = [c for s, c in calls if s == "RunTest()" and "attack" in c]
     assert not runtest_to_attack
     assert any(rc["callee"] == "attack" for rc in r.get("raw_calls", []))
+
 
 @_needs_dm
 def test_dm_emits_new_as_instantiates():
     r = extract_dm(FIXTURES / "sample.dm")
     node_by_id = {n["id"]: n["label"] for n in r["nodes"]}
-    inst = [(node_by_id.get(e["source"]), node_by_id.get(e["target"]))
-            for e in r["edges"] if e["relation"] == "instantiates"]
+    inst = [
+        (node_by_id.get(e["source"]), node_by_id.get(e["target"]))
+        for e in r["edges"]
+        if e["relation"] == "instantiates"
+    ]
     assert ("RunTest()", "/datum/weapon/sword") in inst
+
 
 @_needs_dm
 def test_dm_call_edges_have_call_context():
@@ -2436,12 +2606,14 @@ def test_dm_call_edges_have_call_context():
     assert call_edges
     assert all(e.get("context") == "call" for e in call_edges)
 
+
 @_needs_dm
 def test_dm_no_dangling_edges():
     r = extract_dm(FIXTURES / "sample.dm")
     node_ids = {n["id"] for n in r["nodes"]}
     for e in r["edges"]:
         assert e["source"] in node_ids
+
 
 @_needs_dm
 def test_dm_super_call_not_emitted():
@@ -2453,28 +2625,36 @@ def test_dm_super_call_not_emitted():
 
 # ── DMI (BYOND icon sheets) ──────────────────────────────────────────────────
 
+
 def test_dmi_no_error():
     r = extract_dmi(FIXTURES / "sample.dmi")
     assert "error" not in r
 
+
 def test_dmi_emits_state_nodes():
     r = extract_dmi(FIXTURES / "sample.dmi")
     labels = _labels(r)
-    assert any(l == '"mob"' for l in labels)
+    assert any(label == '"mob"' for label in labels)
+
 
 def test_dmi_state_contained_by_file():
     r = extract_dmi(FIXTURES / "sample.dmi")
     node_by_id = {n["id"]: n["label"] for n in r["nodes"]}
-    contains = [(node_by_id.get(e["source"]), node_by_id.get(e["target"]))
-                for e in r["edges"] if e["relation"] == "contains"]
+    contains = [
+        (node_by_id.get(e["source"]), node_by_id.get(e["target"]))
+        for e in r["edges"]
+        if e["relation"] == "contains"
+    ]
     assert ("sample.dmi", '"mob"') in contains
 
 
 # ── DMM (BYOND map files) ────────────────────────────────────────────────────
 
+
 def test_dmm_no_error():
     r = extract_dmm(FIXTURES / "sample.dmm")
     assert "error" not in r
+
 
 def test_dmm_extracts_type_paths_as_uses_edges():
     r = extract_dmm(FIXTURES / "sample.dmm")
@@ -2483,16 +2663,19 @@ def test_dmm_extracts_type_paths_as_uses_edges():
     assert "obj_structure_table" in targets
     assert "obj_item_weapon_sword" in targets
 
+
 def test_dmm_strips_var_overrides():
     r = extract_dmm(FIXTURES / "sample.dmm")
     targets = {e["target"] for e in r["edges"] if e["relation"] == "uses"}
     assert not any("{" in t for t in targets)
     assert "obj_item_weapon_sword" in targets
 
+
 def test_dmm_handles_multiline_tile_definition():
     r = extract_dmm(FIXTURES / "sample.dmm")
     targets = {e["target"] for e in r["edges"] if e["relation"] == "uses"}
     assert "area_station_maintenance" in targets
+
 
 def test_dmm_skips_grid_section():
     r = extract_dmm(FIXTURES / "sample.dmm")
@@ -2502,9 +2685,11 @@ def test_dmm_skips_grid_section():
 
 # ── DMF (BYOND interface forms) ──────────────────────────────────────────────
 
+
 def test_dmf_no_error():
     r = extract_dmf(FIXTURES / "sample.dmf")
     assert "error" not in r
+
 
 def test_dmf_extracts_windows():
     r = extract_dmf(FIXTURES / "sample.dmf")
@@ -2512,17 +2697,23 @@ def test_dmf_extracts_windows():
     assert 'window "mapwindow"' in labels
     assert 'window "infowindow"' in labels
 
+
 def test_dmf_elem_labels_carry_control_type():
     r = extract_dmf(FIXTURES / "sample.dmf")
     labels = _labels(r)
     assert 'elem "map" [MAP]' in labels
 
+
 def test_dmf_elem_under_window():
     r = extract_dmf(FIXTURES / "sample.dmf")
     node_by_id = {n["id"]: n["label"] for n in r["nodes"]}
-    contains = [(node_by_id.get(e["source"]), node_by_id.get(e["target"]))
-                for e in r["edges"] if e["relation"] == "contains"]
+    contains = [
+        (node_by_id.get(e["source"]), node_by_id.get(e["target"]))
+        for e in r["edges"]
+        if e["relation"] == "contains"
+    ]
     assert ('window "mapwindow"', 'elem "map" [MAP]') in contains
+
 
 def test_dmf_no_dangling_edges():
     r = extract_dmf(FIXTURES / "sample.dmf")
@@ -2534,46 +2725,56 @@ def test_dmf_no_dangling_edges():
 
 # -- .NET project files (.sln, .csproj, .xaml, .razor) ------------------------
 
+
 def test_sln_no_error():
     r = extract_sln(FIXTURES / "sample.sln")
     assert "error" not in r
 
+
 def test_sln_finds_projects():
     r = extract_sln(FIXTURES / "sample.sln")
     labels = _labels(r)
-    assert any("WebApi" in l for l in labels)
-    assert any("Domain" in l for l in labels)
+    assert any("WebApi" in label for label in labels)
+    assert any("Domain" in label for label in labels)
+
 
 def test_sln_contains_edges():
     r = extract_sln(FIXTURES / "sample.sln")
     assert "contains" in _relations(r)
 
+
 def test_sln_project_dependency_edges():
     r = extract_sln(FIXTURES / "sample.sln")
     assert "imports" in _relations(r)
+
 
 def test_csproj_no_error():
     r = extract_csproj(FIXTURES / "sample.csproj")
     assert "error" not in r
 
+
 def test_csproj_finds_packages():
     r = extract_csproj(FIXTURES / "sample.csproj")
     labels = _labels(r)
-    assert any("MediatR" in l for l in labels)
-    assert any("FluentValidation" in l for l in labels)
+    assert any("MediatR" in label for label in labels)
+    assert any("FluentValidation" in label for label in labels)
+
 
 def test_csproj_finds_project_references():
     r = extract_csproj(FIXTURES / "sample.csproj")
     labels = _labels(r)
-    assert any("Domain.csproj" in l for l in labels)
+    assert any("Domain.csproj" in label for label in labels)
+
 
 def test_csproj_finds_target_framework():
     r = extract_csproj(FIXTURES / "sample.csproj")
-    assert any("net8.0" in l for l in _labels(r))
+    assert any("net8.0" in label for label in _labels(r))
+
 
 def test_csproj_finds_sdk():
     r = extract_csproj(FIXTURES / "sample.csproj")
-    assert any("Microsoft.NET.Sdk.Web" in l for l in _labels(r))
+    assert any("Microsoft.NET.Sdk.Web" in label for label in _labels(r))
+
 
 def test_xaml_finds_class_and_event_references():
     r = extract_xaml(FIXTURES / "sample.xaml")
@@ -2581,27 +2782,33 @@ def test_xaml_finds_class_and_event_references():
     assert "MainWindow" in _labels(r)
     assert any(e["relation"] == "references" and e.get("context") == "event" for e in r["edges"])
 
+
 def test_razor_no_error():
     r = extract_razor(FIXTURES / "sample.razor")
     assert "error" not in r
+
 
 def test_razor_finds_using_directives():
     r = extract_razor(FIXTURES / "sample.razor")
     assert "imports" in _relations(r)
 
+
 def test_razor_finds_component_references():
     r = extract_razor(FIXTURES / "sample.razor")
     assert "calls" in _relations(r)
+
 
 def test_razor_finds_inherits():
     r = extract_razor(FIXTURES / "sample.razor")
     assert "inherits" in _relations(r)
 
+
 def test_razor_finds_code_block_methods():
     r = extract_razor(FIXTURES / "sample.razor")
     labels = _labels(r)
-    assert any("IncrementCount" in l for l in labels)
-    assert any("LoadData" in l for l in labels)
+    assert any("IncrementCount" in label for label in labels)
+    assert any("LoadData" in label for label in labels)
+
 
 def test_razor_no_dangling_edges():
     r = extract_razor(FIXTURES / "sample.razor")
@@ -2612,34 +2819,40 @@ def test_razor_no_dangling_edges():
 
 # ---------------Salesforce Apex (.cls / .trigger)----------------------
 
+
 def test_apex_class_extraction():
     r = extract_apex(FIXTURES / "sample.cls")
     labels = _labels(r)
     assert "AccountService" in labels
+
 
 def test_apex_enum_extraction():
     r = extract_apex(FIXTURES / "sample.cls")
     labels = _labels(r)
     assert "AccountStatus" in labels
 
+
 def test_apex_interface_extraction():
     r = extract_apex(FIXTURES / "sample.cls")
     labels = _labels(r)
     assert "Notifiable" in labels
 
+
 def test_apex_method_extraction():
     r = extract_apex(FIXTURES / "sample.cls")
     labels = _labels(r)
-    assert any("getAccounts" in l for l in labels)
-    assert any("updateAccountsAsync" in l for l in labels)
-    assert any("createAccounts" in l for l in labels)
-    assert any("deleteOldAccounts" in l for l in labels)
+    assert any("getAccounts" in label for label in labels)
+    assert any("updateAccountsAsync" in label for label in labels)
+    assert any("createAccounts" in label for label in labels)
+    assert any("deleteOldAccounts" in label for label in labels)
+
 
 def test_apex_contains_and_method_relations():
     r = extract_apex(FIXTURES / "sample.cls")
     relations = _relations(r)
     assert "contains" in relations
     assert "method" in relations
+
 
 def test_apex_soql_uses_edge():
     r = extract_apex(FIXTURES / "sample.cls")
@@ -2648,21 +2861,27 @@ def test_apex_soql_uses_edge():
     labels = _labels(r)
     assert "Account" in labels
 
+
 def test_apex_dml_uses_edge():
     r = extract_apex(FIXTURES / "sample.cls")
-    dml_labels = {n["label"] for n in r["nodes"] if n["label"] in ("insert", "update", "delete", "upsert")}
+    dml_labels = {
+        n["label"] for n in r["nodes"] if n["label"] in ("insert", "update", "delete", "upsert")
+    }
     assert len(dml_labels) > 0
+
 
 def test_apex_file_node_present():
     r = extract_apex(FIXTURES / "sample.cls")
     labels = _labels(r)
     assert "sample.cls" in labels
 
+
 def test_apex_trigger_extraction():
     r = extract_apex(FIXTURES / "sample.trigger")
     labels = _labels(r)
     assert "sample.trigger" in labels
     assert "AccountTrigger" in labels
+
 
 def test_apex_trigger_uses_sobject():
     r = extract_apex(FIXTURES / "sample.trigger")
@@ -2671,10 +2890,12 @@ def test_apex_trigger_uses_sobject():
     labels = _labels(r)
     assert "Account" in labels
 
+
 def test_apex_missing_file_returns_empty():
     r = extract_apex(Path("nonexistent.cls"))
     assert r["nodes"] == []
     assert r["edges"] == []
+
 
 def test_apex_no_dangling_edges():
     for fixture in ("sample.cls", "sample.trigger"):
@@ -2686,6 +2907,7 @@ def test_apex_no_dangling_edges():
 
 
 # -- SystemVerilog -------------------------------------------------------------
+
 
 def test_systemverilog_no_error():
     r = extract_verilog(FIXTURES / "sample.sv")
@@ -2747,18 +2969,11 @@ def test_systemverilog_no_dangling_edges():
 
 
 # ── Header/impl class merge + .h routing (#1547 C++, #1556 ObjC/Swift) ─────────
-from graphify.extract import (
-    extract as _extract_corpus,
-    _get_extractor,
-    _is_cpp_header,
-    _is_objc_header,
-)
-
-
 def _corpus(*relpaths):
     """Run the full extract() pipeline on fixture files (absolute, resolved
     paths so the per-file id-remap behaves like real usage), no shared cache."""
     import tempfile
+
     paths = [(FIXTURES / rp).resolve() for rp in relpaths]
     with tempfile.TemporaryDirectory() as td:
         return _extract_corpus(paths, cache_root=Path(td))
@@ -2777,11 +2992,14 @@ def _assert_no_dangling(r):
 
 # --- #1547: C++ paired header/impl --------------------------------------------
 
+
 def test_cpp_header_routes_to_cpp_extractor():
     """A `.h` with a C++ class must route to extract_cpp, not extract_c (which has
     no class_specifier and would drop the class entirely)."""
     p = (FIXTURES / "cpp_paired" / "Foo.h").resolve()
-    assert _get_extractor(p).__name__ == "extract_cpp"
+    extractor = _get_extractor(p)
+    assert extractor is not None
+    assert extractor.__name__ == "extract_cpp"
     assert _is_cpp_header(p)
 
 
@@ -2789,7 +3007,9 @@ def test_plain_c_header_stays_on_c_extractor():
     """A plain C header (no C++ signal) must keep its extract_c routing."""
     p = (FIXTURES / "cpp_samedir" / "plain.h").resolve()
     assert not _is_cpp_header(p)
-    assert _get_extractor(p).__name__ == "extract_c"
+    extractor = _get_extractor(p)
+    assert extractor is not None
+    assert extractor.__name__ == "extract_c"
 
 
 def test_cpp_paired_single_class_node():
@@ -2808,10 +3028,13 @@ def test_cpp_paired_method_decl_and_def_are_one_node():
     r = _corpus("cpp_paired/Foo.h", "cpp_paired/Foo.cpp", "cpp_paired/Main.cpp")
     foo = _nodes_with_label(r, "Foo")[0]["id"]
     method_targets = {
-        e["target"] for e in r["edges"]
+        e["target"]
+        for e in r["edges"]
         if e["source"] == foo and e["relation"] in ("method", "defines", "contains")
     }
-    bar_nodes = [n for n in r["nodes"] if n["id"] in method_targets and n["label"] in ("bar", "Foo::bar()")]
+    bar_nodes = [
+        n for n in r["nodes"] if n["id"] in method_targets and n["label"] in ("bar", "Foo::bar()")
+    ]
     # There must be exactly one node representing bar (decl and def merged).
     bar_ids = {n["id"] for n in r["nodes"] if n["label"] in ("bar", "Foo::bar()")}
     assert len(bar_ids) == 1, f"bar decl/def should be one node, got {bar_ids}"
@@ -2838,12 +3061,15 @@ def test_cpp_paired_no_dangling_edges():
 
 # --- #1556: ObjC paired header/impl + bridging header -------------------------
 
+
 def test_objc_header_with_import_routes_to_objc():
     """A bridging header that is only `#import "X.h"` (no @interface) must route to
     extract_objc; extract_c parses `#import` as preproc_call and drops the edge."""
     p = (FIXTURES / "objc_mixed" / "Bridging-Header.h").resolve()
     assert _is_objc_header(p)
-    assert _get_extractor(p).__name__ == "extract_objc"
+    extractor = _get_extractor(p)
+    assert extractor is not None
+    assert extractor.__name__ == "extract_objc"
 
 
 def test_objc_paired_single_class_methods_not_duplicated():
@@ -2876,6 +3102,7 @@ def test_objc_paired_no_dangling_edges():
 
 # --- #1556: Swift extension folds onto canonical ObjC class -------------------
 
+
 def test_swift_extension_folds_onto_objc_class():
     """`extension Widget` in Swift over an ObjC `Widget` must fold onto the single
     canonical Widget node, with its members anchored there."""
@@ -2883,23 +3110,32 @@ def test_swift_extension_folds_onto_objc_class():
     widgets = _nodes_with_label(r, "Widget")
     assert len(widgets) == 1, f"expected one Widget, got {[n['id'] for n in widgets]}"
     wid = widgets[0]["id"]
-    method_targets = {e["target"] for e in r["edges"] if e["relation"] == "method" and e["source"] == wid}
+    method_targets = {
+        e["target"] for e in r["edges"] if e["relation"] == "method" and e["source"] == wid
+    }
     labels = {n["label"] for n in r["nodes"] if n["id"] in method_targets}
-    assert any("describe" in l for l in labels), f"Swift extension method should anchor on Widget, got {labels}"
+    assert any("describe" in label for label in labels), (
+        f"Swift extension method should anchor on Widget, got {labels}"
+    )
     _assert_no_dangling(r)
 
 
 # --- god-node guard negatives -------------------------------------------------
 
+
 def test_decldef_merge_does_not_merge_across_directories():
     """Two unrelated `class Logger` in DIFFERENT directories (each its own .h/.cpp)
     must NOT merge — assert TWO distinct Logger nodes."""
     r = _corpus(
-        "cpp_logger/a/Logger.h", "cpp_logger/a/Logger.cpp",
-        "cpp_logger/b/Logger.h", "cpp_logger/b/Logger.cpp",
+        "cpp_logger/a/Logger.h",
+        "cpp_logger/a/Logger.cpp",
+        "cpp_logger/b/Logger.h",
+        "cpp_logger/b/Logger.cpp",
     )
     loggers = _nodes_with_label(r, "Logger")
-    assert len(loggers) == 2, f"cross-dir Loggers must stay distinct, got {[n['id'] for n in loggers]}"
+    assert len(loggers) == 2, (
+        f"cross-dir Loggers must stay distinct, got {[n['id'] for n in loggers]}"
+    )
     assert len({n["id"] for n in loggers}) == 2
 
 
@@ -2908,4 +3144,6 @@ def test_decldef_merge_does_not_merge_same_name_same_dir_distinct_files():
     (Alpha.h, Beta.h) must stay distinct (no unique header/impl sibling pair)."""
     r = _corpus("cpp_samedir/Alpha.h", "cpp_samedir/Beta.h")
     dups = _nodes_with_label(r, "Dup")
-    assert len(dups) == 2, f"same-dir distinct Dups must stay distinct, got {[n['id'] for n in dups]}"
+    assert len(dups) == 2, (
+        f"same-dir distinct Dups must stay distinct, got {[n['id'] for n in dups]}"
+    )

@@ -20,6 +20,7 @@ from graphify.analyze import _node_community_map
 from graphify.build import edge_data, edge_datas
 from graphify.edge_identity import make_stable_key
 from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
+from graphify.installation import uv_tool_install_command
 from graphify.projections import (
     DEFAULT_RELATIONSHIP_CAP,
     format_relationship_envelope,
@@ -504,7 +505,7 @@ def _git_head() -> str | None:
     import subprocess as _sp
 
     try:
-        r = _sp.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=3)  # nosec B603 B607
+        r = _sp.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=3)
         return r.stdout.strip() if r.returncode == 0 else None
     except Exception:
         return None
@@ -657,7 +658,7 @@ def to_json(
     commit = built_at_commit if built_at_commit is not None else _git_head()
     if commit:
         data["built_at_commit"] = commit
-    with open(output_path, "w", encoding="utf-8") as f:  # nosec
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     return True
 
@@ -818,7 +819,7 @@ def to_cypher(G: nx.Graph, output_path: str) -> None:
             f"MATCH (a {{id: '{u_esc}'}}), (b {{id: '{v_esc}'}}) "
             f"MERGE (a)-[:{rel} {{edge_key: '{edge_key}', confidence: '{conf}'}}]->(b);"
         )
-    with open(output_path, "w", encoding="utf-8") as f:  # nosec
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
 
@@ -1120,7 +1121,7 @@ def to_html(
 </body>
 </html>"""
 
-    Path(output_path).write_text(html, encoding="utf-8")  # nosec
+    Path(output_path).write_text(html, encoding="utf-8")
 
 
 # Keep backward-compatible alias - skill.md calls generate_html
@@ -1206,7 +1207,7 @@ def to_obsidian(
             _skipped.append(rel_name)
             return False
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")  # nosec
+        target.write_text(content, encoding="utf-8")
         _written.append(rel_name)
         return True
 
@@ -1735,7 +1736,7 @@ def to_canvas(
         )
 
     canvas_data = {"nodes": canvas_nodes, "edges": canvas_edges}
-    Path(output_path).write_text(json.dumps(canvas_data, indent=2), encoding="utf-8")  # nosec
+    Path(output_path).write_text(json.dumps(canvas_data, indent=2), encoding="utf-8")
 
 
 def _keyed_export_edges(
@@ -1759,7 +1760,7 @@ def push_to_neo4j(
 ) -> dict[str, int]:
     """Push graph directly to a running Neo4j instance via the Python driver.
 
-    Requires: pip install neo4j
+    Requires the ``neo4j`` optional extra.
 
     Uses MERGE so re-running is safe - nodes and edges are upserted, not duplicated.
     Returns a dict with counts of nodes and edges pushed.
@@ -1767,7 +1768,9 @@ def push_to_neo4j(
     try:
         from neo4j import GraphDatabase
     except ImportError as e:
-        raise ImportError("neo4j driver not installed. Run: pip install neo4j") from e
+        raise ImportError(
+            f"neo4j driver not installed. Run: {uv_tool_install_command('neo4j')}"
+        ) from e
 
     node_community = _node_community_map(communities) if communities else {}
 
@@ -1825,106 +1828,6 @@ def push_to_neo4j(
             edges_pushed += 1
 
     driver.close()
-    return {"nodes": nodes_pushed, "edges": edges_pushed}
-
-
-def push_to_falkordb(
-    G: nx.Graph,
-    uri: str,
-    user: str | None = None,
-    password: str | None = None,
-    communities: dict[int, list[str]] | None = None,
-    graph_name: str = "graphify",
-) -> dict[str, int]:
-    """Push graph directly to a running FalkorDB instance via the Python SDK.
-
-    Requires: pip install falkordb
-
-    FalkorDB is OpenCypher-compatible, so the MERGE/SET upsert queries are
-    identical to push_to_neo4j. Differences from the Neo4j path:
-      - connects with FalkorDB(host, port, username, password) instead of a bolt
-        driver; only the host/port are read from the URI, so the scheme is
-        informational - "falkordb://localhost:6379", "redis://localhost:6379"
-        and a bare "localhost:6379" are all equivalent (default port 6379).
-      - a named graph is selected via db.select_graph(graph_name) (default
-        "graphify"); FalkorDB keys each graph by name in the same instance.
-      - queries run via graph.query(cypher, params) - there is no session object.
-      - auth is optional (FalkorDB runs without credentials by default), so user
-        and password may be None.
-      - no APOC: the Neo4j path does not use APOC either, so nothing to port.
-
-    Uses MERGE so re-running is safe - nodes and edges are upserted, not
-    duplicated. Returns a dict with counts of nodes and edges pushed.
-    """
-    try:
-        from falkordb import FalkorDB
-    except ImportError as e:
-        raise ImportError("falkordb SDK not installed. Run: pip install falkordb") from e
-
-    from urllib.parse import urlparse
-
-    node_community = _node_community_map(communities) if communities else {}
-
-    def _safe_rel(relation: str) -> str:
-        return (
-            re.sub(r"[^A-Z0-9_]", "_", relation.upper().replace(" ", "_").replace("-", "_"))
-            or "RELATED_TO"
-        )
-
-    def _safe_label(label: str) -> str:
-        """Sanitize a FalkorDB node label to prevent Cypher injection."""
-        sanitized = re.sub(r"[^A-Za-z0-9_]", "", label)
-        return sanitized if sanitized else "Entity"
-
-    parsed = urlparse(uri if "://" in uri else f"redis://{uri}")
-    # FalkorDB auth is optional. Only send credentials when a password is
-    # provided; otherwise connect anonymously and ignore any bolt-style default
-    # username (e.g. Neo4j's "neo4j"), which FalkorDB rejects as an unknown ACL
-    # user. Credentials embedded in the URI take precedence over the args.
-    connect_user = parsed.username or (user if password else None)
-    connect_password = parsed.password or (password or None)
-    db = FalkorDB(
-        host=parsed.hostname or "localhost",
-        port=parsed.port or 6379,
-        username=connect_user,
-        password=connect_password,
-    )
-    graph = db.select_graph(graph_name)
-    nodes_pushed = 0
-    edges_pushed = 0
-
-    for node_id, data in G.nodes(data=True):
-        props = {
-            k: v
-            for k, v in data.items()
-            if isinstance(v, (str, int, float, bool)) and not k.startswith("_")
-        }
-        props["id"] = node_id
-        cid = node_community.get(node_id)
-        if cid is not None:
-            props["community"] = cid
-        ftype = _safe_label(data.get("file_type", "Entity").capitalize())
-        graph.query(
-            f"MERGE (n:{ftype} {{id: $id}}) SET n += $props",
-            {"id": node_id, "props": props},
-        )
-        nodes_pushed += 1
-
-    for u, v, edge_key, data in _keyed_export_edges(G):
-        rel = _safe_rel(data.get("relation", "RELATED_TO"))
-        props = {
-            k: v
-            for k, v in data.items()
-            if isinstance(v, (str, int, float, bool)) and not k.startswith("_")
-        }
-        props["edge_key"] = edge_key
-        graph.query(
-            f"MATCH (a {{id: $src}}), (b {{id: $tgt}}) "
-            f"MERGE (a)-[r:{rel} {{edge_key: $edge_key}}]->(b) SET r += $props",
-            {"src": u, "tgt": v, "edge_key": edge_key, "props": props},
-        )
-        edges_pushed += 1
-
     return {"nodes": nodes_pushed, "edges": edges_pushed}
 
 
@@ -1996,7 +1899,7 @@ def to_svg(
         import matplotlib.pyplot as plt
         import matplotlib.patches as mpatches
     except ImportError as e:
-        raise ImportError("matplotlib not installed. Run: pip install matplotlib") from e
+        raise ImportError(f"matplotlib not installed. Run: {uv_tool_install_command('svg')}") from e
 
     node_community = _node_community_map(communities)
 

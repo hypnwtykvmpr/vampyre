@@ -2,7 +2,15 @@ import json
 from pathlib import Path
 import networkx as nx
 from networkx.readwrite import json_graph
-from graphify.build import build_from_json, build, build_merge, edge_data, edge_datas, dedupe_edges, dedupe_nodes
+from graphify.build import (
+    build_from_json,
+    build,
+    build_merge,
+    edge_data,
+    edge_datas,
+    dedupe_edges,
+    dedupe_nodes,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -47,35 +55,48 @@ def test_dedupe_nodes_collapses_by_id_last_wins():
     # last writer wins on attributes
     assert next(n for n in out if n["id"] == "foundation")["source_file"] == "B.swift"
 
+
 def load_extraction():
     return json.loads((FIXTURES / "extraction.json").read_text())
+
 
 def test_build_from_json_node_count():
     G = build_from_json(load_extraction())
     assert G.number_of_nodes() == 4
 
+
 def test_build_from_json_edge_count():
     G = build_from_json(load_extraction())
     assert G.number_of_edges() == 4
+
 
 def test_nodes_have_label():
     G = build_from_json(load_extraction())
     assert G.nodes["n_transformer"]["label"] == "Transformer"
 
+
 def test_edges_have_confidence():
-    G = build_from_json(load_extraction())
+    G: nx.Graph = build_from_json(load_extraction())
+    assert type(G) is nx.Graph
     data = G.edges["n_attention", "n_concept_attn"]
     assert data["confidence"] == "INFERRED"
 
+
 def test_ambiguous_edge_preserved():
-    G = build_from_json(load_extraction())
+    G: nx.Graph = build_from_json(load_extraction())
+    assert type(G) is nx.Graph
     data = G.edges["n_layernorm", "n_concept_attn"]
     assert data["confidence"] == "AMBIGUOUS"
 
+
 def test_legacy_node_source_canonicalized():
     """Legacy 'source' key on nodes is renamed to 'source_file' before graph build."""
-    ext = {"nodes": [{"id": "n1", "label": "A", "file_type": "code", "source": "a.py"}],
-           "edges": [], "input_tokens": 0, "output_tokens": 0}
+    ext = {
+        "nodes": [{"id": "n1", "label": "A", "file_type": "code", "source": "a.py"}],
+        "edges": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
     G = build_from_json(ext)
     assert "source_file" in G.nodes["n1"]
     assert G.nodes["n1"]["source_file"] == "a.py"
@@ -84,11 +105,24 @@ def test_legacy_node_source_canonicalized():
 
 def test_legacy_edge_from_to_canonicalized():
     """Legacy 'from'/'to' keys on edges are accepted alongside 'source'/'target'."""
-    ext = {"nodes": [{"id": "n1", "label": "A", "file_type": "code", "source_file": "a.py"},
-                     {"id": "n2", "label": "B", "file_type": "code", "source_file": "b.py"}],
-           "edges": [{"from": "n1", "to": "n2", "relation": "calls",
-                      "confidence": "EXTRACTED", "source_file": "a.py", "weight": 1.0}],
-           "input_tokens": 0, "output_tokens": 0}
+    ext = {
+        "nodes": [
+            {"id": "n1", "label": "A", "file_type": "code", "source_file": "a.py"},
+            {"id": "n2", "label": "B", "file_type": "code", "source_file": "b.py"},
+        ],
+        "edges": [
+            {
+                "from": "n1",
+                "to": "n2",
+                "relation": "calls",
+                "confidence": "EXTRACTED",
+                "source_file": "a.py",
+                "weight": 1.0,
+            }
+        ],
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
     G = build_from_json(ext)
     assert G.number_of_edges() == 1
 
@@ -97,11 +131,22 @@ def test_source_file_backslash_normalized():
     """Windows backslash paths and POSIX paths for the same file must produce one node."""
     extraction = {
         "nodes": [
-            {"id": "n1", "label": "A", "file_type": "code", "source_file": "src\\middleware\\auth.py"},
-            {"id": "n2", "label": "B", "file_type": "code", "source_file": "src/middleware/auth.py"},
+            {
+                "id": "n1",
+                "label": "A",
+                "file_type": "code",
+                "source_file": "src\\middleware\\auth.py",
+            },
+            {
+                "id": "n2",
+                "label": "B",
+                "file_type": "code",
+                "source_file": "src/middleware/auth.py",
+            },
         ],
         "edges": [],
-        "input_tokens": 0, "output_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
     }
     G = build_from_json(extraction)
     sources = {G.nodes[n]["source_file"] for n in G.nodes()}
@@ -117,8 +162,11 @@ def test_edge_missing_source_file_backfilled_from_node():
             {"id": "n2", "label": "B", "file_type": "concept", "source_file": "docs/b.md"},
         ],
         # No source_file on the edge (as LLM output sometimes omits it).
-        "edges": [{"source": "n1", "target": "n2", "relation": "relates_to", "confidence": "INFERRED"}],
-        "input_tokens": 0, "output_tokens": 0,
+        "edges": [
+            {"source": "n1", "target": "n2", "relation": "relates_to", "confidence": "INFERRED"}
+        ],
+        "input_tokens": 0,
+        "output_tokens": 0,
     }
     G = build_from_json(extraction)
     sf = edge_data(G, "n1", "n2").get("source_file")
@@ -126,12 +174,27 @@ def test_edge_missing_source_file_backfilled_from_node():
 
 
 def test_build_merges_multiple_extractions():
-    ext1 = {"nodes": [{"id": "n1", "label": "A", "file_type": "code", "source_file": "a.py"}],
-            "edges": [], "input_tokens": 0, "output_tokens": 0}
-    ext2 = {"nodes": [{"id": "n2", "label": "B", "file_type": "document", "source_file": "b.md"}],
-            "edges": [{"source": "n1", "target": "n2", "relation": "references",
-                       "confidence": "INFERRED", "source_file": "b.md", "weight": 1.0}],
-            "input_tokens": 0, "output_tokens": 0}
+    ext1 = {
+        "nodes": [{"id": "n1", "label": "A", "file_type": "code", "source_file": "a.py"}],
+        "edges": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+    ext2 = {
+        "nodes": [{"id": "n2", "label": "B", "file_type": "document", "source_file": "b.md"}],
+        "edges": [
+            {
+                "source": "n1",
+                "target": "n2",
+                "relation": "references",
+                "confidence": "INFERRED",
+                "source_file": "b.md",
+                "weight": 1.0,
+            }
+        ],
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
     G = build([ext1, ext2])
     assert G.number_of_nodes() == 2
     assert G.number_of_edges() == 1
@@ -212,16 +275,41 @@ def test_ghost_merge_unique_located_node_still_merges():
     sharing its (basename, label), and edges re-point to the AST node."""
     ext = {
         "nodes": [
-            {"id": "ast_render", "label": "render", "file_type": "code",
-             "source_file": "src/app/index.ts", "source_location": "L10", "_origin": "ast"},
-            {"id": "ghost_render", "label": "render", "file_type": "code",
-             "source_file": "src/app/index.ts"},
-            {"id": "caller", "label": "main", "file_type": "code",
-             "source_file": "src/main.ts", "source_location": "L1", "_origin": "ast"},
+            {
+                "id": "ast_render",
+                "label": "render",
+                "file_type": "code",
+                "source_file": "src/app/index.ts",
+                "source_location": "L10",
+                "_origin": "ast",
+            },
+            {
+                "id": "ghost_render",
+                "label": "render",
+                "file_type": "code",
+                "source_file": "src/app/index.ts",
+            },
+            {
+                "id": "caller",
+                "label": "main",
+                "file_type": "code",
+                "source_file": "src/main.ts",
+                "source_location": "L1",
+                "_origin": "ast",
+            },
         ],
-        "edges": [{"source": "caller", "target": "ghost_render", "relation": "calls",
-                   "confidence": "EXTRACTED", "source_file": "src/main.ts", "weight": 1.0}],
-        "input_tokens": 0, "output_tokens": 0,
+        "edges": [
+            {
+                "source": "caller",
+                "target": "ghost_render",
+                "relation": "calls",
+                "confidence": "EXTRACTED",
+                "source_file": "src/main.ts",
+                "weight": 1.0,
+            }
+        ],
+        "input_tokens": 0,
+        "output_tokens": 0,
     }
     G = build_from_json(ext)
     assert "ghost_render" not in G.nodes()
@@ -234,18 +322,49 @@ def test_ghost_merge_skipped_on_basename_collision():
     must not be merged into an arbitrary one of them."""
     ext = {
         "nodes": [
-            {"id": "a_render", "label": "render", "file_type": "code",
-             "source_file": "src/a/index.ts", "source_location": "L10", "_origin": "ast"},
-            {"id": "b_render", "label": "render", "file_type": "code",
-             "source_file": "src/b/index.ts", "source_location": "L20", "_origin": "ast"},
-            {"id": "ghost_render", "label": "render", "file_type": "code",
-             "source_file": "src/a/index.ts"},
-            {"id": "caller", "label": "main", "file_type": "code",
-             "source_file": "src/main.ts", "source_location": "L1", "_origin": "ast"},
+            {
+                "id": "a_render",
+                "label": "render",
+                "file_type": "code",
+                "source_file": "src/a/index.ts",
+                "source_location": "L10",
+                "_origin": "ast",
+            },
+            {
+                "id": "b_render",
+                "label": "render",
+                "file_type": "code",
+                "source_file": "src/b/index.ts",
+                "source_location": "L20",
+                "_origin": "ast",
+            },
+            {
+                "id": "ghost_render",
+                "label": "render",
+                "file_type": "code",
+                "source_file": "src/a/index.ts",
+            },
+            {
+                "id": "caller",
+                "label": "main",
+                "file_type": "code",
+                "source_file": "src/main.ts",
+                "source_location": "L1",
+                "_origin": "ast",
+            },
         ],
-        "edges": [{"source": "caller", "target": "ghost_render", "relation": "calls",
-                   "confidence": "EXTRACTED", "source_file": "src/main.ts", "weight": 1.0}],
-        "input_tokens": 0, "output_tokens": 0,
+        "edges": [
+            {
+                "source": "caller",
+                "target": "ghost_render",
+                "relation": "calls",
+                "confidence": "EXTRACTED",
+                "source_file": "src/main.ts",
+                "weight": 1.0,
+            }
+        ],
+        "input_tokens": 0,
+        "output_tokens": 0,
     }
     G = build_from_json(ext)
     # The ghost survives: merging it into either a_render or b_render would
@@ -299,8 +418,9 @@ def test_build_merge_preserves_call_edge_direction(tmp_path):
 
     # Verify direction is correct in the freshly written JSON.
     saved = json.loads(graph_path.read_text())
-    saved_calls = [e for e in saved.get("links", saved.get("edges", []))
-                   if e.get("relation") == "calls"]
+    saved_calls = [
+        e for e in saved.get("links", saved.get("edges", [])) if e.get("relation") == "calls"
+    ]
     assert len(saved_calls) == 1
     assert saved_calls[0]["source"] == truth_src
     assert saved_calls[0]["target"] == truth_tgt
@@ -311,8 +431,9 @@ def test_build_merge_preserves_call_edge_direction(tmp_path):
 
     # The calls edge must still go a -> b, not b -> a.
     reloaded = json.loads(graph_path.read_text())
-    reloaded_calls = [e for e in reloaded.get("links", reloaded.get("edges", []))
-                      if e.get("relation") == "calls"]
+    reloaded_calls = [
+        e for e in reloaded.get("links", reloaded.get("edges", [])) if e.get("relation") == "calls"
+    ]
     assert len(reloaded_calls) == 1
     assert reloaded_calls[0]["source"] == truth_src, (
         f"calls edge source flipped after build_merge round-trip: "
@@ -350,10 +471,20 @@ def test_build_from_json_preserves_first_direction_on_bidirectional_pair(tmp_pat
             {"id": "z_emitter", "label": "z", "file_type": "code", "source_file": "z.ts"},
         ],
         "edges": [
-            {"source": "a_handler", "target": "z_emitter", "relation": "calls",
-             "confidence": "EXTRACTED", "source_file": "a.ts"},
-            {"source": "z_emitter", "target": "a_handler", "relation": "calls",
-             "confidence": "EXTRACTED", "source_file": "z.ts"},
+            {
+                "source": "a_handler",
+                "target": "z_emitter",
+                "relation": "calls",
+                "confidence": "EXTRACTED",
+                "source_file": "a.ts",
+            },
+            {
+                "source": "z_emitter",
+                "target": "a_handler",
+                "relation": "calls",
+                "confidence": "EXTRACTED",
+                "source_file": "z.ts",
+            },
         ],
         "input_tokens": 0,
         "output_tokens": 0,
@@ -370,8 +501,9 @@ def test_build_from_json_preserves_first_direction_on_bidirectional_pair(tmp_pat
     graph_path = tmp_path / "graph.json"
     assert to_json(G, {}, str(graph_path), force=True)
     saved = json.loads(graph_path.read_text())
-    saved_calls = [e for e in saved.get("links", saved.get("edges", []))
-                   if e.get("relation") == "calls"]
+    saved_calls = [
+        e for e in saved.get("links", saved.get("edges", [])) if e.get("relation") == "calls"
+    ]
     assert len(saved_calls) == 1
     assert saved_calls[0]["source"] == "a_handler", (
         f"calls edge source flipped on bidirectional collision: "
@@ -387,6 +519,7 @@ def test_build_from_json_preserves_first_direction_on_bidirectional_pair(tmp_pat
 # MultiGraph and MultiDiGraph, which networkx's node_link_graph() produces
 # whenever the loaded JSON has multigraph: true. Plain G.edges[u, v] crashes
 # on those with `ValueError: not enough values to unpack (expected 3, got 2)`.
+
 
 def test_edge_data_simple_graph():
     G = nx.Graph()
@@ -475,12 +608,22 @@ def test_build_from_json_relativizes_absolute_source_file(tmp_path):
     abs_path = str(root / "docs" / "overview.md")
     extraction = {
         "nodes": [
-            {"id": "overview_intro", "label": "Intro", "source_file": abs_path, "file_type": "document"},
+            {
+                "id": "overview_intro",
+                "label": "Intro",
+                "source_file": abs_path,
+                "file_type": "document",
+            },
         ],
         "edges": [
-            {"source": "overview_intro", "target": "overview_intro",
-             "relation": "self", "confidence": "EXTRACTED", "confidence_score": 1.0,
-             "source_file": abs_path},
+            {
+                "source": "overview_intro",
+                "target": "overview_intro",
+                "relation": "self",
+                "confidence": "EXTRACTED",
+                "confidence_score": 1.0,
+                "source_file": abs_path,
+            },
         ],
     }
     G = build_from_json(extraction, root=root)
@@ -508,7 +651,9 @@ def test_build_relativizes_absolute_source_file(tmp_path):
 def test_build_from_json_relative_source_file_unchanged(tmp_path):
     """Already-relative source_file paths must not be modified."""
     extraction = {
-        "nodes": [{"id": "foo_bar", "label": "bar", "source_file": "src/foo.py", "file_type": "code"}],
+        "nodes": [
+            {"id": "foo_bar", "label": "bar", "source_file": "src/foo.py", "file_type": "code"}
+        ],
         "edges": [],
     }
     G = build_from_json(extraction, root=tmp_path)
@@ -526,13 +671,27 @@ def test_build_merge_prune_absolute_paths_match_relative_nodes(tmp_path):
     graph_path = tmp_path / "graph.json"
 
     # Simulate a graph with relative source_file paths (as built normally)
-    chunk = {"nodes": [
-        {"id": "n1", "label": "login", "file_type": "code", "source_file": "module_a/auth.py"},
-        {"id": "n2", "label": "format_date", "file_type": "code", "source_file": "module_b/utils.py"},
-    ], "edges": [
-        {"source": "n1", "target": "n2", "relation": "calls", "confidence": "EXTRACTED",
-         "source_file": "module_b/utils.py", "weight": 1.0},
-    ]}
+    chunk = {
+        "nodes": [
+            {"id": "n1", "label": "login", "file_type": "code", "source_file": "module_a/auth.py"},
+            {
+                "id": "n2",
+                "label": "format_date",
+                "file_type": "code",
+                "source_file": "module_b/utils.py",
+            },
+        ],
+        "edges": [
+            {
+                "source": "n1",
+                "target": "n2",
+                "relation": "calls",
+                "confidence": "EXTRACTED",
+                "source_file": "module_b/utils.py",
+                "weight": 1.0,
+            },
+        ],
+    }
     G0 = build([chunk], dedup=False)
     graph_path.write_text(json.dumps(nx.node_link_data(G0, edges="edges")), encoding="utf-8")
 
@@ -555,9 +714,17 @@ def test_build_merge_prune_windows_backslash_paths(tmp_path):
     root.mkdir()
     graph_path = tmp_path / "graph.json"
 
-    chunk = {"nodes": [
-        {"id": "n1", "label": "parse_date", "file_type": "code", "source_file": "module_b/utils.py"},
-    ], "edges": []}
+    chunk = {
+        "nodes": [
+            {
+                "id": "n1",
+                "label": "parse_date",
+                "file_type": "code",
+                "source_file": "module_b/utils.py",
+            },
+        ],
+        "edges": [],
+    }
     G0 = build([chunk], dedup=False)
     graph_path.write_text(json.dumps(nx.node_link_data(G0, edges="edges")), encoding="utf-8")
 
@@ -582,29 +749,53 @@ def test_build_merge_replaces_changed_file_stale_edges(tmp_path):
     graph_path = tmp_path / "graph.json"
 
     # First build: changed.md contributed A, B and edge A->B; keep.md is unrelated.
-    chunk0 = {"nodes": [
-        {"id": "A", "label": "A", "file_type": "document", "source_file": "changed.md"},
-        {"id": "B", "label": "B", "file_type": "document", "source_file": "changed.md"},
-        {"id": "K", "label": "K", "file_type": "document", "source_file": "keep.md"},
-    ], "edges": [
-        {"source": "A", "target": "B", "relation": "references", "confidence": "EXTRACTED",
-         "source_file": "changed.md", "weight": 1.0},
-        {"source": "K", "target": "A", "relation": "references", "confidence": "EXTRACTED",
-         "source_file": "keep.md", "weight": 1.0},
-    ]}
+    chunk0 = {
+        "nodes": [
+            {"id": "A", "label": "A", "file_type": "document", "source_file": "changed.md"},
+            {"id": "B", "label": "B", "file_type": "document", "source_file": "changed.md"},
+            {"id": "K", "label": "K", "file_type": "document", "source_file": "keep.md"},
+        ],
+        "edges": [
+            {
+                "source": "A",
+                "target": "B",
+                "relation": "references",
+                "confidence": "EXTRACTED",
+                "source_file": "changed.md",
+                "weight": 1.0,
+            },
+            {
+                "source": "K",
+                "target": "A",
+                "relation": "references",
+                "confidence": "EXTRACTED",
+                "source_file": "keep.md",
+                "weight": 1.0,
+            },
+        ],
+    }
     G0 = build([chunk0], dedup=False)
     graph_path.write_text(json.dumps(nx.node_link_data(G0, edges="edges")), encoding="utf-8")
 
     # changed.md edited: re-extraction now yields A, C and edge A->C (B dropped).
     # source_file arrives as an absolute win32-style path (as detect emits on Windows).
     abs_changed = str(root / "changed.md").replace("/", "\\")
-    new_chunk = {"nodes": [
-        {"id": "A", "label": "A", "file_type": "document", "source_file": abs_changed},
-        {"id": "C", "label": "C", "file_type": "document", "source_file": abs_changed},
-    ], "edges": [
-        {"source": "A", "target": "C", "relation": "references", "confidence": "EXTRACTED",
-         "source_file": abs_changed, "weight": 1.0},
-    ]}
+    new_chunk = {
+        "nodes": [
+            {"id": "A", "label": "A", "file_type": "document", "source_file": abs_changed},
+            {"id": "C", "label": "C", "file_type": "document", "source_file": abs_changed},
+        ],
+        "edges": [
+            {
+                "source": "A",
+                "target": "C",
+                "relation": "references",
+                "confidence": "EXTRACTED",
+                "source_file": abs_changed,
+                "weight": 1.0,
+            },
+        ],
+    }
     G1 = build_merge([new_chunk], graph_path, dedup=False, root=root)
 
     labels = {d["label"] for _, d in G1.nodes(data=True)}
@@ -637,38 +828,66 @@ def test_build_merge_root_collapses_convention_drift(tmp_path):
 
     # Stored graph: nested project-relative convention + a STALE node for the same
     # file that the re-extraction no longer emits.
-    stored = {"nodes": [
-        {"id": "wiki_overview_overview", "label": "Overview", "file_type": "document",
-         "source_file": "docs/wiki/overview.md"},
-        {"id": "wiki_overview_stale", "label": "Stale", "file_type": "document",
-         "source_file": "docs/wiki/overview.md"},
-    ], "edges": []}
+    stored = {
+        "nodes": [
+            {
+                "id": "wiki_overview_overview",
+                "label": "Overview",
+                "file_type": "document",
+                "source_file": "docs/wiki/overview.md",
+            },
+            {
+                "id": "wiki_overview_stale",
+                "label": "Stale",
+                "file_type": "document",
+                "source_file": "docs/wiki/overview.md",
+            },
+        ],
+        "edges": [],
+    }
     G0 = build([stored], dedup=False)
     saved = json.dumps(nx.node_link_data(G0, edges="edges"))
     graph_path.write_text(saved, encoding="utf-8")
 
     # BUG: --update drifted to a bare basename and no root was passed. Different
     # base -> source_file replace misses -> stale + duplicate both survive.
-    drift = {"nodes": [
-        {"id": "overview_overview", "label": "Overview", "file_type": "document",
-         "source_file": "overview.md"},
-    ], "edges": []}
+    drift = {
+        "nodes": [
+            {
+                "id": "overview_overview",
+                "label": "Overview",
+                "file_type": "document",
+                "source_file": "overview.md",
+            },
+        ],
+        "edges": [],
+    }
     G_bug = build_merge([drift], graph_path, dedup=False)
     assert G_bug.number_of_nodes() == 3, "mismatched base must NOT replace -> stale+dup remain"
 
     # FIX: subagent emits the verbatim path; caller passes root (the build root).
     graph_path.write_text(saved, encoding="utf-8")
     abs_overview = str(root / "docs" / "wiki" / "overview.md")
-    fixed = {"nodes": [
-        {"id": "wiki_overview_overview", "label": "Overview", "file_type": "document",
-         "source_file": abs_overview},
-    ], "edges": []}
+    fixed = {
+        "nodes": [
+            {
+                "id": "wiki_overview_overview",
+                "label": "Overview",
+                "file_type": "document",
+                "source_file": abs_overview,
+            },
+        ],
+        "edges": [],
+    }
     G_ok = build_merge([fixed], graph_path, prune_sources=None, dedup=False, root=root)
     assert G_ok.number_of_nodes() == 1, "verbatim path + root must collapse to one node"
     # #1504 re-keys the author-chosen short ids to the canonical full-path stem.
-    assert "docs_wiki_overview_stale" not in G_ok, "stale node for the re-extracted file must be dropped"
-    assert G_ok.nodes["docs_wiki_overview_overview"]["source_file"] == "docs/wiki/overview.md", \
+    assert "docs_wiki_overview_stale" not in G_ok, (
+        "stale node for the re-extracted file must be dropped"
+    )
+    assert G_ok.nodes["docs_wiki_overview_overview"]["source_file"] == "docs/wiki/overview.md", (
         "new chunk must be canonicalized to the stored relative base"
+    )
 
 
 def test_build_merge_rejects_oversized_existing_graph(monkeypatch, tmp_path):
@@ -708,10 +927,20 @@ def test_build_from_json_skips_edge_with_non_hashable_endpoint():
             {"id": "b", "label": "B", "file_type": "code", "source_file": "b.py"},
         ],
         "edges": [
-            {"source": "a", "target": ["b", "c"], "relation": "calls",
-             "confidence": "INFERRED", "source_file": "a.py"},
-            {"source": "a", "target": "b", "relation": "imports",
-             "confidence": "EXTRACTED", "source_file": "a.py"},
+            {
+                "source": "a",
+                "target": ["b", "c"],
+                "relation": "calls",
+                "confidence": "INFERRED",
+                "source_file": "a.py",
+            },
+            {
+                "source": "a",
+                "target": "b",
+                "relation": "imports",
+                "confidence": "EXTRACTED",
+                "source_file": "a.py",
+            },
         ],
     }
     G = build_from_json(extraction)
@@ -722,21 +951,49 @@ def test_build_from_json_skips_edge_with_non_hashable_endpoint():
 
 # ── #1504 migration: legacy-id detection + re-key source_file contract ──────────
 
+
 def test_graph_has_legacy_ids_detects_old_scheme():
     """The read-only-consumer nudge (query/serve) flags a pre-#1504 graph and
     leaves a canonical one alone."""
     from graphify.build import graph_has_legacy_ids
-    old = [{"id": "api_readme", "source_file": "docs/v1/api/README.md", "type": "document", "source_location": "L1"}]
-    new = [{"id": "docs_v1_api_readme", "source_file": "docs/v1/api/README.md", "type": "document", "source_location": "L1"}]
+
+    old = [
+        {
+            "id": "api_readme",
+            "source_file": "docs/v1/api/README.md",
+            "type": "document",
+            "source_location": "L1",
+        }
+    ]
+    new = [
+        {
+            "id": "docs_v1_api_readme",
+            "source_file": "docs/v1/api/README.md",
+            "type": "document",
+            "source_location": "L1",
+        }
+    ]
     assert graph_has_legacy_ids(old, root=".") is True
     assert graph_has_legacy_ids(new, root=".") is False
     # sourceless / top-level file nodes don't false-positive
-    assert graph_has_legacy_ids([{"id": "setup", "source_file": "setup.py", "source_location": "L1"}], root=".") is False
+    assert (
+        graph_has_legacy_ids(
+            [{"id": "setup", "source_file": "setup.py", "source_location": "L1"}], root="."
+        )
+        is False
+    )
     assert graph_has_legacy_ids([{"id": "x", "label": "y"}], root=".") is False
     # package/dir-scoped SYMBOL ids (Go's _make_id(pkg_dir, name) -> "sub_thing") must
     # NOT false-positive: not file-level (no L1), so ignored even though "sub_thing"
     # coincides with the old file-stem form of pkg/sub/thing.go.
-    go_symbol = [{"id": "sub_thing", "source_file": "pkg/sub/thing.go", "type": "code", "source_location": "L3"}]
+    go_symbol = [
+        {
+            "id": "sub_thing",
+            "source_file": "pkg/sub/thing.go",
+            "type": "code",
+            "source_location": "L3",
+        }
+    ]
     assert graph_has_legacy_ids(go_symbol, root=".") is False
 
 
@@ -744,6 +1001,7 @@ def test_semantic_rekey_relative_vs_absolute_source_file():
     """Re-key contract: a relative source_file is migrated; an absolute one is left
     untouched (it can't be relativized, so its on-disk path must not leak into IDs)."""
     from graphify.build import _semantic_id_remap
+
     rel = [{"id": "api_readme", "source_file": "docs/v1/api/README.md", "type": "document"}]
     assert _semantic_id_remap(rel, ".") == {"api_readme": "docs_v1_api_readme"}
     # absolute path with no resolvable root → skipped, not remapped to an abs-path id

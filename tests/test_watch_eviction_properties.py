@@ -85,24 +85,30 @@ def _preserved(edges, *, all_ids, **kw) -> list:
 def test_full_rebuild_does_not_evict_everything():
     """The #1521 BLANKET misread (full rebuild => evict all) must NOT hold."""
     semantic = {"source": "a", "target": "doc1", "source_file": "a.py", "_origin": "semantic"}
-    kw = dict(
-        full_rebuild=True,
-        edge_evict_sources={"a.py"},
-        new_ast_ids={"a"},
-        origin_by_id={"a": "ast", "doc1": None},
-    )
-    assert _edge_evicted_ref(semantic, **kw) is False, "semantic edge must survive full rebuild"
+    assert (
+        _edge_evicted_ref(
+            semantic,
+            full_rebuild=True,
+            edge_evict_sources={"a.py"},
+            new_ast_ids={"a"},
+            origin_by_id={"a": "ast", "doc1": None},
+        )
+        is False
+    ), "semantic edge must survive full rebuild"
 
 
 def test_full_rebuild_evicts_stale_ast_edge():
     ast_edge = {"source": "a", "target": "b", "source_file": "a.py"}
-    kw = dict(
-        full_rebuild=True,
-        edge_evict_sources={"a.py"},
-        new_ast_ids={"a", "b"},
-        origin_by_id={"a": "ast", "b": "ast"},
-    )
-    assert _edge_evicted_ref(ast_edge, **kw) is True, "stale AST edge must evict on full rebuild"
+    assert (
+        _edge_evicted_ref(
+            ast_edge,
+            full_rebuild=True,
+            edge_evict_sources={"a.py"},
+            new_ast_ids={"a", "b"},
+            origin_by_id={"a": "ast", "b": "ast"},
+        )
+        is True
+    ), "stale AST edge must evict on full rebuild"
 
 
 @pytest.mark.parametrize(
@@ -122,13 +128,16 @@ def test_eviction_truth_table(origin, both_ast, sf_evicted, full, expected):
         e["_origin"] = origin
     origin_by_id = {"s": "ast", "t": "ast" if both_ast else None}
     new_ast_ids = {"s", "t"} if both_ast else {"s"}
-    kw = dict(
-        full_rebuild=full,
-        edge_evict_sources=({"f.py"} if sf_evicted else set()),
-        new_ast_ids=new_ast_ids,
-        origin_by_id=origin_by_id,
+    assert (
+        _edge_evicted_ref(
+            e,
+            full_rebuild=full,
+            edge_evict_sources=({"f.py"} if sf_evicted else set()),
+            new_ast_ids=new_ast_ids,
+            origin_by_id=origin_by_id,
+        )
+        is expected
     )
-    assert _edge_evicted_ref(e, **kw) is expected
 
 
 # --- deterministic generated-graph layer ---

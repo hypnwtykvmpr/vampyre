@@ -1,4 +1,5 @@
 """Zig extractor (tree-sitter). Moved verbatim from graphify/extract.py."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -34,15 +35,34 @@ def extract_zig(path: Path) -> dict:
     def add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
             seen_ids.add(nid)
-            nodes.append({"id": nid, "label": label, "file_type": "code",
-                          "source_file": str_path, "source_location": f"L{line}"})
+            nodes.append(
+                {
+                    "id": nid,
+                    "label": label,
+                    "file_type": "code",
+                    "source_file": str_path,
+                    "source_location": f"L{line}",
+                }
+            )
 
-    def add_edge(src: str, tgt: str, relation: str, line: int,
-                 confidence: str = "EXTRACTED", weight: float = 1.0,
-                 context: str | None = None) -> None:
-        edge = {"source": src, "target": tgt, "relation": relation,
-                "confidence": confidence, "source_file": str_path,
-                "source_location": f"L{line}", "weight": weight}
+    def add_edge(
+        src: str,
+        tgt: str,
+        relation: str,
+        line: int,
+        confidence: str = "EXTRACTED",
+        weight: float = 1.0,
+        context: str | None = None,
+    ) -> None:
+        edge = {
+            "source": src,
+            "target": tgt,
+            "relation": relation,
+            "confidence": confidence,
+            "source_file": str_path,
+            "source_location": f"L{line}",
+            "weight": weight,
+        }
         if context:
             edge["context"] = context
         edges.append(edge)
@@ -67,8 +87,7 @@ def extract_zig(path: Path) -> dict:
                             module_name = raw.split("/")[-1].split(".")[0]
                             if module_name:
                                 tgt_nid = _make_id(module_name)
-                                add_edge(file_nid, tgt_nid, "imports_from",
-                                         node.start_point[0] + 1)
+                                add_edge(file_nid, tgt_nid, "imports_from", node.start_point[0] + 1)
                             return
             elif child.type == "field_expression":
                 _extract_import(child)
@@ -101,9 +120,13 @@ def extract_zig(path: Path) -> dict:
             for child in node.children:
                 if child.type == "identifier":
                     name_node = child
-                elif child.type in ("struct_declaration", "enum_declaration",
-                                    "union_declaration", "builtin_function",
-                                    "field_expression"):
+                elif child.type in (
+                    "struct_declaration",
+                    "enum_declaration",
+                    "union_declaration",
+                    "builtin_function",
+                    "field_expression",
+                ):
                     value_node = child
 
             if value_node and value_node.type == "struct_declaration":
@@ -147,30 +170,36 @@ def extract_zig(path: Path) -> dict:
                 fn_text = _read_text(fn, source)
                 callee = fn_text.split(".")[-1]
                 is_member_call = "." in fn_text
-                tgt_nid = next((n["id"] for n in nodes if n["label"] in
-                                (f"{callee}()", f".{callee}()")), None)
+                tgt_nid = next(
+                    (n["id"] for n in nodes if n["label"] in (f"{callee}()", f".{callee}()")), None
+                )
                 if tgt_nid and tgt_nid != caller_nid:
                     line = node.start_point[0] + 1
                     pair = (caller_nid, tgt_nid, f"L{line}")
                     if pair not in seen_call_pairs:
                         seen_call_pairs.add(pair)
-                        add_edge(caller_nid, tgt_nid, "calls",
-                                 line,
-                                 confidence="EXTRACTED", weight=1.0)
+                        add_edge(
+                            caller_nid, tgt_nid, "calls", line, confidence="EXTRACTED", weight=1.0
+                        )
                 elif callee:
-                    raw_calls.append({
-                        "caller_nid": caller_nid,
-                        "callee": callee,
-                        "is_member_call": is_member_call,
-                        "source_file": str_path,
-                        "source_location": f"L{node.start_point[0] + 1}",
-                    })
+                    raw_calls.append(
+                        {
+                            "caller_nid": caller_nid,
+                            "callee": callee,
+                            "is_member_call": is_member_call,
+                            "source_file": str_path,
+                            "source_location": f"L{node.start_point[0] + 1}",
+                        }
+                    )
         for child in node.children:
             walk_calls(child, caller_nid)
 
     for caller_nid, body_node in function_bodies:
         walk_calls(body_node, caller_nid)
 
-    clean_edges = [e for e in edges if e["source"] in seen_ids and
-                   (e["target"] in seen_ids or e["relation"] == "imports_from")]
+    clean_edges = [
+        e
+        for e in edges
+        if e["source"] in seen_ids and (e["target"] in seen_ids or e["relation"] == "imports_from")
+    ]
     return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls}

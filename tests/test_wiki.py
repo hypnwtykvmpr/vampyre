@@ -1,10 +1,10 @@
 """Tests for graphify.wiki — Wikipedia-style article generation."""
+
 import re
 import urllib.parse
 import pytest
-from pathlib import Path
 import networkx as nx
-from graphify.wiki import to_wiki, _index_md, _community_article, _god_node_article
+from graphify.wiki import to_wiki
 
 _MD_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 
@@ -40,14 +40,28 @@ GOD_NODES = [{"id": "n1", "label": "parse", "degree": 2}]
 
 def test_to_wiki_writes_index(tmp_path):
     G = _make_graph()
-    n = to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS, cohesion=COHESION, god_nodes_data=GOD_NODES)
+    to_wiki(
+        G,
+        COMMUNITIES,
+        tmp_path,
+        community_labels=LABELS,
+        cohesion=COHESION,
+        god_nodes_data=GOD_NODES,
+    )
     assert (tmp_path / "index.md").exists()
 
 
 def test_to_wiki_returns_article_count(tmp_path):
     G = _make_graph()
     # 2 communities + 1 god node = 3
-    n = to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS, cohesion=COHESION, god_nodes_data=GOD_NODES)
+    n = to_wiki(
+        G,
+        COMMUNITIES,
+        tmp_path,
+        community_labels=LABELS,
+        cohesion=COHESION,
+        god_nodes_data=GOD_NODES,
+    )
     assert n == 3
 
 
@@ -191,6 +205,7 @@ def test_god_node_article_community_without_node_attr(tmp_path):
 
 # Regression tests for #936 - stale community node IDs crash to_wiki after dedup/re-extract
 
+
 def test_to_wiki_drops_stale_community_nodes(tmp_path):
     """Stale node IDs in communities dict are silently dropped without crash (#936)."""
     G = _make_graph()
@@ -281,7 +296,14 @@ def test_wiki_emits_no_obsidian_wikilinks(tmp_path):
     only inside Obsidian (by note title); everywhere else [[Domain Data Models]]
     points at a literal `Domain Data Models.md` that doesn't exist."""
     G = _make_graph()
-    to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS, cohesion=COHESION, god_nodes_data=GOD_NODES)
+    to_wiki(
+        G,
+        COMMUNITIES,
+        tmp_path,
+        community_labels=LABELS,
+        cohesion=COHESION,
+        god_nodes_data=GOD_NODES,
+    )
     for md in tmp_path.glob("*.md"):
         assert "[[" not in md.read_text(), md.name
 
@@ -292,7 +314,14 @@ def test_wiki_links_resolve_to_real_files(tmp_path):
     characters, but the target is the URL-encoded slug, so it has to round-trip
     back to a real filename in any renderer."""
     G = _make_graph()
-    to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS, cohesion=COHESION, god_nodes_data=GOD_NODES)
+    to_wiki(
+        G,
+        COMMUNITIES,
+        tmp_path,
+        community_labels=LABELS,
+        cohesion=COHESION,
+        god_nodes_data=GOD_NODES,
+    )
     seen_link = False
     for md in tmp_path.glob("*.md"):
         for display, target in _inline_links(md.read_text()):

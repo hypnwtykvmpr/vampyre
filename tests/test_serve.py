@@ -448,7 +448,7 @@ def test_subgraph_to_text_annotates_node_with_learning_status():
         "n1": {"status": "preferred", "stale": False},
     }
     text = _subgraph_to_text(G, {"n1", "n2"}, [("n1", "n2")])
-    lines = {l.split()[1]: l for l in text.splitlines() if l.startswith("NODE ")}
+    lines = {line.split()[1]: line for line in text.splitlines() if line.startswith("NODE ")}
     assert "learning=preferred]" in lines["extract"]
     assert "learning=" not in lines["cluster"]  # un-annotated node
 

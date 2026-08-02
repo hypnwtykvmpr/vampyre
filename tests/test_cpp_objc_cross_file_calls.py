@@ -5,6 +5,7 @@ over recall: resolution is by RECEIVER TYPE (never a bare method name), guarded 
 single-definition god-node check — an ambiguous or uninferable receiver yields ZERO
 edges rather than a fan-out.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -31,16 +32,19 @@ def _call_edges(result: dict, relations=("calls",)):
     out = set()
     for e in result["edges"]:
         if e.get("relation") in relations:
-            out.add((
-                _label(result, e["source"]),
-                e["relation"],
-                _label(result, e["target"]),
-                e.get("confidence"),
-            ))
+            out.add(
+                (
+                    _label(result, e["source"]),
+                    e["relation"],
+                    _label(result, e["target"]),
+                    e.get("confidence"),
+                )
+            )
     return out
 
 
 # ── C++ #include survival (#1547) ─────────────────────────────────────────────
+
 
 def test_cpp_cross_file_member_call_connects_with_relative_paths(tmp_path):
     """The headline #1547 fix: a paired class no longer islands — Main.cpp's use of
@@ -57,6 +61,7 @@ def test_cpp_cross_file_member_call_connects_with_relative_paths(tmp_path):
     class and is robust to that gap.
     """
     import os
+
     base = tmp_path / "src"
     _write(base / "Foo.h", "class Foo {\npublic:\n  void bar();\n};\n")
     _write(base / "Foo.cpp", '#include "Foo.h"\nvoid Foo::bar() {}\n')
@@ -66,7 +71,8 @@ def test_cpp_cross_file_member_call_connects_with_relative_paths(tmp_path):
         os.chdir(tmp_path)
         result = extract(
             [Path("src/Foo.h"), Path("src/Foo.cpp"), Path("src/Main.cpp")],
-            cache_root=Path(".cache"), parallel=False,
+            cache_root=Path(".cache"),
+            parallel=False,
         )
     finally:
         os.chdir(old)
@@ -76,7 +82,8 @@ def test_cpp_cross_file_member_call_connects_with_relative_paths(tmp_path):
     # main() connects to Foo::bar across files (resolved by inferred receiver type `Foo f`).
     labels = {n["id"]: n.get("label", "") for n in result["nodes"]}
     main_bar = [
-        e for e in result["edges"]
+        e
+        for e in result["edges"]
         if e.get("relation") == "calls"
         and "main" in labels.get(e["source"], "")
         and e["target"].endswith("_bar")
@@ -87,6 +94,7 @@ def test_cpp_cross_file_member_call_connects_with_relative_paths(tmp_path):
 
 
 # ── C++ member calls (#1547) ──────────────────────────────────────────────────
+
 
 def test_cpp_instance_member_call_resolves(tmp_path: Path):
     # `Foo f; f.bar();` in Main.cpp resolves to Foo::bar — INFERRED (receiver typed
@@ -133,7 +141,9 @@ def test_cpp_this_member_call_resolves_to_enclosing_class(tmp_path: Path):
     # EXTRACTED. Cross-file: the body lives in Foo.cpp, the decl in Foo.h.
     base = tmp_path / "src"
     _write(base / "Foo.h", "class Foo {\npublic:\n  void bar();\n  void baz();\n};\n")
-    _write(base / "Foo.cpp", '#include "Foo.h"\nvoid Foo::bar() {}\nvoid Foo::baz() { this->bar(); }\n')
+    _write(
+        base / "Foo.cpp", '#include "Foo.h"\nvoid Foo::bar() {}\nvoid Foo::baz() { this->bar(); }\n'
+    )
     result = extract(sorted(base.glob("*")), cache_root=tmp_path / "cache")
 
     calls = _call_edges(result)
@@ -148,13 +158,15 @@ def test_cpp_godnode_guard_ambiguous_and_unknown_receiver(tmp_path: Path):
     _write(base / "A.cpp", '#include "A.h"\nvoid A::run() {}\n')
     _write(base / "B.h", "class B {\npublic:\n  void run();\n};\n")
     _write(base / "B.cpp", '#include "B.h"\nvoid B::run() {}\n')
-    _write(base / "Main.cpp",
-           '#include "A.h"\n#include "B.h"\nint main() { x.run(); A a; a.run(); }\n')
+    _write(
+        base / "Main.cpp", '#include "A.h"\n#include "B.h"\nint main() { x.run(); A a; a.run(); }\n'
+    )
     result = extract(sorted(base.glob("*")), cache_root=tmp_path / "cache")
 
     src_by_id = {n["id"]: n.get("source_file") for n in result["nodes"]}
     run_calls = [
-        e for e in result["edges"]
+        e
+        for e in result["edges"]
         if e.get("relation") == "calls"
         and _label(result, e["source"]) == "main()"
         and _label(result, e["target"]) == "run"
@@ -176,7 +188,8 @@ def test_cpp_resolved_call_survives_build(tmp_path: Path):
 
     g = build_from_json(result)
     cross = [
-        d for _, _, d in g.edges(data=True)
+        d
+        for _, _, d in g.edges(data=True)
         if d.get("relation") == "calls" and d.get("confidence") == "INFERRED"
     ]
     assert len(cross) >= 1
@@ -196,15 +209,18 @@ def test_cpp_unknown_receiver_emits_no_edge(tmp_path: Path):
 
 # ── ObjC member calls (#1556) ─────────────────────────────────────────────────
 
+
 def test_objc_instance_message_send_resolves(tmp_path: Path):
     # `Foo *f = [[Foo alloc] init]; [f doThing];` in Bar.m -> cross-file calls edge
     # to Foo's -doThing (INFERRED, receiver typed from the `Foo *f` local).
     base = tmp_path / "src"
     _write(base / "Foo.h", "@interface Foo : NSObject\n- (void)doThing;\n@end\n")
     _write(base / "Foo.m", '#import "Foo.h"\n@implementation Foo\n- (void)doThing {}\n@end\n')
-    _write(base / "Bar.m",
-           '#import "Foo.h"\n@implementation Bar\n'
-           '- (void)go {\n  Foo *f = [[Foo alloc] init];\n  [f doThing];\n}\n@end\n')
+    _write(
+        base / "Bar.m",
+        '#import "Foo.h"\n@implementation Bar\n'
+        "- (void)go {\n  Foo *f = [[Foo alloc] init];\n  [f doThing];\n}\n@end\n",
+    )
     result = extract(sorted(base.glob("*")), cache_root=tmp_path / "cache")
 
     calls = _call_edges(result)
@@ -215,9 +231,11 @@ def test_objc_self_message_send_resolves_to_enclosing_class(tmp_path: Path):
     # `[self render]` inside Foo resolves to Foo's -render -> EXTRACTED.
     base = tmp_path / "src"
     _write(base / "Foo.h", "@interface Foo : NSObject\n- (void)render;\n- (void)setup;\n@end\n")
-    _write(base / "Foo.m",
-           '#import "Foo.h"\n@implementation Foo\n'
-           '- (void)setup { [self render]; }\n- (void)render {}\n@end\n')
+    _write(
+        base / "Foo.m",
+        '#import "Foo.h"\n@implementation Foo\n'
+        "- (void)setup { [self render]; }\n- (void)render {}\n@end\n",
+    )
     result = extract(sorted(base.glob("*")), cache_root=tmp_path / "cache")
 
     calls = _call_edges(result)
@@ -232,13 +250,15 @@ def test_objc_godnode_guard_ambiguous_selector(tmp_path: Path):
     _write(base / "A.m", '#import "A.h"\n@implementation A\n- (void)doStuff {}\n@end\n')
     _write(base / "B.h", "@interface B : NSObject\n- (void)doStuff;\n@end\n")
     _write(base / "B.m", '#import "B.h"\n@implementation B\n- (void)doStuff {}\n@end\n')
-    _write(base / "C.m",
-           '#import "A.h"\n#import "B.h"\n@implementation C\n'
-           '- (void)go { [thing doStuff]; }\n@end\n')
+    _write(
+        base / "C.m",
+        '#import "A.h"\n#import "B.h"\n@implementation C\n- (void)go { [thing doStuff]; }\n@end\n',
+    )
     result = extract(sorted(base.glob("*")), cache_root=tmp_path / "cache")
 
     go_calls = [
-        e for e in result["edges"]
+        e
+        for e in result["edges"]
         if e.get("relation") == "calls" and _label(result, e["source"]) == "-go"
     ]
     assert go_calls == []
@@ -250,14 +270,17 @@ def test_objc_resolved_calls_survive_build(tmp_path: Path):
     base = tmp_path / "src"
     _write(base / "Foo.h", "@interface Foo : NSObject\n- (void)doThing;\n@end\n")
     _write(base / "Foo.m", '#import "Foo.h"\n@implementation Foo\n- (void)doThing {}\n@end\n')
-    _write(base / "Bar.m",
-           '#import "Foo.h"\n@implementation Bar\n'
-           '- (void)go {\n  Foo *f = [[Foo alloc] init];\n  [f doThing];\n}\n@end\n')
+    _write(
+        base / "Bar.m",
+        '#import "Foo.h"\n@implementation Bar\n'
+        "- (void)go {\n  Foo *f = [[Foo alloc] init];\n  [f doThing];\n}\n@end\n",
+    )
     result = extract(sorted(base.glob("*")), cache_root=tmp_path / "cache")
 
     g = build_from_json(result)
     cross = [
-        d for _, _, d in g.edges(data=True)
+        d
+        for _, _, d in g.edges(data=True)
         if d.get("relation") == "calls" and d.get("confidence") == "INFERRED"
     ]
     assert len(cross) >= 1

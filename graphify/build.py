@@ -366,7 +366,7 @@ def _semantic_id_remap(nodes: list, root: str | None) -> dict:
                 break
             prefix = old_stem + "_"
             if norm_nid.startswith(prefix):
-                entity = norm_nid[len(prefix):]
+                entity = norm_nid[len(prefix) :]
                 new_id = make_id(new_stem, entity)
                 break
         if new_id and new_id != nid:
@@ -386,6 +386,7 @@ def graph_has_legacy_ids(nodes: list, root: str | Path | None = None, sample: in
     file-stem form and would otherwise false-positive. Returns True as soon as one
     file node's ID matches an OLD stem form but not the canonical full-path form."""
     from graphify.extractors.base import _file_stem
+
     _r = str(root) if root is not None else None
     checked = 0
     for node in nodes:
@@ -568,7 +569,7 @@ def build_from_json(
     # populates source_location, so those ghosts survived. Extended fix: use
     # _origin=="ast" as the canonical signal. AST nodes always win; any non-AST
     # node sharing (basename, label) with an AST node is a ghost.
-    _loc_nodes: dict[tuple[str, str], str] = {}   # (basename, label) -> canonical node id
+    _loc_nodes: dict[tuple[str, str], str] = {}  # (basename, label) -> canonical node id
     _loc_collisions: set[tuple[str, str]] = set()  # keys shared by 2+ AST nodes
     _noloc_nodes: dict[tuple[str, str], str] = {}  # (basename, label) -> ghost node id
 
@@ -639,6 +640,7 @@ def build_from_json(
     # file that was NOT re-extracted) still resolves to the migrated node instead
     # of dangling. Only fills gaps — never overrides a real node id.
     from graphify.extractors.base import _file_stem as _fs
+
     for nid in node_set:
         attrs = G.nodes[nid]
         sf = attrs.get("source_file")
@@ -650,7 +652,7 @@ def build_from_json(
         new_stem = make_id(_fs(rel))
         suffix = ""
         if _normalize_id(nid).startswith(new_stem):
-            suffix = _normalize_id(nid)[len(new_stem):]  # leading "_entity" or ""
+            suffix = _normalize_id(nid)[len(new_stem) :]  # leading "_entity" or ""
         for old_stem in _old_file_stems(rel):
             if old_stem == new_stem:
                 continue
@@ -660,6 +662,7 @@ def build_from_json(
     multigraph_groups: dict[tuple[Hashable, Hashable, str], list[dict]] = {}
     multigraph_explicit_keys: set[tuple[Hashable, Hashable, str]] = set()
     multigraph_diagnostics = {"exact_duplicate_edges": 0, "key_collision_edges": 0}
+
     # Iterate edges in a deterministic order. The graph is undirected and stores
     # direction in _src/_tgt; when two edges collapse onto the same node pair the
     # last write wins, so an unstable iteration order flips _src/_tgt run-to-run
@@ -712,9 +715,7 @@ def build_from_json(
         # flags and leaves query results with no file reference (#1279).
         if not attrs.get("source_file"):
             attrs["source_file"] = (
-                G.nodes[src].get("source_file")
-                or G.nodes[tgt].get("source_file")
-                or ""
+                G.nodes[src].get("source_file") or G.nodes[tgt].get("source_file") or ""
             )
         if "source_file" in attrs:
             attrs["source_file"] = _norm_source_file(
@@ -725,21 +726,46 @@ def build_from_json(
         # producing phantom edges that don't represent real call relationships.
         if attrs.get("relation") == "calls" and attrs.get("confidence") == "INFERRED":
             _LANG_FAMILY: dict[str, str] = {
-                ".py": "py", ".pyi": "py",
-                ".js": "js", ".mjs": "js", ".cjs": "js", ".jsx": "js",
-                ".ts": "js", ".tsx": "js", ".mts": "js", ".cts": "js",
-                ".go": "go", ".rs": "rs",
-                ".java": "jvm", ".kt": "jvm", ".scala": "jvm", ".groovy": "jvm",
+                ".py": "py",
+                ".pyi": "py",
+                ".js": "js",
+                ".mjs": "js",
+                ".cjs": "js",
+                ".jsx": "js",
+                ".ts": "js",
+                ".tsx": "js",
+                ".mts": "js",
+                ".cts": "js",
+                ".go": "go",
+                ".rs": "rs",
+                ".java": "jvm",
+                ".kt": "jvm",
+                ".scala": "jvm",
+                ".groovy": "jvm",
                 # C, C++, and ObjC interoperate within one compilation unit: a method
                 # declared in a shared `.h` is defined/called from a `.c`/`.cpp`/`.m`
                 # sibling, so a cross-file INFERRED call from impl to its header decl
                 # is legitimate, not a phantom name-collision across languages. Treat
                 # the whole C family as one so the receiver-typed C++/ObjC member-call
                 # resolvers' header-targeting edges survive build (#1547/#1556).
-                ".c": "c", ".h": "c", ".cc": "c", ".cpp": "c", ".hpp": "c",
-                ".cxx": "c", ".hh": "c", ".hxx": "c",
-                ".cu": "c", ".cuh": "c", ".metal": "c", ".m": "c", ".mm": "c",
-                ".rb": "rb", ".php": "php", ".cs": "cs", ".swift": "swift", ".lua": "lua",
+                ".c": "c",
+                ".h": "c",
+                ".cc": "c",
+                ".cpp": "c",
+                ".hpp": "c",
+                ".cxx": "c",
+                ".hh": "c",
+                ".hxx": "c",
+                ".cu": "c",
+                ".cuh": "c",
+                ".metal": "c",
+                ".m": "c",
+                ".mm": "c",
+                ".rb": "rb",
+                ".php": "php",
+                ".cs": "cs",
+                ".swift": "swift",
+                ".lua": "lua",
             }
             src_ext = Path(G.nodes[src].get("source_file") or "").suffix.lower()
             tgt_ext = Path(G.nodes[tgt].get("source_file") or "").suffix.lower()
@@ -1128,10 +1154,7 @@ def build_merge(
     # (#1571 — the skill's --update runbook calls build_merge without root, so
     # absolute deleted-file paths never matched the relative node keys and their
     # nodes survived as ghosts).
-    _eff_root = (
-        str(Path(root).resolve()) if root is not None
-        else _infer_merge_root(graph_path)
-    )
+    _eff_root = str(Path(root).resolve()) if root is not None else _infer_merge_root(graph_path)
 
     # Re-extracted files REPLACE their prior contribution. Every source_file
     # present in new_chunks is dropped from the loaded base before merging, so a
@@ -1154,9 +1177,11 @@ def build_merge(
             if norm:
                 new_sources.add(norm)
     if new_sources:
+
         def _kept(item: dict) -> bool:
             sf = item.get("source_file")
             return sf not in new_sources and _norm_source_file(sf, _replace_root) not in new_sources
+
         existing_nodes = [n for n in existing_nodes if _kept(n)]
         existing_edges = [e for e in existing_edges if _kept(e)]
 
@@ -1204,7 +1229,7 @@ def build_merge(
     # handles symlinked roots and ".." / "./" segments so Path.relative_to()
     # succeeds even when the scan root is a symlink. (#1007, #1571)
     prune_set: set[str] = set()
-    for p in (prune_sources or []):
+    for p in prune_sources or []:
         if not p:
             continue
         prune_set.add(p)
@@ -1234,14 +1259,12 @@ def build_merge(
             carried.append(he)
         if carried:
             from graphify.export import attach_hyperedges
+
             attach_hyperedges(G, carried)
 
     # Prune nodes and edges from deleted source files
     if prune_sources:
-        to_remove = [
-            n for n, d in G.nodes(data=True)
-            if d.get("source_file") in prune_set
-        ]
+        to_remove = [n for n, d in G.nodes(data=True) if d.get("source_file") in prune_set]
         G.remove_nodes_from(to_remove)
         n_files = len(prune_sources)
         n_nodes = len(to_remove)

@@ -11,7 +11,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -23,6 +23,7 @@ from graphify.file_slice import (
     read_slice_text,
     unit_path,
 )
+from graphify.installation import uv_tool_install_command
 
 # `_read_files` truncates each file at this many characters before joining into
 # the user message. Token estimates use the same cap so packing matches reality.
@@ -94,7 +95,9 @@ BACKENDS: dict[str, dict] = {
         # GEMINI_BASE_URL points the backend at any OpenAI-compatible server for
         # Gemini models (LiteLLM, self-hosted proxy, ...). Falls back to Google's
         # official OpenAI-compatible endpoint.
-        "base_url": os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
+        "base_url": os.environ.get(
+            "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"
+        ),
         "default_model": "gemini-3-flash-preview",
         "env_keys": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         "model_env_key": "GRAPHIFY_GEMINI_MODEL",
@@ -144,10 +147,15 @@ BACKENDS: dict[str, dict] = {
         #           AZURE_OPENAI_DEPLOYMENT or GRAPHIFY_AZURE_MODEL (deployment name).
         # base_url is intentionally absent — prevents accidental routing through
         # _call_openai_compat, which requires it and uses the wrong SDK client class.
-        "default_model": os.environ.get("AZURE_OPENAI_DEPLOYMENT", os.environ.get("GRAPHIFY_AZURE_MODEL", "gpt-4o")),
+        "default_model": os.environ.get(
+            "AZURE_OPENAI_DEPLOYMENT", os.environ.get("GRAPHIFY_AZURE_MODEL", "gpt-4o")
+        ),
         "env_key": "AZURE_OPENAI_API_KEY",
         "model_env_key": "GRAPHIFY_AZURE_MODEL",
-        "pricing": {"input": 2.50, "output": 10.00},  # USD per 1M tokens (gpt-4o; may mis-estimate other deployments)
+        "pricing": {
+            "input": 2.50,
+            "output": 10.00,
+        },  # USD per 1M tokens (gpt-4o; may mis-estimate other deployments)
         "temperature": 0,
         "max_tokens": 16384,
     },
@@ -193,11 +201,15 @@ def provider_base_url_ok(base_url: str, name: str, *, warn: bool = True) -> bool
     config is the GRAPHIFY_ALLOW_LOCAL_PROVIDERS gate on project-local files.
     """
     from urllib.parse import urlparse
+
     try:
         parsed = urlparse(base_url)
     except Exception:
         if warn:
-            print(f"[graphify] WARNING: provider {name!r} has an unparseable base_url; ignoring.", file=sys.stderr)
+            print(
+                f"[graphify] WARNING: provider {name!r} has an unparseable base_url; ignoring.",
+                file=sys.stderr,
+            )
         return False
     if parsed.scheme not in ("http", "https"):
         if warn:
@@ -225,7 +237,11 @@ def _load_custom_providers() -> dict[str, dict]:
     # the user's own global ~/.graphify/providers.json stays trusted.
     local_path = _custom_providers_path(global_=False)
     global_path = _custom_providers_path(global_=True)
-    allow_local = os.environ.get("GRAPHIFY_ALLOW_LOCAL_PROVIDERS", "").strip().lower() in ("1", "true", "yes")
+    allow_local = os.environ.get("GRAPHIFY_ALLOW_LOCAL_PROVIDERS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     if local_path.is_file() and not allow_local:
         print(
             f"[graphify] WARNING: ignoring project-local {local_path} (custom providers control "
@@ -352,6 +368,7 @@ def _no_window_kwargs() -> dict:
     becomes a visible window that appears and vanishes for the duration of the
     model call. CREATE_NO_WINDOW keeps the children invisible; no-op elsewhere."""
     import subprocess
+
     if sys.platform == "win32":
         return {"creationflags": subprocess.CREATE_NO_WINDOW}
     return {}
@@ -387,6 +404,7 @@ def _resolve_max_retries(default: int = 6) -> int:
         except ValueError:
             pass
     return default
+
 
 _EXTRACTION_SYSTEM = """\
 You are a graphify semantic extraction agent. Extract a knowledge graph fragment from the files provided.
@@ -445,6 +463,7 @@ def _file_to_text(path: Path) -> str:
     """
     if path.suffix.lower() == ".pdf":
         from graphify.detect import extract_pdf_text
+
         return extract_pdf_text(path)
     return path.read_text(encoding="utf-8", errors="replace")
 
@@ -495,14 +514,10 @@ def _wrap_untrusted(rel: str, content: str) -> str:
     """
     sha = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
     safe = _neutralise_injection_sentinels(content)
-    return (
-        f'<untrusted_source path="{rel}" sha256="{sha}">\n'
-        f"{safe}\n"
-        f"</untrusted_source>"
-    )
+    return f'<untrusted_source path="{rel}" sha256="{sha}">\n{safe}\n</untrusted_source>'
 
 
-def _read_files(units: "list[Path | FileSlice]", root: Path) -> str:
+def _read_files(units: Sequence[Path | FileSlice], root: Path) -> str:
     """Return file/slice contents formatted for the extraction prompt.
 
     Each unit is wrapped in an <untrusted_source> delimiter block and known
@@ -582,9 +597,9 @@ class _ImageRef:
     becomes a graph node.
     """
 
-    path: Path        # absolute path (claude-cli reads it via the Read tool)
-    rel: str          # path relative to the corpus root (the node's source_file)
-    media_type: str   # e.g. "image/png"
+    path: Path  # absolute path (claude-cli reads it via the Read tool)
+    rel: str  # path relative to the corpus root (the node's source_file)
+    media_type: str  # e.g. "image/png"
     raw: bytes | None
 
     @property
@@ -602,7 +617,7 @@ def _is_vision_image(path: Path) -> bool:
 
 
 def _partition_semantic_files(
-    units: "list[Path | FileSlice]",
+    units: Sequence[Path | FileSlice],
 ) -> tuple["list[Path | FileSlice]", list[Path]]:
     """Split a chunk into (text-like units, raster-image files).
 
@@ -614,7 +629,9 @@ def _partition_semantic_files(
     return text_units, image_files
 
 
-def _build_image_refs(image_files: list[Path], root: Path, *, read_bytes: bool = True) -> list[_ImageRef]:
+def _build_image_refs(
+    image_files: list[Path], root: Path, *, read_bytes: bool = True
+) -> list[_ImageRef]:
     """Build `_ImageRef`s for raster images.
 
     `read_bytes=True` (base64 backends) loads the pixels and drops any image over
@@ -628,7 +645,10 @@ def _build_image_refs(image_files: list[Path], root: Path, *, read_bytes: bool =
     for p in image_files:
         abs_path = _resolve_under_root(p, root)
         if abs_path is None:
-            print(f"[graphify] skipping image {p}: symlink target outside corpus root", file=sys.stderr)
+            print(
+                f"[graphify] skipping image {p}: symlink target outside corpus root",
+                file=sys.stderr,
+            )
             continue
         try:
             rel = str(p.relative_to(root))
@@ -687,13 +707,10 @@ def _image_notes(refs: list[_ImageRef], *, with_paths: bool = False) -> str:
             "then emit one node per image"
         )
     else:
-        header = (
-            "The following image file(s) are attached as visual input. Emit one "
-            "node per image"
-        )
+        header = "The following image file(s) are attached as visual input. Emit one node per image"
     lines = [
         "=== IMAGES ===",
-        f"{header} with \"file_type\":\"image\" and the listed source_file, a label "
+        f'{header} with "file_type":"image" and the listed source_file, a label '
         "describing what it depicts (diagram, screenshot, chart, photo, UI, logo), "
         "and edges to any code/doc nodes the image clearly references.",
     ]
@@ -748,9 +765,7 @@ def _openai_content(user_message: str, refs: list[_ImageRef]):
 def _bedrock_content(user_message: str, refs: list[_ImageRef]) -> list[dict]:
     """Build the Bedrock Converse user content list (raw bytes, not base64)."""
     content: list[dict] = [
-        {"image": {"format": r.bedrock_format, "source": {"bytes": r.raw}}}
-        for r in refs
-        if r.raw
+        {"image": {"format": r.bedrock_format, "source": {"bytes": r.raw}}} for r in refs if r.raw
     ]
     content.append({"text": _with_image_notes(user_message, refs)})
     return content
@@ -832,8 +847,7 @@ def _parse_llm_json(raw: str) -> dict:
                     except json.JSONDecodeError:
                         break
     print(
-        f"[graphify] LLM returned invalid JSON, skipping chunk "
-        f"(first 200 chars: {raw[:200]!r})",
+        f"[graphify] LLM returned invalid JSON, skipping chunk (first 200 chars: {raw[:200]!r})",
         file=sys.stderr,
     )
     return {"nodes": [], "edges": [], "hyperedges": []}
@@ -898,17 +912,10 @@ def _default_model_for_backend(backend: str) -> str:
 
 
 def _backend_pkg_hint(pkg: str, extra: str) -> str:
-    """Package-missing message that works for the recommended `uv tool` install.
-
-    `uv tool install graphifyy` puts graphify in an isolated venv, so a plain
-    `pip install <pkg>` never reaches it - the friction a user hits when a
-    backend needs anthropic/openai/boto3 and the only advice was "pip install".
-    Point at the extra and the uv path first, then the pip/venv fallback.
-    """
+    """Return fork-specific guidance for an optional backend package."""
     return (
         f"the '{pkg}' package is required for this backend but is not installed. "
-        f"Install it with:  uv tool install \"graphifyy[{extra}]\" --force  "
-        f"(uv tool), or  pip install {pkg}  (pip/venv install)."
+        f"Install it with: {uv_tool_install_command(extra)}"
     )
 
 
@@ -938,8 +945,12 @@ def _call_openai_compat(
     # default. Honour GRAPHIFY_API_TIMEOUT (seconds) for explicit override;
     # default to 600s, which is long enough for a 31B model on a 16k chunk
     # but still bounds runaway connections (issue #792 addendum).
-    client = OpenAI(api_key=api_key, base_url=base_url, timeout=_resolve_api_timeout(),
-                    max_retries=_resolve_max_retries())
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=_resolve_api_timeout(),
+        max_retries=_resolve_max_retries(),
+    )
     kwargs: dict = {
         "model": model,
         "messages": [
@@ -1048,7 +1059,30 @@ def _call_openai_compat(
     return result
 
 
-def _call_claude(api_key: str, model: str, user_message: str, max_tokens: int = 8192, *, deep_mode: bool = False, images: list[_ImageRef] | None = None) -> dict:
+def _anthropic_response_text(content: object) -> str:
+    """Return validated text blocks from an Anthropic response."""
+    if not isinstance(content, Sequence) or isinstance(content, (str, bytes)):
+        raise ValueError("Anthropic returned malformed response content")
+    text_parts: list[str] = []
+    for block in content:
+        text = getattr(block, "text", None)
+        if text is None:
+            continue
+        if not isinstance(text, str):
+            raise ValueError("Anthropic returned a text block with non-string content")
+        text_parts.append(text)
+    return "".join(text_parts)
+
+
+def _call_claude(
+    api_key: str,
+    model: str,
+    user_message: str,
+    max_tokens: int = 8192,
+    *,
+    deep_mode: bool = False,
+    images: list[_ImageRef] | None = None,
+) -> dict:
     """Call Anthropic Claude directly (not via OpenAI compat layer)."""
     try:
         import anthropic
@@ -1067,7 +1101,7 @@ def _call_claude(api_key: str, model: str, user_message: str, max_tokens: int = 
         system=_extraction_system(deep=deep_mode),
         messages=[{"role": "user", "content": _anthropic_content(user_message, images or [])}],
     )
-    raw_content = resp.content[0].text if resp.content else None
+    raw_content = _anthropic_response_text(resp.content)
     result = _parse_llm_json(raw_content or "{}")
     result["input_tokens"] = resp.usage.input_tokens if resp.usage else 0
     result["output_tokens"] = resp.usage.output_tokens if resp.usage else 0
@@ -1103,10 +1137,7 @@ def _claude_cli_envelope(stdout: str) -> dict:
             f"first 500 chars of stdout: {stdout[:500]!r}"
         ) from exc
     if isinstance(envelope, list):
-        result_events = [
-            e for e in envelope
-            if isinstance(e, dict) and e.get("type") == "result"
-        ]
+        result_events = [e for e in envelope if isinstance(e, dict) and e.get("type") == "result"]
         if result_events:
             return result_events[-1]
         if envelope and isinstance(envelope[-1], dict):
@@ -1118,7 +1149,13 @@ def _claude_cli_envelope(stdout: str) -> dict:
     return envelope
 
 
-def _call_claude_cli(user_message: str, max_tokens: int = 8192, *, deep_mode: bool = False, images: list[_ImageRef] | None = None) -> dict:
+def _call_claude_cli(
+    user_message: str,
+    max_tokens: int = 8192,
+    *,
+    deep_mode: bool = False,
+    images: list[_ImageRef] | None = None,
+) -> dict:
     """Call Claude via the locally-installed Claude Code CLI (`claude -p`).
 
     Routes through the user's Claude Code subscription auth instead of a separate
@@ -1193,8 +1230,10 @@ def _call_claude_cli(user_message: str, max_tokens: int = 8192, *, deep_mode: bo
         + user_message
     )
     cli_args = [
-        claude_cmd, "-p",
-        "--output-format", "json",
+        claude_cmd,
+        "-p",
+        "--output-format",
+        "json",
         "--no-session-persistence",
         *add_dir_args,
     ]
@@ -1218,9 +1257,7 @@ def _call_claude_cli(user_message: str, max_tokens: int = 8192, *, deep_mode: bo
         **_no_window_kwargs(),
     )
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"claude -p exited {proc.returncode}: {proc.stderr.strip()[:500]}"
-        )
+        raise RuntimeError(f"claude -p exited {proc.returncode}: {proc.stderr.strip()[:500]}")
 
     envelope = _claude_cli_envelope(proc.stdout)
 
@@ -1253,7 +1290,7 @@ def _azure_client(api_key: str, endpoint: str):
         from openai import AzureOpenAI
     except ImportError as exc:
         raise ImportError(
-            "Azure OpenAI requires the openai package. Run: pip install openai"
+            "Azure OpenAI requires the openai package. Run: " + uv_tool_install_command("openai")
         ) from exc
     api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview").strip()
     timeout_raw = os.environ.get("GRAPHIFY_API_TIMEOUT", "").strip()
@@ -1265,8 +1302,13 @@ def _azure_client(api_key: str, endpoint: str):
                 timeout_s = v
         except ValueError:
             pass
-    return AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version, timeout=timeout_s,
-                       max_retries=_resolve_max_retries())
+    return AzureOpenAI(
+        api_key=api_key,
+        azure_endpoint=endpoint,
+        api_version=api_version,
+        timeout=timeout_s,
+        max_retries=_resolve_max_retries(),
+    )
 
 
 def _call_azure(
@@ -1310,14 +1352,21 @@ def _call_azure(
     return result
 
 
-def _call_bedrock(model: str, user_message: str, max_tokens: int = 8192, *, deep_mode: bool = False, images: list[_ImageRef] | None = None) -> dict:
+def _call_bedrock(
+    model: str,
+    user_message: str,
+    max_tokens: int = 8192,
+    *,
+    deep_mode: bool = False,
+    images: list[_ImageRef] | None = None,
+) -> dict:
     """Call AWS Bedrock via boto3 Converse API using the standard AWS credential chain."""
     try:
         import boto3
         import botocore.exceptions
     except ImportError as exc:
         raise ImportError(
-            "AWS Bedrock extraction requires boto3. Run: pip install graphifyy[bedrock]"
+            "AWS Bedrock extraction requires boto3. Run: " + uv_tool_install_command("bedrock")
         ) from exc
 
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
@@ -1355,7 +1404,7 @@ def _call_bedrock(model: str, user_message: str, max_tokens: int = 8192, *, deep
 
 
 def extract_files_direct(
-    files: list[Path],
+    files: Sequence[str | Path | FileSlice],
     backend: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
@@ -1375,7 +1424,7 @@ def extract_files_direct(
     (from extract_corpus_parallel's oversized-doc slicing, #1369) pass through
     untouched — Path(FileSlice) would raise (#1397/#1399).
     """
-    files = [f if isinstance(f, (Path, FileSlice)) else Path(f) for f in files]
+    normalized_files = [f if isinstance(f, (Path, FileSlice)) else Path(f) for f in files]
     if backend is None:
         backend = detect_backend()
         if backend is None:
@@ -1389,13 +1438,15 @@ def extract_files_direct(
         raise ValueError(f"Unknown backend {backend!r}. Available: {sorted(BACKENDS)}")
 
     cfg = BACKENDS[backend]
+    ollama_url = None
+    if backend == "ollama":
+        ollama_url = _backend_base_url("ollama", cfg)
+        _validate_ollama_base_url(ollama_url)
     key = api_key or _get_backend_api_key(backend)
     if not key and backend == "ollama":
         # Ollama ignores auth but the OpenAI client library requires a non-empty
         # string. Use a placeholder and surface a visible warning so this never
         # silently routes traffic without the user realising — see F-029.
-        ollama_url = os.environ.get("OLLAMA_BASE_URL", cfg.get("base_url", ""))
-        _validate_ollama_base_url(ollama_url)
         print(
             "[graphify] WARNING: ollama backend selected with no OLLAMA_API_KEY set; "
             f"sending corpus to {ollama_url}. Set OLLAMA_API_KEY (any non-empty value) "
@@ -1412,7 +1463,7 @@ def extract_files_direct(
     # Separate raster images from text-like files. Text goes through _read_files
     # as before; images become structured refs the backend renders as pixels
     # (vision backends) or as a text reference node (everything else).
-    text_files, image_files = _partition_semantic_files(files)
+    text_files, image_files = _partition_semantic_files(normalized_files)
     user_msg = _read_files(text_files, root)
     vision = _backend_supports_vision(backend)
     # Only base64 (inline) vision backends need the bytes loaded + size-capped;
@@ -1424,11 +1475,17 @@ def extract_files_direct(
     max_out = _resolve_max_tokens(cfg.get("max_tokens", 8192))
 
     if backend == "claude":
-        return _call_claude(key, mdl, user_msg, max_tokens=max_out, deep_mode=deep_mode, images=image_refs)
+        return _call_claude(
+            key, mdl, user_msg, max_tokens=max_out, deep_mode=deep_mode, images=image_refs
+        )
     if backend == "claude-cli":
-        return _call_claude_cli(user_msg, max_tokens=max_out, deep_mode=deep_mode, images=image_refs)
+        return _call_claude_cli(
+            user_msg, max_tokens=max_out, deep_mode=deep_mode, images=image_refs
+        )
     if backend == "bedrock":
-        return _call_bedrock(mdl, user_msg, max_tokens=max_out, deep_mode=deep_mode, images=image_refs)
+        return _call_bedrock(
+            mdl, user_msg, max_tokens=max_out, deep_mode=deep_mode, images=image_refs
+        )
     if backend == "azure":
         endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "").strip()
         if not endpoint:
@@ -1446,7 +1503,7 @@ def extract_files_direct(
             deep_mode=deep_mode,
         )
     return _call_openai_compat(
-        cfg["base_url"],
+        _backend_base_url(backend, cfg),
         key,
         mdl,
         user_msg,
@@ -1478,7 +1535,9 @@ def _estimate_file_tokens(unit: "Path | FileSlice") -> int:
         # A slice's size is its char range (already ≤ _FILE_CHAR_CAP). Use the
         # tokenizer on its text when available, else the chars/4 heuristic.
         if _TOKENIZER is None:
-            return (min(unit.end - unit.start, _FILE_CHAR_CAP) + _PER_FILE_OVERHEAD_CHARS) // _CHARS_PER_TOKEN
+            return (
+                min(unit.end - unit.start, _FILE_CHAR_CAP) + _PER_FILE_OVERHEAD_CHARS
+            ) // _CHARS_PER_TOKEN
         try:
             content = read_slice_text(unit)[:_FILE_CHAR_CAP]
         except OSError:
@@ -1506,7 +1565,7 @@ def _estimate_file_tokens(unit: "Path | FileSlice") -> int:
 
 
 def _pack_chunks_by_tokens(
-    files: "list[Path | FileSlice]",
+    files: Sequence[Path | FileSlice],
     token_budget: int,
 ) -> "list[list[Path | FileSlice]]":
     """Greedily pack files/slices into chunks that fit a token budget.
@@ -1581,7 +1640,7 @@ def _looks_like_context_exceeded(exc: BaseException) -> bool:
 
 
 def _extract_with_adaptive_retry(
-    chunk: list[Path],
+    chunk: Sequence[Path | FileSlice],
     backend: str,
     api_key: str | None,
     model: str | None,
@@ -1624,6 +1683,7 @@ def _extract_with_adaptive_retry(
     non-splittable file (e.g. one huge code file) can't be made smaller than
     itself, so we return what we got and warn.
     """
+
     def _merge_two(left_units, right_units) -> dict:
         left = _extract_with_adaptive_retry(
             left_units, backend, api_key, model, root, max_depth, _depth + 1, deep_mode=deep_mode
@@ -1652,7 +1712,7 @@ def _extract_with_adaptive_retry(
         result = extract_files_direct(
             chunk, backend=backend, api_key=api_key, model=model, root=root, deep_mode=deep_mode
         )
-    except Exception as exc:  # noqa: BLE001 — re-raise unless it's a known context overflow
+    except Exception as exc:
         if not _looks_like_context_exceeded(exc):
             raise
         if len(chunk) <= 1:
@@ -1669,14 +1729,30 @@ def _extract_with_adaptive_retry(
                 f"and cannot be split further: {exc}",
                 file=sys.stderr,
             )
-            return {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 0, "output_tokens": 0, "model": model, "finish_reason": "stop"}
+            return {
+                "nodes": [],
+                "edges": [],
+                "hyperedges": [],
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "model": model,
+                "finish_reason": "stop",
+            }
         if _depth >= max_depth:
             print(
                 f"[graphify] chunk of {len(chunk)} still overflows context at "
                 f"recursion depth {_depth} (max {max_depth}) — dropping",
                 file=sys.stderr,
             )
-            return {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 0, "output_tokens": 0, "model": model, "finish_reason": "stop"}
+            return {
+                "nodes": [],
+                "edges": [],
+                "hyperedges": [],
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "model": model,
+                "finish_reason": "stop",
+            }
         print(
             f"[graphify] chunk of {len(chunk)} exceeded context at depth "
             f"{_depth} ({type(exc).__name__}); splitting in half and retrying",
@@ -1755,7 +1831,7 @@ def _extract_with_adaptive_retry(
 
 
 def extract_corpus_parallel(
-    files: list[Path],
+    files: Sequence[str | Path | FileSlice],
     backend: str = "kimi",
     api_key: str | None = None,
     model: str | None = None,
@@ -1804,24 +1880,34 @@ def extract_corpus_parallel(
     Accepts ``str`` paths as well as ``Path``; string entries are coerced up
     front so packing/slicing helpers can rely on ``Path`` semantics (#1386).
     """
-    files = [f if isinstance(f, (Path, FileSlice)) else Path(f) for f in files]
+    normalized_files = [f if isinstance(f, (Path, FileSlice)) else Path(f) for f in files]
     # Split oversized splittable documents into slices that cover the whole file
     # before packing, so content past _FILE_CHAR_CAP is extracted instead of
     # silently dropped (#1369). Files at/under the cap pass through unchanged.
-    files = expand_oversized_files(files, _FILE_CHAR_CAP)
+    units: list[Path | FileSlice] = []
+    for unit in normalized_files:
+        if isinstance(unit, FileSlice):
+            units.append(unit)
+        else:
+            units.extend(expand_oversized_files([unit], _FILE_CHAR_CAP))
     if token_budget is not None:
-        chunks = _pack_chunks_by_tokens(files, token_budget=token_budget)
+        chunks = _pack_chunks_by_tokens(units, token_budget=token_budget)
     else:
-        chunks = [files[i:i + chunk_size] for i in range(0, len(files), chunk_size)]
+        chunks = [units[i : i + chunk_size] for i in range(0, len(units), chunk_size)]
 
     merged: dict = {
-        "nodes": [], "edges": [], "hyperedges": [],
-        "input_tokens": 0, "output_tokens": 0,
+        "nodes": [],
+        "edges": [],
+        "hyperedges": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
         "failed_chunks": 0,  # count of chunks that raised — loud failure on chunk errors
     }
     total = len(chunks)
 
-    def _run_one(idx: int, chunk: list[Path]) -> tuple[int, dict | None, Exception | None]:
+    def _run_one(
+        idx: int, chunk: list[Path | FileSlice]
+    ) -> tuple[int, dict | None, Exception | None]:
         t0 = time.time()
         try:
             result = _extract_with_adaptive_retry(
@@ -1835,7 +1921,7 @@ def extract_corpus_parallel(
             )
             result["elapsed_seconds"] = round(time.time() - t0, 2)
             return idx, result, None
-        except Exception as exc:  # noqa: BLE001 — caller-facing surface, log + continue
+        except Exception as exc:
             return idx, None, exc
 
     # Ollama serves one request at a time per loaded model on a single GPU.
@@ -1845,7 +1931,10 @@ def extract_corpus_parallel(
         max_concurrency = 1
     # claude-cli shells out to a Claude Code session; parallel subprocesses conflict
     # over session state. Force serial unless the user explicitly opts in.
-    if backend == "claude-cli" and os.environ.get("GRAPHIFY_CLAUDE_CLI_PARALLEL", "").strip() != "1":
+    if (
+        backend == "claude-cli"
+        and os.environ.get("GRAPHIFY_CLAUDE_CLI_PARALLEL", "").strip() != "1"
+    ):
         max_concurrency = 1
     workers = max(1, min(max_concurrency, total))
     if workers == 1:
@@ -1929,9 +2018,9 @@ def _call_llm(
         raise ValueError(f"Unknown backend {backend!r}")
     cfg = BACKENDS[backend]
     key = _get_backend_api_key(backend)
+    if backend == "ollama":
+        _validate_ollama_base_url(_backend_base_url("ollama", cfg))
     if not key and backend == "ollama":
-        ollama_url = os.environ.get("OLLAMA_BASE_URL", cfg.get("base_url", ""))
-        _validate_ollama_base_url(ollama_url)
         key = "ollama"
     if not key and backend not in ("bedrock", "claude-cli"):
         raise ValueError(
@@ -1944,16 +2033,24 @@ def _call_llm(
             import anthropic
         except ImportError as exc:
             raise ImportError(_backend_pkg_hint("anthropic", "anthropic")) from exc
-        client = anthropic.Anthropic(api_key=key, base_url=cfg["base_url"], timeout=_resolve_api_timeout(), max_retries=_resolve_max_retries())
+        client = anthropic.Anthropic(
+            api_key=key,
+            base_url=cfg["base_url"],
+            timeout=_resolve_api_timeout(),
+            max_retries=_resolve_max_retries(),
+        )
         resp = client.messages.create(
             model=mdl,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        return resp.content[0].text if resp.content else ""
+        return _anthropic_response_text(resp.content)
 
     if backend == "claude-cli":
-        import platform, shutil, subprocess
+        import platform
+        import shutil
+        import subprocess
+
         # Mirror the extraction-path resolution: on Windows the npm shim is
         # claude.cmd, which CreateProcess can't resolve from a bare "claude"
         # (PATHEXT doesn't apply), so pass the resolved .cmd path explicitly.
@@ -1985,7 +2082,6 @@ def _call_llm(
         envelope = _claude_cli_envelope(proc.stdout)
         return envelope.get("result", "")
 
-
     if backend == "bedrock":
         try:
             import boto3
@@ -2005,9 +2101,7 @@ def _call_llm(
     if backend == "azure":
         endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "").strip()
         if not endpoint:
-            raise ValueError(
-                "Azure OpenAI backend requires AZURE_OPENAI_ENDPOINT to be set."
-            )
+            raise ValueError("Azure OpenAI backend requires AZURE_OPENAI_ENDPOINT to be set.")
         azure_client = _azure_client(key, endpoint)
         azure_kwargs: dict = {
             "model": mdl,
@@ -2027,7 +2121,12 @@ def _call_llm(
         from openai import OpenAI
     except ImportError as exc:
         raise ImportError(_backend_pkg_hint("openai", "openai")) from exc
-    client = OpenAI(api_key=key, base_url=cfg["base_url"], timeout=_resolve_api_timeout(), max_retries=_resolve_max_retries())
+    client = OpenAI(
+        api_key=key,
+        base_url=_backend_base_url(backend, cfg),
+        timeout=_resolve_api_timeout(),
+        max_retries=_resolve_max_retries(),
+    )
     kwargs: dict = {
         "model": mdl,
         "messages": [{"role": "user", "content": prompt}],
@@ -2072,8 +2171,14 @@ def _ollama_host_is_link_local_or_metadata(host: str) -> bool:
     """
     import ipaddress
     import socket
-    if host in ("metadata.google.internal", "metadata.google.com", "0.0.0.0", "::", "[::]"):  # nosec B104 - blocklist, not a bind
+
+    if host in ("metadata.google.internal", "metadata.google.com"):
         return True
+    try:
+        if ipaddress.ip_address(host.strip("[]")).is_unspecified:
+            return True
+    except ValueError:
+        pass
     if host.startswith("169.254."):  # link-local literal, includes the metadata IP
         return True
     try:
@@ -2104,6 +2209,7 @@ def _validate_ollama_base_url(url: str, *, warn: bool = True) -> None:
     """
     try:
         from urllib.parse import urlparse
+
         parsed = urlparse(url)
     except Exception:
         if warn:
@@ -2137,6 +2243,16 @@ def _validate_ollama_base_url(url: str, *, warn: bool = True) -> None:
         )
 
 
+def _backend_base_url(backend: str, config: dict) -> str:
+    """Return a validated base URL for an HTTP-backed LLM backend."""
+    configured = os.environ.get("OLLAMA_BASE_URL") if backend == "ollama" else None
+    if configured is None:
+        configured = config.get("base_url")
+    if not isinstance(configured, str) or not configured.strip():
+        raise ValueError(f"Backend {backend!r} has no valid base URL configured")
+    return configured
+
+
 def detect_backend() -> str | None:
     """Return the name of whichever backend has an API key set, or None.
 
@@ -2153,14 +2269,28 @@ def detect_backend() -> str | None:
             return backend
     if _get_backend_api_key("azure") and os.environ.get("AZURE_OPENAI_ENDPOINT"):
         return "azure"
-    if os.environ.get("AWS_PROFILE") or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"):
+    if (
+        os.environ.get("AWS_PROFILE")
+        or os.environ.get("AWS_REGION")
+        or os.environ.get("AWS_DEFAULT_REGION")
+    ):
         return "bedrock"
     ollama_url = os.environ.get("OLLAMA_BASE_URL")
     if ollama_url:
         _validate_ollama_base_url(ollama_url)
         return "ollama"
     for name in BACKENDS:
-        if name not in ("gemini", "kimi", "claude", "openai", "deepseek", "azure", "bedrock", "ollama", "claude-cli"):
+        if name not in (
+            "gemini",
+            "kimi",
+            "claude",
+            "openai",
+            "deepseek",
+            "azure",
+            "bedrock",
+            "ollama",
+            "claude-cli",
+        ):
             if _get_backend_api_key(name):
                 return name
     return None
@@ -2176,10 +2306,10 @@ def detect_backend() -> str | None:
 # batched call and return a complete ``{cid: name}`` map (#1097).
 
 _LABEL_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
-_LABEL_MAX_COMMUNITIES = 200   # legacy soft-cap; kept for callers that pin it.
-_LABEL_TOP_K = 12              # node labels sampled per community for the prompt
-_LABEL_MAXLEN = 60             # truncate individual labels to keep the prompt small
-_LABEL_BATCH_SIZE = 100        # communities per LLM call; sized for ~16k context windows
+_LABEL_MAX_COMMUNITIES = 200  # legacy soft-cap; kept for callers that pin it.
+_LABEL_TOP_K = 12  # node labels sampled per community for the prompt
+_LABEL_MAXLEN = 60  # truncate individual labels to keep the prompt small
+_LABEL_BATCH_SIZE = 100  # communities per LLM call; sized for ~16k context windows
 
 
 def _placeholder_community_labels(communities) -> dict[int, str]:
@@ -2220,7 +2350,7 @@ def _parse_label_response(text: str, labeled_cids: list[int]) -> dict[int, str]:
     if not cleaned.startswith("{"):
         start, end = cleaned.find("{"), cleaned.rfind("}")
         if start != -1 and end > start:
-            cleaned = cleaned[start:end + 1]
+            cleaned = cleaned[start : end + 1]
     data = json.loads(cleaned)
     if not isinstance(data, dict):
         raise ValueError("label response is not a JSON object")
@@ -2261,7 +2391,7 @@ def _label_batch_with_retry(
     prompt = (
         "You are naming clusters in a knowledge graph. For each community below, "
         "return a concise 2-5 word plain-language name describing what it is about "
-        "(e.g. \"Order Management\", \"Payment Flow\", \"Auth Middleware\"). "
+        '(e.g. "Order Management", "Payment Flow", "Auth Middleware"). '
         "Respond ONLY with a JSON object mapping the community id (as a string) to "
         "its name - no prose, no markdown fences.\n\n" + "\n".join(batch_lines)
     )
@@ -2287,12 +2417,20 @@ def _label_batch_with_retry(
             raise
         mid = len(batch_cids) // 2
         left = _label_batch_with_retry(
-            batch_cids[:mid], batch_lines[:mid],
-            backend=backend, model=model, depth=depth + 1, max_depth=max_depth,
+            batch_cids[:mid],
+            batch_lines[:mid],
+            backend=backend,
+            model=model,
+            depth=depth + 1,
+            max_depth=max_depth,
         )
         right = _label_batch_with_retry(
-            batch_cids[mid:], batch_lines[mid:],
-            backend=backend, model=model, depth=depth + 1, max_depth=max_depth,
+            batch_cids[mid:],
+            batch_lines[mid:],
+            backend=backend,
+            model=model,
+            depth=depth + 1,
+            max_depth=max_depth,
         )
         return left | right
 
@@ -2343,7 +2481,10 @@ def label_communities(
     # via the same env switches.
     if backend == "ollama" and os.environ.get("GRAPHIFY_OLLAMA_PARALLEL", "").strip() != "1":
         max_concurrency = 1
-    if backend == "claude-cli" and os.environ.get("GRAPHIFY_CLAUDE_CLI_PARALLEL", "").strip() != "1":
+    if (
+        backend == "claude-cli"
+        and os.environ.get("GRAPHIFY_CLAUDE_CLI_PARALLEL", "").strip() != "1"
+    ):
         max_concurrency = 1
     workers = max(1, min(max_concurrency, n_batches))
 
@@ -2352,10 +2493,13 @@ def label_communities(
         end = min(start + batch_size, len(labeled_cids))
         try:
             parsed = _label_batch_with_retry(
-                labeled_cids[start:end], lines[start:end], backend=backend, model=model,
+                labeled_cids[start:end],
+                lines[start:end],
+                backend=backend,
+                model=model,
             )
             return batch_idx, parsed, None
-        except Exception as exc:  # noqa: BLE001 - reported per-batch; surfaced below
+        except Exception as exc:
             return batch_idx, None, exc
 
     written = 0
@@ -2424,8 +2568,13 @@ def generate_community_labels(
         return _placeholder_community_labels(communities), "placeholder"
     try:
         labels = label_communities(
-            G, communities, backend=backend, model=model, gods=gods,
-            max_concurrency=max_concurrency, batch_size=batch_size,
+            G,
+            communities,
+            backend=backend,
+            model=model,
+            gods=gods,
+            max_concurrency=max_concurrency,
+            batch_size=batch_size,
         )
         return labels, "llm"
     except Exception as exc:

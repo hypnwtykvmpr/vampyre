@@ -159,7 +159,6 @@ def test_resolution_is_type_based_not_name_luck(tmp_path: Path) -> None:
     assert to_processor_run is not None, "edge must survive the name collision"
     assert to_processor_run["confidence"] == "EXTRACTED"
     # And it must be the RIGHT run: the target must be owned by Processor, not Worker.
-    labels = _labels(graph["nodes"])
     tgt_id = to_processor_run["target"]
     # the method node id is prefixed by its owning class (helper_processor_run)
     assert "processor" in tgt_id.lower(), f"expected Processor#run, got {tgt_id}"

@@ -143,8 +143,12 @@ def test_resolve_cross_file_raw_calls_real_edge_survives_test_mock() -> None:
     nodes = [
         {"id": "caller_run", "label": "run()", "file_type": "code", "source_file": "src/caller.py"},
         {"id": "src_save", "label": "save()", "file_type": "code", "source_file": "src/service.py"},
-        {"id": "mock_save", "label": "save()", "file_type": "code",
-         "source_file": "tests/test_service.py"},
+        {
+            "id": "mock_save",
+            "label": "save()",
+            "file_type": "code",
+            "source_file": "tests/test_service.py",
+        },
     ]
     resolved = resolve_cross_file_raw_calls(per_file, nodes, [])
     assert [(e["source"], e["target"]) for e in resolved] == [("caller_run", "src_save")]
@@ -195,11 +199,19 @@ def test_resolve_cross_file_raw_calls_call_site_is_test_prefers_test_local() -> 
         }
     ]
     nodes = [
-        {"id": "test_caller", "label": "test_it()", "file_type": "code",
-         "source_file": "tests/test_service.py"},
+        {
+            "id": "test_caller",
+            "label": "test_it()",
+            "file_type": "code",
+            "source_file": "tests/test_service.py",
+        },
         {"id": "src_save", "label": "save()", "file_type": "code", "source_file": "src/service.py"},
-        {"id": "test_save", "label": "save()", "file_type": "code",
-         "source_file": "tests/test_service.py"},
+        {
+            "id": "test_save",
+            "label": "save()",
+            "file_type": "code",
+            "source_file": "tests/test_service.py",
+        },
     ]
     resolved = resolve_cross_file_raw_calls(per_file, nodes, [])
     targets = [e["target"] for e in resolved]

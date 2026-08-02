@@ -1,4 +1,5 @@
 """Tests for graphify install --platform routing."""
+
 import os
 from pathlib import Path
 import sys
@@ -52,13 +53,12 @@ def test_install_codex(tmp_path):
 
 def test_install_opencode(tmp_path):
     _install(tmp_path, "opencode")
-    assert (
-        tmp_path / ".config" / "opencode" / "skills" / "graphify" / "SKILL.md"
-    ).exists()
+    assert (tmp_path / ".config" / "opencode" / "skills" / "graphify" / "SKILL.md").exists()
 
 
 def test_install_positional_platform_opencode(tmp_path, monkeypatch):
     from graphify.__main__ import main
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["graphify", "install", "opencode"])
     with patch("graphify.__main__.Path.home", return_value=tmp_path):
@@ -69,6 +69,7 @@ def test_install_positional_platform_opencode(tmp_path, monkeypatch):
 
 def test_install_project_claude_writes_project_scope(tmp_path, monkeypatch, capsys):
     from graphify.__main__ import main
+
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -80,12 +81,15 @@ def test_install_project_claude_writes_project_scope(tmp_path, monkeypatch, caps
     assert (project / ".claude" / "CLAUDE.md").exists()
     assert not (home / ".claude" / "skills" / "graphify" / "SKILL.md").exists()
     assert ".claude/skills/graphify/SKILL.md" in (project / ".claude" / "CLAUDE.md").read_text()
-    assert "~/.claude/skills/graphify/SKILL.md" not in (project / ".claude" / "CLAUDE.md").read_text()
+    assert (
+        "~/.claude/skills/graphify/SKILL.md" not in (project / ".claude" / "CLAUDE.md").read_text()
+    )
     assert "git add .claude/" in capsys.readouterr().out
 
 
 def test_install_project_codex_writes_skill_and_agents(tmp_path, monkeypatch):
     from graphify.__main__ import main
+
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -101,6 +105,7 @@ def test_install_project_codex_writes_skill_and_agents(tmp_path, monkeypatch):
 
 def test_claude_subcommand_project_install_and_uninstall_are_project_scoped(tmp_path, monkeypatch):
     from graphify.__main__ import main
+
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -127,6 +132,7 @@ def test_claude_subcommand_project_install_and_uninstall_are_project_scoped(tmp_
 
 def test_codex_subcommand_project_install_and_uninstall_are_project_scoped(tmp_path, monkeypatch):
     from graphify.__main__ import main
+
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -155,6 +161,7 @@ def test_codex_subcommand_project_install_and_uninstall_are_project_scoped(tmp_p
 
 def test_antigravity_install_project_writes_project_skill(tmp_path, monkeypatch):
     from graphify.__main__ import main
+
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -168,6 +175,7 @@ def test_antigravity_install_project_writes_project_skill(tmp_path, monkeypatch)
 
 def test_install_help_does_not_install_default(tmp_path, monkeypatch, capsys):
     from graphify.__main__ import main
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["graphify", "install", "opencode", "--help"])
     with patch("graphify.__main__.Path.home", return_value=tmp_path):
@@ -225,6 +233,7 @@ def test_codex_skill_uses_graphify_with_existing_graph():
     fast-path block, which jumps straight to the query flow when a graph exists.
     """
     import graphify
+
     skill = (Path(graphify.__file__).parent / "skill-codex.md").read_text()
     assert "Fast path — existing graph" in skill
     assert "skip Steps 1–5 entirely and jump straight to `## For /graphify query`" in skill
@@ -264,7 +273,7 @@ def test_opencode_skill_uses_opencode_agent_guidance():
     assert "@mention" in skill
     assert "@agent" in skill
     # Scope the agent-type check to opencode's dispatch slot (B2 -> B3).
-    b2 = skill[skill.index("**Step B2"):skill.index("**Step B3")]
+    b2 = skill[skill.index("**Step B2") : skill.index("**Step B3")]
     assert "general-purpose" not in b2
     assert "Concrete example for 3 chunks" not in b2
     assert "OpenCode platform" in b2
@@ -297,7 +306,7 @@ def test_claw_skill_uses_agent_tool_dispatch():
     import graphify
 
     skill = (Path(graphify.__file__).parent / "skill-claw.md").read_text()
-    b2 = skill[skill.index("**Step B2"):skill.index("**Step B3")]
+    b2 = skill[skill.index("**Step B2") : skill.index("**Step B3")]
     assert 'subagent_type="general-purpose"' in b2
     assert "spawn_agent" not in skill
     assert "@mention" not in skill
@@ -342,8 +351,10 @@ def test_codex_install_does_not_write_claude_md(tmp_path):
 
 # --- CodeBuddy CODEBUDDY.md + hook install/uninstall tests ---
 
+
 def test_codebuddy_install_writes_codebuddy_md(tmp_path):
     from graphify.__main__ import codebuddy_install
+
     codebuddy_install(tmp_path)
     md = tmp_path / "CODEBUDDY.md"
     assert md.exists()
@@ -353,6 +364,7 @@ def test_codebuddy_install_writes_codebuddy_md(tmp_path):
 def test_codebuddy_install_writes_hook(tmp_path):
     import json as _json
     from graphify.__main__ import codebuddy_install
+
     codebuddy_install(tmp_path)
     settings = _json.loads((tmp_path / ".codebuddy" / "settings.json").read_text())
     hooks = settings["hooks"]["PreToolUse"]
@@ -361,6 +373,7 @@ def test_codebuddy_install_writes_hook(tmp_path):
 
 def test_codebuddy_install_idempotent(tmp_path):
     from graphify.__main__ import codebuddy_install
+
     codebuddy_install(tmp_path)
     codebuddy_install(tmp_path)
     md = tmp_path / "CODEBUDDY.md"
@@ -369,6 +382,7 @@ def test_codebuddy_install_idempotent(tmp_path):
 
 def test_codebuddy_install_merges_existing_codebuddy_md(tmp_path):
     from graphify.__main__ import codebuddy_install
+
     (tmp_path / "CODEBUDDY.md").write_text("# My project rules\n")
     codebuddy_install(tmp_path)
     content = (tmp_path / "CODEBUDDY.md").read_text()
@@ -378,6 +392,7 @@ def test_codebuddy_install_merges_existing_codebuddy_md(tmp_path):
 
 def test_codebuddy_uninstall_removes_section(tmp_path):
     from graphify.__main__ import codebuddy_install, codebuddy_uninstall
+
     codebuddy_install(tmp_path)
     codebuddy_uninstall(tmp_path)
     md = tmp_path / "CODEBUDDY.md"
@@ -387,6 +402,7 @@ def test_codebuddy_uninstall_removes_section(tmp_path):
 def test_codebuddy_uninstall_removes_hook(tmp_path):
     import json as _json
     from graphify.__main__ import codebuddy_install, codebuddy_uninstall
+
     codebuddy_install(tmp_path)
     codebuddy_uninstall(tmp_path)
     settings_path = tmp_path / ".codebuddy" / "settings.json"
@@ -398,11 +414,13 @@ def test_codebuddy_uninstall_removes_hook(tmp_path):
 
 def test_codebuddy_uninstall_noop_if_not_installed(tmp_path):
     from graphify.__main__ import codebuddy_uninstall
+
     codebuddy_uninstall(tmp_path)  # should not raise
 
 
 def test_uninstall_project_removes_project_skill_only(tmp_path, monkeypatch):
     from graphify.__main__ import main
+
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -411,9 +429,13 @@ def test_uninstall_project_removes_project_skill_only(tmp_path, monkeypatch):
     user_skill.write_text("user skill")
     monkeypatch.chdir(project)
     with patch("graphify.__main__.Path.home", return_value=home):
-        monkeypatch.setattr(sys, "argv", ["graphify", "install", "--project", "--platform", "codex"])
+        monkeypatch.setattr(
+            sys, "argv", ["graphify", "install", "--project", "--platform", "codex"]
+        )
         main()
-        monkeypatch.setattr(sys, "argv", ["graphify", "uninstall", "--project", "--platform", "codex"])
+        monkeypatch.setattr(
+            sys, "argv", ["graphify", "uninstall", "--project", "--platform", "codex"]
+        )
         main()
     assert user_skill.exists()
     assert not (project / ".codex" / "skills" / "graphify" / "SKILL.md").exists()
@@ -422,6 +444,7 @@ def test_uninstall_project_removes_project_skill_only(tmp_path, monkeypatch):
 
 def test_uninstall_project_without_platform_removes_project_installs(tmp_path, monkeypatch):
     from graphify.__main__ import main
+
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -441,6 +464,7 @@ def test_uninstall_project_without_platform_removes_project_installs(tmp_path, m
 
 def test_antigravity_uninstall_project_removes_project_skill_only(tmp_path, monkeypatch):
     from graphify.__main__ import main
+
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -461,6 +485,7 @@ def test_antigravity_uninstall_project_removes_project_skill_only(tmp_path, monk
 def test_antigravity_global_install_writes_gemini_config_skills(tmp_path, monkeypatch):
     """Global `graphify antigravity install` must write to ~/.gemini/config/skills/ (#1079)."""
     from graphify.__main__ import main
+
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -480,6 +505,7 @@ def test_antigravity_global_install_writes_gemini_config_skills(tmp_path, monkey
 def test_antigravity_global_uninstall_removes_gemini_config_skill(tmp_path, monkeypatch):
     """Global `graphify antigravity uninstall` must remove from ~/.gemini/config/skills/ (#1079)."""
     from graphify.__main__ import main
+
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -617,7 +643,9 @@ def test_opencode_plugin_reminder_has_no_backticks(tmp_path):
     m = re.search(r'echo "([^"]*)"', body)
     assert m, "echo reminder not found in plugin body"
     reminder = m.group(1)
-    assert "`" not in reminder, f"backtick in reminder would trigger command substitution: {reminder!r}"
+    assert "`" not in reminder, (
+        f"backtick in reminder would trigger command substitution: {reminder!r}"
+    )
     assert "$(" not in reminder, f"$() in reminder would trigger command substitution: {reminder!r}"
 
 
@@ -678,9 +706,9 @@ def test_kilo_agents_install_registers_plugin_in_config(tmp_path):
     config_file = tmp_path / ".kilo" / "kilo.json"
     assert config_file.exists()
     config = _json.loads(config_file.read_text())
-    assert (
-        tmp_path / ".kilo" / "plugins" / "graphify.js"
-    ).resolve().as_uri() in config.get("plugin", [])
+    assert (tmp_path / ".kilo" / "plugins" / "graphify.js").resolve().as_uri() in config.get(
+        "plugin", []
+    )
 
 
 def test_kilo_agents_install_merges_existing_config(tmp_path):
@@ -688,15 +716,11 @@ def test_kilo_agents_install_merges_existing_config(tmp_path):
 
     config_file = tmp_path / ".kilo" / "kilo.json"
     config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text(
-        _json.dumps({"model": "anthropic/claude-sonnet", "plugin": []})
-    )
+    config_file.write_text(_json.dumps({"model": "anthropic/claude-sonnet", "plugin": []}))
     _agents_install(tmp_path, "kilo")
     config = _json.loads(config_file.read_text())
     assert config["model"] == "anthropic/claude-sonnet"
-    assert (
-        tmp_path / ".kilo" / "plugins" / "graphify.js"
-    ).resolve().as_uri() in config["plugin"]
+    assert (tmp_path / ".kilo" / "plugins" / "graphify.js").resolve().as_uri() in config["plugin"]
 
 
 def test_kilo_agents_install_preserves_existing_jsonc_config(tmp_path):
@@ -710,9 +734,7 @@ def test_kilo_agents_install_preserves_existing_jsonc_config(tmp_path):
     json_file = tmp_path / ".kilo" / "kilo.json"
     config = _json.loads(json_file.read_text())
     assert config["model"] == "anthropic/claude-haiku"
-    assert (
-        tmp_path / ".kilo" / "plugins" / "graphify.js"
-    ).resolve().as_uri() in config["plugin"]
+    assert (tmp_path / ".kilo" / "plugins" / "graphify.js").resolve().as_uri() in config["plugin"]
     assert config_file.read_text() == original
 
 
@@ -721,7 +743,9 @@ def test_kilo_agents_uninstall_preserves_existing_jsonc_config(tmp_path):
 
     config_file = tmp_path / ".kilo" / "kilo.jsonc"
     config_file.parent.mkdir(parents=True, exist_ok=True)
-    original = """// user comment\n{\n  \"model\": \"anthropic/claude-haiku\",\n  \"plugin\": []\n}\n"""
+    original = (
+        """// user comment\n{\n  \"model\": \"anthropic/claude-haiku\",\n  \"plugin\": []\n}\n"""
+    )
     config_file.write_text(original)
 
     _agents_install(tmp_path, "kilo")
@@ -730,9 +754,9 @@ def test_kilo_agents_uninstall_preserves_existing_jsonc_config(tmp_path):
     json_file = tmp_path / ".kilo" / "kilo.json"
     config = _json.loads(json_file.read_text())
     assert config_file.read_text() == original
-    assert (
-        tmp_path / ".kilo" / "plugins" / "graphify.js"
-    ).resolve().as_uri() not in config.get("plugin", [])
+    assert (tmp_path / ".kilo" / "plugins" / "graphify.js").resolve().as_uri() not in config.get(
+        "plugin", []
+    )
 
 
 def test_kilo_agents_install_idempotent(tmp_path):
@@ -769,9 +793,7 @@ def test_kilo_uninstall_removes_plugin_registration_and_command(tmp_path):
     _kilo_install(project_dir, home_dir)
     _kilo_uninstall(project_dir, home_dir)
     assert not (home_dir / ".config" / "kilo" / "command" / "graphify.md").exists()
-    assert not (
-        home_dir / ".config" / "kilo" / "skills" / "graphify" / "SKILL.md"
-    ).exists()
+    assert not (home_dir / ".config" / "kilo" / "skills" / "graphify" / "SKILL.md").exists()
     assert not (project_dir / ".kilo" / "plugins" / "graphify.js").exists()
     config_file = project_dir / ".kilo" / "kilo.json"
     if config_file.exists():
@@ -998,8 +1020,11 @@ def test_hermes_skill_destination_windows_uses_localappdata():
     """#1403: on Windows, Hermes scans %LOCALAPPDATA%\\hermes\\skills, so the global
     skill must land there — not ~/.hermes/skills (the POSIX path)."""
     from graphify.__main__ import _platform_skill_destination
-    with patch("graphify.__main__.platform.system", return_value="Windows"), \
-         patch.dict(os.environ, {"LOCALAPPDATA": str(Path("/tmp/AppDataLocal"))}):
+
+    with (
+        patch("graphify.__main__.platform.system", return_value="Windows"),
+        patch.dict(os.environ, {"LOCALAPPDATA": str(Path("/tmp/AppDataLocal"))}),
+    ):
         dst = _platform_skill_destination("hermes", project=False)
     assert dst == Path("/tmp/AppDataLocal") / "hermes" / "skills" / "graphify" / "SKILL.md", dst
 
@@ -1007,6 +1032,7 @@ def test_hermes_skill_destination_windows_uses_localappdata():
 def test_hermes_skill_destination_posix_uses_home():
     """Non-Windows hermes destination is unchanged (~/.hermes/skills)."""
     from graphify.__main__ import _platform_skill_destination
+
     with patch("graphify.__main__.platform.system", return_value="Linux"):
         dst = _platform_skill_destination("hermes", project=False)
     assert str(dst).endswith(".hermes/skills/graphify/SKILL.md"), dst

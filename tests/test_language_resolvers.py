@@ -21,6 +21,7 @@ from graphify.resolver_registry import (
 def _make_resolver(name: str, suffix: str, log: list[str]) -> LanguageResolver:
     def _resolve(per_file, all_nodes, all_edges):
         log.append(name)
+
     return LanguageResolver(name, frozenset({suffix}), _resolve)
 
 

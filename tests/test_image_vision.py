@@ -8,26 +8,30 @@ backends whose model can see them.
 Every backend is mocked (fake SDK module / subprocess), so the suite runs on CI
 with no API keys, no network, and no `claude` binary.
 """
+
 from __future__ import annotations
 
 import json
 import sys
 import types
+from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from graphify import llm
 
 # A 1x1 PNG is unnecessary — the renderers never decode pixels, they only base64
 # the bytes — so any non-empty byte string stands in for image content.
 _PNG_BYTES = b"\x89PNG\r\n\x1a\nFAKEPIXELDATA"
-_NODE_JSON = json.dumps({
-    "nodes": [{"id": "x", "label": "L", "file_type": "image", "source_file": "a.png"}],
-    "edges": [],
-    "hyperedges": [],
-})
+_NODE_JSON = json.dumps(
+    {
+        "nodes": [{"id": "x", "label": "L", "file_type": "image", "source_file": "a.png"}],
+        "edges": [],
+        "hyperedges": [],
+    }
+)
 
 
 def _make_corpus(tmp_path):
@@ -44,6 +48,7 @@ def _make_corpus(tmp_path):
 
 # ── pure helpers ──────────────────────────────────────────────────────────────
 
+
 def test_pdf_routed_through_pypdf_not_readtext(tmp_path, monkeypatch):
     # A PDF is binary; reading it as text yields garbage (the bug). It must be
     # routed through the pypdf extractor, and the raw bytes must never reach the
@@ -51,6 +56,7 @@ def test_pdf_routed_through_pypdf_not_readtext(tmp_path, monkeypatch):
     pdf = tmp_path / "paper.pdf"
     pdf.write_bytes(b"%PDF-1.4 RAWBINARYGARBAGE\x00\xff")
     import graphify.detect as detect
+
     monkeypatch.setattr(detect, "extract_pdf_text", lambda p: "EXTRACTED PDF TEXT")
     out = llm._read_files([pdf], tmp_path)
     assert "EXTRACTED PDF TEXT" in out
@@ -135,7 +141,7 @@ def test_path_backend_skips_byte_read_and_size_cap(tmp_path, monkeypatch):
     big.write_bytes(b"x" * 64)
     monkeypatch.setattr(llm, "_MAX_IMAGE_BYTES", 8)
     (ref,) = llm._build_image_refs([big], tmp_path, read_bytes=False)
-    assert ref.raw is None              # never read
+    assert ref.raw is None  # never read
     assert ref.rel == "huge.png" and ref.path.name == "huge.png"  # path still usable
 
 
@@ -154,8 +160,10 @@ def test_claude_cli_passes_oversized_image_by_path(tmp_path, monkeypatch):
         return MagicMock(returncode=0, stdout=json.dumps(envelope), stderr="")
 
     monkeypatch.setattr(llm, "_response_is_hollow", lambda r, p: False)
-    with patch("shutil.which", return_value="/fake/claude"), \
-         patch("subprocess.run", side_effect=fake_run):
+    with (
+        patch("shutil.which", return_value="/fake/claude"),
+        patch("subprocess.run", side_effect=fake_run),
+    ):
         llm._call_claude_cli("CORPUS", images=refs)
     assert str(refs[0].path) in seen["input"]
 
@@ -187,11 +195,15 @@ def test_chunk_packing_caps_images_per_chunk(tmp_path):
     chunks = llm._pack_chunks_by_tokens(imgs, token_budget=10_000_000)
     assert len(chunks) >= 3  # would be 1 chunk without the cap
     for chunk in chunks:
-        n_imgs = sum(1 for p in chunk if llm._is_vision_image(p))
+        n_imgs = 0
+        for path in chunk:
+            assert isinstance(path, Path)
+            n_imgs += llm._is_vision_image(path)
         assert n_imgs <= llm._MAX_IMAGES_PER_CHUNK
 
 
 # ── content builders ──────────────────────────────────────────────────────────
+
 
 def test_anthropic_content_has_base64_block(tmp_path):
     img, _, _ = _make_corpus(tmp_path)
@@ -200,7 +212,9 @@ def test_anthropic_content_has_base64_block(tmp_path):
     assert isinstance(content, list)
     assert content[0]["type"] == "image"
     assert content[0]["source"] == {
-        "type": "base64", "media_type": "image/png", "data": refs[0].b64,
+        "type": "base64",
+        "media_type": "image/png",
+        "data": refs[0].b64,
     }
     assert content[-1]["type"] == "text" and "CORPUS" in content[-1]["text"]
 
@@ -209,6 +223,7 @@ def test_openai_content_has_data_uri(tmp_path):
     img, _, _ = _make_corpus(tmp_path)
     refs = llm._build_image_refs([img], tmp_path)
     content = llm._openai_content("CORPUS", refs)
+    assert isinstance(content, list)
     assert content[0]["type"] == "text"
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"] == f"data:image/png;base64,{refs[0].b64}"
@@ -242,6 +257,7 @@ def test_no_images_is_byte_identical(tmp_path):
 
 # ── fake SDK modules ──────────────────────────────────────────────────────────
 
+
 def _fake_anthropic(monkeypatch, captured):
     class _Messages:
         def create(self, **kw):
@@ -251,7 +267,11 @@ def _fake_anthropic(monkeypatch, captured):
                 usage=SimpleNamespace(input_tokens=5, output_tokens=7),
                 stop_reason="end_turn",
             )
-    mod = types.ModuleType("anthropic")
+
+    class _AnthropicModule(types.ModuleType):
+        Anthropic: Callable[..., object]
+
+    mod = _AnthropicModule("anthropic")
     mod.Anthropic = lambda **kw: SimpleNamespace(messages=_Messages())
     monkeypatch.setitem(sys.modules, "anthropic", mod)
 
@@ -261,11 +281,18 @@ def _fake_openai(monkeypatch, captured):
         def create(self, **kw):
             captured.update(kw)
             return SimpleNamespace(
-                choices=[SimpleNamespace(
-                    message=SimpleNamespace(content=_NODE_JSON), finish_reason="stop")],
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content=_NODE_JSON), finish_reason="stop"
+                    )
+                ],
                 usage=SimpleNamespace(prompt_tokens=3, completion_tokens=4),
             )
-    mod = types.ModuleType("openai")
+
+    class _OpenAIModule(types.ModuleType):
+        OpenAI: Callable[..., object]
+
+    mod = _OpenAIModule("openai")
     mod.OpenAI = lambda **kw: SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
     monkeypatch.setitem(sys.modules, "openai", mod)
 
@@ -279,11 +306,22 @@ def _fake_boto3(monkeypatch, captured):
                 "usage": {"inputTokens": 1, "outputTokens": 2},
                 "stopReason": "end_turn",
             }
-    boto3 = types.ModuleType("boto3")
+
+    class _Boto3Module(types.ModuleType):
+        Session: Callable[..., object]
+
+    boto3 = _Boto3Module("boto3")
     boto3.Session = lambda **kw: SimpleNamespace(client=lambda svc: _Client())
     monkeypatch.setitem(sys.modules, "boto3", boto3)
-    botocore = types.ModuleType("botocore")
-    exc = types.ModuleType("botocore.exceptions")
+
+    class _BotocoreExceptionsModule(types.ModuleType):
+        ClientError: type[Exception]
+
+    class _BotocoreModule(types.ModuleType):
+        exceptions: _BotocoreExceptionsModule
+
+    botocore = _BotocoreModule("botocore")
+    exc = _BotocoreExceptionsModule("botocore.exceptions")
     exc.ClientError = type("ClientError", (Exception,), {})
     botocore.exceptions = exc
     monkeypatch.setitem(sys.modules, "botocore", botocore)
@@ -291,6 +329,7 @@ def _fake_boto3(monkeypatch, captured):
 
 
 # ── backend payload shape (mocked) ────────────────────────────────────────────
+
 
 def test_call_claude_sends_image_block(tmp_path, monkeypatch):
     img, _, _ = _make_corpus(tmp_path)
@@ -333,7 +372,6 @@ def test_call_bedrock_sends_raw_image_bytes(tmp_path, monkeypatch):
 # ── CLI backends (mocked subprocess) ──────────────────────────────────────────
 
 
-
 def test_claude_cli_adds_dir_and_read_instruction(tmp_path, monkeypatch):
     img, _, _ = _make_corpus(tmp_path)
     refs = llm._build_image_refs([img], tmp_path)
@@ -346,8 +384,10 @@ def test_claude_cli_adds_dir_and_read_instruction(tmp_path, monkeypatch):
         return MagicMock(returncode=0, stdout=json.dumps(envelope), stderr="")
 
     monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
-    with patch("shutil.which", return_value="/fake/claude"), \
-         patch("subprocess.run", side_effect=fake_run):
+    with (
+        patch("shutil.which", return_value="/fake/claude"),
+        patch("subprocess.run", side_effect=fake_run),
+    ):
         llm._call_claude_cli("CORPUS", images=refs)
 
     assert "--add-dir" in seen["args"]
@@ -357,6 +397,7 @@ def test_claude_cli_adds_dir_and_read_instruction(tmp_path, monkeypatch):
 
 
 # ── dispatch-level vision gating ──────────────────────────────────────────────
+
 
 def test_extract_files_direct_gates_pixels_by_capability(tmp_path, monkeypatch):
     img, _, doc = _make_corpus(tmp_path)

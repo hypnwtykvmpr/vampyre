@@ -8,6 +8,7 @@ language, so `from pathlib import Path` (ubiquitous) resolved to a shell script'
 These tests pin: case-sensitive languages match by exact case (removing that false
 edge), while genuinely case-insensitive languages (PHP) still fold.
 """
+
 from __future__ import annotations
 
 import os
@@ -33,20 +34,24 @@ def _labels(r):
 
 
 def test_python_Path_does_not_resolve_to_shell_PATH(tmp_path):
-    r = _extract(tmp_path, {
-        "run.sh": "export PATH=/usr/local/bin:$PATH\n",
-        "mod.py": (
-            "from pathlib import Path\n"
-            "def load(p: Path) -> Path:\n    return Path(p)\n"
-            "def other():\n    return load(Path('x'))\n"
-        ),
-    })
+    r = _extract(
+        tmp_path,
+        {
+            "run.sh": "export PATH=/usr/local/bin:$PATH\n",
+            "mod.py": (
+                "from pathlib import Path\n"
+                "def load(p: Path) -> Path:\n    return Path(p)\n"
+                "def other():\n    return load(Path('x'))\n"
+            ),
+        },
+    )
     lbl = _labels(r)
     path_nid = next((n["id"] for n in r["nodes"] if n["label"] == "PATH"), None)
     assert path_nid is not None
     # No edge from the Python functions should land on the shell PATH node
     false_edges = [
-        e for e in r["edges"]
+        e
+        for e in r["edges"]
         if e["target"] == path_nid and lbl.get(e["source"], "").startswith(("load", "other"))
     ]
     assert not false_edges, f"Python Path leaked onto shell PATH: {false_edges}"
@@ -55,10 +60,13 @@ def test_python_Path_does_not_resolve_to_shell_PATH(tmp_path):
 
 
 def test_case_sensitive_cross_file_ref_respects_case(tmp_path):
-    r = _extract(tmp_path, {
-        "consts.rs": 'pub const PATH: &str = "/x";\n',
-        "use.rs": "struct Wrap(Path);\n",   # `Path` — no such node in the corpus
-    })
+    r = _extract(
+        tmp_path,
+        {
+            "consts.rs": 'pub const PATH: &str = "/x";\n',
+            "use.rs": "struct Wrap(Path);\n",  # `Path` — no such node in the corpus
+        },
+    )
     lbl = _labels(r)
     path_nid = next((n["id"] for n in r["nodes"] if n["label"] == "PATH"), None)
     xref = [e for e in r["edges"] if e["target"] == path_nid and lbl.get(e["source"]) == "Wrap"]
@@ -66,22 +74,32 @@ def test_case_sensitive_cross_file_ref_respects_case(tmp_path):
 
 
 def test_exact_case_cross_file_still_resolves(tmp_path):
-    r = _extract(tmp_path, {
-        "h.py": "def helper():\n    return 1\n",
-        "m.py": "from h import helper\ndef go():\n    return helper()\n",
-    })
+    r = _extract(
+        tmp_path,
+        {
+            "h.py": "def helper():\n    return 1\n",
+            "m.py": "from h import helper\ndef go():\n    return helper()\n",
+        },
+    )
     lbl = _labels(r)
-    calls = {(lbl.get(e["source"]), lbl.get(e["target"]))
-             for e in r["edges"] if e["relation"] == "calls"}
+    calls = {
+        (lbl.get(e["source"]), lbl.get(e["target"])) for e in r["edges"] if e["relation"] == "calls"
+    }
     assert ("go()", "helper()") in calls
 
 
 def test_php_case_insensitive_resolution_preserved(tmp_path):
-    r = _extract(tmp_path, {
-        "lib.php": "<?php\nfunction Greet() { return 1; }\n",
-        "main.php": "<?php\nfunction run() { return greet(); }\n",
-    })
+    r = _extract(
+        tmp_path,
+        {
+            "lib.php": "<?php\nfunction Greet() { return 1; }\n",
+            "main.php": "<?php\nfunction run() { return greet(); }\n",
+        },
+    )
     lbl = _labels(r)
-    calls = {(lbl.get(e["source"]), lbl.get(e["target"]))
-             for e in r["edges"] if e["relation"] == "calls"}
-    assert ("run()", "Greet()") in calls, "PHP identifiers are case-insensitive; fold must still apply"
+    calls = {
+        (lbl.get(e["source"]), lbl.get(e["target"])) for e in r["edges"] if e["relation"] == "calls"
+    }
+    assert ("run()", "Greet()") in calls, (
+        "PHP identifiers are case-insensitive; fold must still apply"
+    )

@@ -1,8 +1,16 @@
 """Tests for graphify/cache.py."""
+
 import json
 import pytest
-from pathlib import Path
-from graphify.cache import file_hash, cache_dir, load_cached, save_cached, cached_files, clear_cache, _body_content
+from graphify.cache import (
+    file_hash,
+    cache_dir,
+    load_cached,
+    save_cached,
+    cached_files,
+    clear_cache,
+    _body_content,
+)
 from graphify.cache import check_semantic_cache, save_semantic_cache
 
 
@@ -96,9 +104,7 @@ def test_file_hash_switches_stat_index_storage_roots(tmp_path):
 
     _flush_stat_index()
     for name in ("one", "two"):
-        assert (
-            tmp_path / f"output-{name}" / "graphify-out" / "cache" / "stat-index.json"
-        ).exists()
+        assert (tmp_path / f"output-{name}" / "graphify-out" / "cache" / "stat-index.json").exists()
 
 
 def test_file_hash_stat_fastpath_respects_source_root(tmp_path):
@@ -228,6 +234,7 @@ def test_body_content_no_frontmatter():
 
 # --- #1259: frontmatter delimiters must be whole `---` lines -----------------
 
+
 def test_body_content_hr_start_is_not_frontmatter():
     """A document opening with a ``----`` thematic break has no frontmatter;
     a later ``---`` hr must not be mistaken for a close delimiter."""
@@ -292,6 +299,7 @@ def test_md_edit_above_hr_changes_hash(tmp_path):
 # CI runners. ``load_cached`` re-absolutizes them so consumers (extract,
 # merge into graph.json) see the same shape that fresh extraction emits.
 
+
 def test_save_cached_relativizes_source_file(tmp_path):
     """The on-disk cache JSON contains forward-slash relative source_file
     entries — no absolute prefix from the saving machine leaks in."""
@@ -329,10 +337,15 @@ def test_load_cached_absolutizes_source_file(tmp_path):
     src = tmp_path / "src" / "foo.py"
     src.write_text("def x(): pass\n")
     abs_src = str(src.resolve())
-    save_cached(src, {
-        "nodes": [{"id": "n1", "source_file": abs_src}],
-        "edges": [{"source": "n1", "target": "n1", "source_file": abs_src}],
-    }, root=tmp_path, kind="ast")
+    save_cached(
+        src,
+        {
+            "nodes": [{"id": "n1", "source_file": abs_src}],
+            "edges": [{"source": "n1", "target": "n1", "source_file": abs_src}],
+        },
+        root=tmp_path,
+        kind="ast",
+    )
 
     loaded = load_cached(src, root=tmp_path, kind="ast")
     assert loaded is not None
@@ -355,10 +368,14 @@ def test_load_cached_passes_through_legacy_absolute_source_file(tmp_path):
     # Hand-write a legacy-format cache entry (absolute source_file).
     h = file_hash(src, tmp_path)
     entry = cache_dir(tmp_path, "ast") / f"{h}.json"
-    entry.write_text(json.dumps({
-        "nodes": [{"id": "n1", "source_file": abs_src}],
-        "edges": [],
-    }))
+    entry.write_text(
+        json.dumps(
+            {
+                "nodes": [{"id": "n1", "source_file": abs_src}],
+                "edges": [],
+            }
+        )
+    )
 
     loaded = load_cached(src, root=tmp_path, kind="ast")
     assert loaded is not None
@@ -369,19 +386,23 @@ def test_cache_portable_across_roots(tmp_path):
     """End-to-end portability: a cache entry written at one root can be
     consumed at a different absolute root because the file is content-hashed
     AND its embedded source_file is stored relative."""
-    import json
     import shutil
-    from graphify.cache import save_cached, load_cached, file_hash, cache_dir
+    from graphify.cache import save_cached, load_cached
 
     repo_a = tmp_path / "repo_a"
     repo_a.mkdir()
     (repo_a / "src").mkdir()
     src_a = repo_a / "src" / "foo.py"
     src_a.write_text("def x(): pass\n")
-    save_cached(src_a, {
-        "nodes": [{"id": "n1", "source_file": str(src_a.resolve())}],
-        "edges": [],
-    }, root=repo_a, kind="ast")
+    save_cached(
+        src_a,
+        {
+            "nodes": [{"id": "n1", "source_file": str(src_a.resolve())}],
+            "edges": [],
+        },
+        root=repo_a,
+        kind="ast",
+    )
 
     # Copy corpus + cache to a second location with a different absolute prefix.
     repo_b = tmp_path / "repo_b"
@@ -394,7 +415,7 @@ def test_cache_portable_across_roots(tmp_path):
     )
     # Source path re-anchored to the new root, not the old one.
     assert loaded["nodes"][0]["source_file"] == str(src_b.resolve())
-    assert not str(repo_a) in loaded["nodes"][0]["source_file"]
+    assert str(repo_a) not in loaded["nodes"][0]["source_file"]
 
 
 # --- AST cache versioning ----------------------------------------------------
@@ -404,6 +425,7 @@ def test_cache_portable_across_roots(tmp_path):
 # stale pre-fix results. The AST cache is therefore namespaced by package
 # version; the semantic cache is NOT (invalidating it would re-bill LLM
 # extraction for unchanged files).
+
 
 def test_ast_cache_invalidated_on_version_bump(tmp_path, monkeypatch):
     """An AST entry written by version X must not be served after upgrading
@@ -439,9 +461,7 @@ def test_ast_cache_version_bump_cleans_stale_entries(tmp_path, monkeypatch):
     monkeypatch.setattr(cache_mod, "_EXTRACTOR_VERSION", "0.8.1", raising=False)
     monkeypatch.setattr(cache_mod, "_cleaned_ast_dirs", set(), raising=False)
     cache_dir(tmp_path, "ast")
-    assert not old_dir.exists(), (
-        "stale AST version directory must be removed on upgrade"
-    )
+    assert not old_dir.exists(), "stale AST version directory must be removed on upgrade"
 
 
 def test_legacy_unversioned_ast_entries_not_served(tmp_path):
@@ -503,13 +523,19 @@ def test_save_cached_in_root_symlink_keeps_symlink_name(tmp_path):
         alias.symlink_to(target)
     except (OSError, NotImplementedError):
         import pytest
+
         pytest.skip("filesystem does not support symlinks")
 
     abs_alias = str(alias)  # caller's view — the symlink path, unresolved
-    save_cached(alias, {
-        "nodes": [{"id": "n1", "source_file": abs_alias}],
-        "edges": [],
-    }, root=tmp_path, kind="ast")
+    save_cached(
+        alias,
+        {
+            "nodes": [{"id": "n1", "source_file": abs_alias}],
+            "edges": [],
+        },
+        root=tmp_path,
+        kind="ast",
+    )
 
     h = file_hash(alias, tmp_path)
     entry = cache_dir(tmp_path, "ast") / f"{h}.json"

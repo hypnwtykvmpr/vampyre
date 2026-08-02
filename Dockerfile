@@ -7,13 +7,13 @@
 # Builds from source so the image includes the Streamable HTTP transport even
 # before it lands on PyPI. The graph.json is mounted at runtime (-v), never
 # baked into the image.
-FROM python:3.12-slim
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 WORKDIR /app
 COPY . /app
 
 # The [mcp] extra pulls mcp + starlette + uvicorn, which the HTTP transport needs.
-RUN pip install --no-cache-dir ".[mcp]"
+RUN uv sync --frozen --no-dev --extra mcp
 
 # Run as a non-root user — the server is network-exposed.
 RUN useradd --create-home --uid 10001 graphify
@@ -21,5 +21,5 @@ USER graphify
 
 EXPOSE 8080
 
-ENTRYPOINT ["python", "-m", "graphify.serve"]
+ENTRYPOINT ["/app/.venv/bin/python", "-m", "graphify.serve"]
 CMD ["/data/graph.json", "--transport", "http", "--host", "0.0.0.0", "--port", "8080"]

@@ -161,9 +161,7 @@ def test_resolve_scan_root_marker_supports_legacy_cwd_relative_marker(
 @pytest.mark.parametrize(
     "recorded", ["", "marker-relative:", "bad\x00path", "marker-relative:bad\x00path"]
 )
-def test_resolve_scan_root_marker_rejects_malformed_values(
-    tmp_path: Path, recorded: str
-) -> None:
+def test_resolve_scan_root_marker_rejects_malformed_values(tmp_path: Path, recorded: str) -> None:
     marker = tmp_path / ".graphify_root"
     marker.write_text(recorded, encoding="utf-8")
 

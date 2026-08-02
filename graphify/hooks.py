@@ -12,13 +12,13 @@ _CHECKOUT_MARKER = "# graphify-checkout-hook-start"
 _CHECKOUT_MARKER_END = "# graphify-checkout-hook-end"
 
 # __PINNED_PYTHON__ is replaced at install time with the absolute path of the
-# Python interpreter that ran `graphify hook install`.  For uv-tool and pipx
+# Python interpreter that ran `graphify hook install`. For managed uv-tool
 # installs the interpreter lives inside an isolated venv, so the launcher on
 # PATH is the only entry point — and GUI git clients / CI runners often have a
 # minimal PATH that omits ~/.local/bin.  Pinning sys.executable at install time
 # makes the hook work regardless of PATH at git-trigger time.
 _PYTHON_DETECT = """\
-# Detect the correct Python interpreter (handles uv tool, pipx, venv, system installs).
+# Detect the correct Python interpreter (handles uv tools, venvs, and system installs).
 # _PINNED was recorded at hook-install time; tried first so the hook works even
 # when the graphify launcher is not on PATH (common in GUI clients and CI).
 #
@@ -238,7 +238,8 @@ def _detached_launch(rebuild_body: str) -> str:
     return '"$GRAPHIFY_PYTHON" -c "' + launcher + '"\n'
 
 
-_HOOK_SCRIPT = """\
+_HOOK_SCRIPT = (
+    """\
 # graphify-hook-start
 # Auto-rebuilds the knowledge graph after each commit (code files only, no LLM needed).
 # Installed by: graphify hook install
@@ -277,7 +278,9 @@ if [ -z "$_NON_GRAPH" ]; then
     exit 0
 fi
 
-""" + _PYTHON_DETECT + """
+"""
+    + _PYTHON_DETECT
+    + """
 export GRAPHIFY_CHANGED="$CHANGED"
 
 # Run the rebuild detached so git commit returns immediately. Full-repo rebuilds
@@ -288,11 +291,15 @@ _GRAPHIFY_LOG="${HOME}/.cache/graphify-rebuild.log"
 mkdir -p "$(dirname "$_GRAPHIFY_LOG")"
 export GRAPHIFY_REBUILD_LOG="$_GRAPHIFY_LOG"
 echo "[graphify hook] launching background rebuild (log: $_GRAPHIFY_LOG)"
-""" + _detached_launch(_REBUILD_BODY_COMMIT) + """# graphify-hook-end
 """
+    + _detached_launch(_REBUILD_BODY_COMMIT)
+    + """# graphify-hook-end
+"""
+)
 
 
-_CHECKOUT_SCRIPT = """\
+_CHECKOUT_SCRIPT = (
+    """\
 # graphify-checkout-hook-start
 # Auto-rebuilds the knowledge graph (code only) when switching branches.
 # Installed by: graphify hook install
@@ -332,13 +339,18 @@ GIT_DIR=${GIT_DIR:-$(git rev-parse --git-dir 2>/dev/null)}
 [ -f "$GIT_DIR/MERGE_HEAD" ] && exit 0
 [ -f "$GIT_DIR/CHERRY_PICK_HEAD" ] && exit 0
 
-""" + _PYTHON_DETECT + """
+"""
+    + _PYTHON_DETECT
+    + """
 _GRAPHIFY_LOG="${HOME}/.cache/graphify-rebuild.log"
 mkdir -p "$(dirname "$_GRAPHIFY_LOG")"
 export GRAPHIFY_REBUILD_LOG="$_GRAPHIFY_LOG"
 echo "[graphify] Branch switched - launching background rebuild (log: $_GRAPHIFY_LOG)"
-""" + _detached_launch(_REBUILD_BODY_CHECKOUT) + """# graphify-checkout-hook-end
 """
+    + _detached_launch(_REBUILD_BODY_CHECKOUT)
+    + """# graphify-checkout-hook-end
+"""
+)
 
 
 def _git_root(path: Path) -> Path | None:
@@ -410,10 +422,12 @@ def _hooks_dir(root: Path) -> Path:
     # absolute path for worktree/external-gitdir cases, and a path relative to
     # <root> for normal repos — anchoring on root covers both.
     import subprocess as _sp
+
     try:
         res = _sp.run(
             ["git", "-C", str(root), "rev-parse", "--git-path", "hooks"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         raw = res.stdout.strip()
         # A valid hooks path can never contain newlines or NUL. Their presence
@@ -487,7 +501,7 @@ def install(path: Path = Path(".")) -> str:
     hooks_dir = _user_hooks_dir(_hooks_dir(root))
 
     # Pin the current interpreter so the hook works even when the graphify
-    # launcher is not on PATH at git-trigger time (uv tool / pipx isolation).
+    # launcher is not on PATH at git-trigger time (managed-tool isolation).
     # sys.executable is the Python running this very install command, so it is
     # always the correct isolated-venv interpreter.  The placeholder is replaced
     # in both scripts before writing; the allowlist in _PYTHON_DETECT strips any
@@ -499,6 +513,7 @@ def install(path: Path = Path(".")) -> str:
     # from being injected into the generated shell scripts.  The allowlist
     # includes ':' and '\' so Windows paths (C:\...) are accepted.
     import re as _re
+
     _safe = sys.executable
     if _re.search(r"[^a-zA-Z0-9/_.@:\\-]", _safe):
         # Path contains characters outside the allowlist (spaces, quotes, etc.).
@@ -523,7 +538,9 @@ def uninstall(path: Path = Path(".")) -> str:
 
     hooks_dir = _user_hooks_dir(_hooks_dir(root))
     commit_msg = _uninstall_hook(hooks_dir, "post-commit", _HOOK_MARKER, _HOOK_MARKER_END)
-    checkout_msg = _uninstall_hook(hooks_dir, "post-checkout", _CHECKOUT_MARKER, _CHECKOUT_MARKER_END)
+    checkout_msg = _uninstall_hook(
+        hooks_dir, "post-checkout", _CHECKOUT_MARKER, _CHECKOUT_MARKER_END
+    )
 
     return f"post-commit: {commit_msg}\npost-checkout: {checkout_msg}"
 
@@ -539,7 +556,11 @@ def status(path: Path = Path(".")) -> str:
         p = hooks_dir / name
         if not p.exists():
             return "not installed"
-        return "installed" if marker in p.read_text(encoding="utf-8") else "not installed (hook exists but graphify not found)"
+        return (
+            "installed"
+            if marker in p.read_text(encoding="utf-8")
+            else "not installed (hook exists but graphify not found)"
+        )
 
     commit = _check("post-commit", _HOOK_MARKER)
     checkout = _check("post-checkout", _CHECKOUT_MARKER)

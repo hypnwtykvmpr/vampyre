@@ -4,6 +4,7 @@ These exercise the ASGI wiring in-process (no uvicorn, no real socket) via
 Starlette's TestClient, so they stay fast and offline. The stdio path is
 unchanged and covered elsewhere.
 """
+
 from __future__ import annotations
 
 import json
@@ -50,6 +51,14 @@ def _graph_file(tmp_path: Path) -> str:
     p = tmp_path / "graph.json"
     p.write_text(json.dumps(SAMPLE_GRAPH), encoding="utf-8")
     return str(p)
+
+
+@pytest.mark.parametrize(
+    "host,expected",
+    [("", True), ("0.0.0.0", True), ("::", True), ("127.0.0.1", False), ("localhost", False)],
+)
+def test_wildcard_bind_host_detection(host, expected):
+    assert serve_mod._is_wildcard_bind_host(host) is expected
 
 
 def _client(app) -> TestClient:
@@ -187,15 +196,23 @@ def _init_session(client) -> dict:
     init = client.post("/mcp", headers=_MCP_HEADERS, json=_INIT_BODY)
     assert init.status_code == 200
     headers = {**_MCP_HEADERS, "mcp-session-id": init.headers.get("mcp-session-id")}
-    client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+    client.post(
+        "/mcp", headers=headers, json={"jsonrpc": "2.0", "method": "notifications/initialized"}
+    )
     return headers
 
 
 def _call_tool(client, headers, name, arguments, rid) -> str:
-    resp = client.post("/mcp", headers=headers, json={
-        "jsonrpc": "2.0", "id": rid, "method": "tools/call",
-        "params": {"name": name, "arguments": arguments},
-    })
+    resp = client.post(
+        "/mcp",
+        headers=headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": rid,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        },
+    )
     assert resp.status_code == 200
     return resp.json()["result"]["content"][0]["text"]
 
@@ -206,8 +223,11 @@ def test_project_path_is_optional_on_every_tool(tmp_path):
     app = serve_mod._build_http_app(_graph_file(tmp_path), json_response=True)
     with _client(app) as client:
         headers = _init_session(client)
-        resp = client.post("/mcp", headers=headers,
-                            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        resp = client.post(
+            "/mcp",
+            headers=headers,
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        )
         for tool in resp.json()["result"]["tools"]:
             props = tool["inputSchema"].get("properties", {})
             assert "project_path" in props, f"{tool['name']} missing project_path"
@@ -222,7 +242,9 @@ def test_project_path_routes_to_that_projects_graph(tmp_path):
     with _client(app) as client:
         headers = _init_session(client)
         assert "Nodes: 2" in _call_tool(client, headers, "graph_stats", {}, rid=2)
-        assert "Nodes: 3" in _call_tool(client, headers, "graph_stats", {"project_path": proj}, rid=3)
+        assert "Nodes: 3" in _call_tool(
+            client, headers, "graph_stats", {"project_path": proj}, rid=3
+        )
         # Falling back to the default afterwards still works (no state leak).
         assert "Nodes: 2" in _call_tool(client, headers, "graph_stats", {}, rid=4)
 
@@ -233,8 +255,13 @@ def test_bad_project_path_errors_without_killing_server(tmp_path):
     app = serve_mod._build_http_app(_graph_file(tmp_path), json_response=True)
     with _client(app) as client:
         headers = _init_session(client)
-        bad = _call_tool(client, headers, "graph_stats",
-                         {"project_path": str(tmp_path / "does-not-exist")}, rid=2)
+        bad = _call_tool(
+            client,
+            headers,
+            "graph_stats",
+            {"project_path": str(tmp_path / "does-not-exist")},
+            rid=2,
+        )
         assert "not found" in bad.lower()
         assert "Nodes: 2" in _call_tool(client, headers, "graph_stats", {}, rid=3)
 
@@ -265,12 +292,11 @@ def test_session_timeout_zero_disables(tmp_path):
 
 # --- CLI argument parsing -------------------------------------------------
 
+
 def test_cli_defaults_to_stdio(monkeypatch):
     calls = {}
     monkeypatch.setattr(serve_mod, "serve", lambda gp: calls.setdefault("stdio", gp))
-    monkeypatch.setattr(
-        serve_mod, "serve_http", lambda *a, **k: calls.setdefault("http", (a, k))
-    )
+    monkeypatch.setattr(serve_mod, "serve_http", lambda *a, **k: calls.setdefault("http", (a, k)))
     serve_mod._main(["graphify-out/graph.json"])
     assert calls.get("stdio") == "graphify-out/graph.json"
     assert "http" not in calls
@@ -279,13 +305,21 @@ def test_cli_defaults_to_stdio(monkeypatch):
 def test_cli_http_passes_flags(monkeypatch):
     captured = {}
     monkeypatch.setattr(serve_mod, "serve", lambda gp: captured.setdefault("stdio", gp))
-    monkeypatch.setattr(
-        serve_mod, "serve_http", lambda gp, **k: captured.update(gp=gp, **k)
+    monkeypatch.setattr(serve_mod, "serve_http", lambda gp, **k: captured.update(gp=gp, **k))
+    serve_mod._main(
+        [
+            "g.json",
+            "--transport",
+            "http",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9000",
+            "--api-key",
+            "k",
+            "--stateless",
+        ]
     )
-    serve_mod._main([
-        "g.json", "--transport", "http", "--host", "0.0.0.0",
-        "--port", "9000", "--api-key", "k", "--stateless",
-    ])
     assert captured["gp"] == "g.json"
     assert captured["host"] == "0.0.0.0"
     assert captured["port"] == 9000

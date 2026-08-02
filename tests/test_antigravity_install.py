@@ -5,6 +5,7 @@ went through the skill-only branch (grouped with copilot/pi/kimi), so it copied
 the SKILL.md but never wrote `.agents/rules/graphify.md` or
 `.agents/workflows/graphify.md` - even though the uninstall path removes them.
 """
+
 import graphify.__main__ as m
 
 

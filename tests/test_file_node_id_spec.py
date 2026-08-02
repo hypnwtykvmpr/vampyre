@@ -10,7 +10,6 @@ skill.md spec (line ~390):
         match/script/pipeline_step.py (file node) -> script_pipeline_step
         setup.py (top-level) -> setup
 """
-from pathlib import Path
 
 from graphify.extract import extract
 
@@ -18,9 +17,9 @@ from graphify.extract import extract
 def _file_nodes(extraction: dict) -> list[dict]:
     # File-level nodes carry a label equal to the file's basename.
     return [
-        n for n in extraction["nodes"]
-        if n.get("source_file", "").endswith(n.get("label", "\0"))
-        and n.get("file_type") == "code"
+        n
+        for n in extraction["nodes"]
+        if n.get("source_file", "").endswith(n.get("label", "\0")) and n.get("file_type") == "code"
     ]
 
 
@@ -70,13 +69,12 @@ def test_top_level_file_SYMBOL_ids_use_bare_stem(tmp_path):
     assert "main_run" in ids, f"expected bare-stem symbol 'main_run', got {sorted(ids)}"
     # The root directory name must NOT appear in any symbol id.
     rootname = tmp_path.name.lower().replace("-", "_")
-    assert not any(rootname in i for i in ids), (
-        f"root dir name leaked into ids: {sorted(ids)}"
-    )
+    assert not any(rootname in i for i in ids), f"root dir name leaked into ids: {sorted(ids)}"
 
     # contains edge file -> symbol must connect with the canonical ids.
-    contains = [e for e in extraction["edges"]
-                if e["relation"] == "contains" and e["target"] == "main_run"]
+    contains = [
+        e for e in extraction["edges"] if e["relation"] == "contains" and e["target"] == "main_run"
+    ]
     assert contains and contains[0]["source"] == "main"
 
 
@@ -105,12 +103,13 @@ def test_symbol_and_file_ids_share_the_same_stem(tmp_path):
     extraction = extract([f], cache_root=tmp_path)
     ids = {n["id"] for n in extraction["nodes"]}
 
-    assert "match_script_pipeline_step" in ids          # file node
-    assert "match_script_pipeline_step_stage" in ids     # class symbol shares stem
+    assert "match_script_pipeline_step" in ids  # file node
+    assert "match_script_pipeline_step_stage" in ids  # class symbol shares stem
 
     # The file -> class 'contains' edge must reference the real file node id.
     contains = [
-        e for e in extraction["edges"]
+        e
+        for e in extraction["edges"]
         if e["relation"] == "contains" and e["target"] == "match_script_pipeline_step_stage"
     ]
     assert contains, "no 'contains' edge to the class symbol"
@@ -126,10 +125,7 @@ def test_cross_file_import_edges_stay_connected(tmp_path):
     pkg.mkdir()
     (pkg / "models.py").write_text("class User:\n    pass\n")
     (pkg / "auth.py").write_text(
-        "from models import User\n\n"
-        "class Session:\n"
-        "    def check(self):\n"
-        "        return User()\n"
+        "from models import User\n\nclass Session:\n    def check(self):\n        return User()\n"
     )
 
     files = [pkg / "models.py", pkg / "auth.py"]

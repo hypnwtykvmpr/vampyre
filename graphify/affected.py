@@ -153,7 +153,7 @@ def affected_nodes(
         current, current_depth = queue.popleft()
         if current_depth >= depth:
             continue
-        if hasattr(graph, "in_edges"):
+        if isinstance(graph, (nx.DiGraph, nx.MultiDiGraph)):
             incoming = graph.in_edges(current, data=True)
         else:
             incoming = (
@@ -214,8 +214,7 @@ def load_graph(path: Path) -> nx.Graph:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         raise RuntimeError(
-            f"Cannot read graph file {path}: {exc}. "
-            "Re-run 'graphify extract' to regenerate it."
+            f"Cannot read graph file {path}: {exc}. Re-run 'graphify extract' to regenerate it."
         ) from exc
     # Force directed so stored caller→callee direction survives the round-trip;
     # mirrors serve.py and __main__.py (#1174).

@@ -13,10 +13,7 @@ def _write(path: Path, text: str) -> Path:
 
 
 def _module_nodes(result: dict, label: str) -> list[dict]:
-    return [
-        n for n in result["nodes"]
-        if n.get("type") == "module" and n.get("label") == label
-    ]
+    return [n for n in result["nodes"] if n.get("type") == "module" and n.get("label") == label]
 
 
 def _import_edges(result: dict) -> list[dict]:
@@ -77,9 +74,7 @@ def test_swift_import_edges_survive_build(tmp_path: Path):
     result = extract([core, a, b], cache_root=tmp_path)
     G = build_from_json(result, directed=True)
 
-    import_edges = [
-        (u, v) for u, v, d in G.edges(data=True) if d.get("relation") == "imports"
-    ]
+    import_edges = [(u, v) for u, v, d in G.edges(data=True) if d.get("relation") == "imports"]
     assert len(import_edges) == 2
     # Both edges land on the same CoreKit module node.
     assert len({v for _, v in import_edges}) == 1

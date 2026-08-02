@@ -13,6 +13,7 @@ these tests exercise the actual on-disk layout an end user gets. Only Path.home
 and the cwd are redirected into tmp_path so nothing touches the developer's home
 directory.
 """
+
 from __future__ import annotations
 
 import os
@@ -69,9 +70,7 @@ def test_skill_roundtrip_at_real_destination(platform, project, tmp_path, monkey
         else:
             assert str(dst).startswith(str(home))
 
-        returned = mainmod._copy_skill_file(
-            platform, project=project, project_dir=project_dir
-        )
+        returned = mainmod._copy_skill_file(platform, project=project, project_dir=project_dir)
         assert returned == dst
         assert dst.exists(), f"{platform} ({'project' if project else 'user'}) skill not installed"
         assert (dst.parent / ".graphify_version").read_text() == mainmod.__version__
@@ -85,9 +84,7 @@ def test_skill_roundtrip_at_real_destination(platform, project, tmp_path, monkey
         # No staging dir is ever left behind.
         assert not (dst.parent / "references.tmp").exists()
 
-        removed = mainmod._remove_skill_file(
-            platform, project=project, project_dir=project_dir
-        )
+        removed = mainmod._remove_skill_file(platform, project=project, project_dir=project_dir)
         assert removed
         assert not dst.exists()
         assert not (dst.parent / ".graphify_version").exists()
@@ -309,7 +306,9 @@ def test_failed_copytree_leaves_no_partial_references(tmp_path, fake_progressive
     boom = RuntimeError("disk full")
     with patch("graphify.__main__.shutil.copytree", side_effect=boom):
         with pytest.raises(RuntimeError):
-            mainmod._install_skill_references(skill_dst, PKG_DIR / "skills" / "claude" / "references")
+            mainmod._install_skill_references(
+                skill_dst, PKG_DIR / "skills" / "claude" / "references"
+            )
 
     # The staging dir is cleaned up and the existing references/ is untouched
     # (the swap only happens after a successful copytree).

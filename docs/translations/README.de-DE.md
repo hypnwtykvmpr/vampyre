@@ -2,13 +2,14 @@
   <img src="https://raw.githubusercontent.com/safishamsi/graphify/v4/docs/logo-text.svg" width="260" height="64" alt="Graphify"/>
 </p>
 
+> **Vampyre fork:** This translation covers upstream-derived features and may lag behind the active fork. The English README is authoritative for current behavior and installation. Install Vampyre from the `v9` branch; the `graphifyy` registry package is upstream Graphify, not this fork.
+
 <p align="center">
   🇺🇸 <a href="../../README.md">English</a> | 🇨🇳 <a href="README.zh-CN.md">简体中文</a> | 🇯🇵 <a href="README.ja-JP.md">日本語</a> | 🇰🇷 <a href="README.ko-KR.md">한국어</a> | 🇩🇪 <a href="README.de-DE.md">Deutsch</a> | 🇫🇷 <a href="README.fr-FR.md">Français</a> | 🇪🇸 <a href="README.es-ES.md">Español</a> | 🇮🇳 <a href="README.hi-IN.md">हिन्दी</a> | 🇧🇷 <a href="README.pt-BR.md">Português</a> | 🇷🇺 <a href="README.ru-RU.md">Русский</a> | 🇸🇦 <a href="README.ar-SA.md">العربية</a> | 🇮🇹 <a href="README.it-IT.md">Italiano</a> | 🇵🇱 <a href="README.pl-PL.md">Polski</a> | 🇳🇱 <a href="README.nl-NL.md">Nederlands</a> | 🇹🇷 <a href="README.tr-TR.md">Türkçe</a> | 🇺🇦 <a href="README.uk-UA.md">Українська</a> | 🇻🇳 <a href="README.vi-VN.md">Tiếng Việt</a> | 🇮🇩 <a href="README.id-ID.md">Bahasa Indonesia</a> | 🇸🇪 <a href="README.sv-SE.md">Svenska</a> | 🇬🇷 <a href="README.el-GR.md">Ελληνικά</a> | 🇷🇴 <a href="README.ro-RO.md">Română</a> | 🇨🇿 <a href="README.cs-CZ.md">Čeština</a> | 🇫🇮 <a href="README.fi-FI.md">Suomi</a> | 🇩🇰 <a href="README.da-DK.md">Dansk</a> | 🇳🇴 <a href="README.no-NO.md">Norsk</a> | 🇭🇺 <a href="README.hu-HU.md">Magyar</a> | 🇹🇭 <a href="README.th-TH.md">ภาษาไทย</a> | 🇺🇿 <a href="README.uz-UZ.md">Oʻzbekcha</a> | 🇹🇼 <a href="README.zh-TW.md">繁體中文</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/safishamsi/graphify/actions/workflows/ci.yml"><img src="https://github.com/safishamsi/graphify/actions/workflows/ci.yml/badge.svg?branch=v4" alt="CI"/></a>
-  <a href="https://pypi.org/project/graphifyy/"><img src="https://img.shields.io/pypi/v/graphifyy" alt="PyPI"/></a>
+  <a href="https://github.com/hypnwtykvmpr/vampyre/actions/workflows/ci.yml"><img src="https://github.com/hypnwtykvmpr/vampyre/actions/workflows/ci.yml/badge.svg?branch=v9" alt="CI"/></a>
   <a href="https://pepy.tech/project/graphifyy"><img src="https://static.pepy.tech/badge/graphifyy" alt="Downloads"/></a>
   <a href="https://github.com/sponsors/safishamsi"><img src="https://img.shields.io/badge/sponsor-safishamsi-ea4aaa?logo=github-sponsors" alt="Sponsor"/></a>
   <a href="https://www.linkedin.com/company/graphify-labs"><img src="https://img.shields.io/badge/LinkedIn-Graphify%20Labs-0077B5?logo=linkedin" alt="LinkedIn"/></a>
@@ -58,16 +59,10 @@ Jede Beziehung ist markiert als `EXTRACTED` (direkt in der Quelle gefunden), `IN
 
 ```bash
 # Empfohlen — funktioniert auf Mac und Linux ohne PATH-Einrichtung
-uv tool install graphifyy && graphify install
-# oder mit pipx
-pipx install graphifyy && graphify install
-# oder einfaches pip
-pip install graphifyy && graphify install
+uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9" && graphify install
 ```
 
-> **Offizielles Paket:** Das PyPI-Paket heißt `graphifyy` (installieren mit `pip install graphifyy`). Andere Pakete mit Namen `graphify*` auf PyPI sind nicht mit diesem Projekt verbunden. Das einzige offizielle Repository ist [safishamsi/graphify](https://github.com/safishamsi/graphify). CLI und Skill-Befehl heißen weiterhin `graphify`.
 
-> **`graphify: command not found`?** Verwende `uv tool install graphifyy` (empfohlen) oder `pipx install graphifyy` — beide platzieren die CLI an einem verwalteten Ort, der automatisch im PATH ist. Mit einfachem `pip` musst du möglicherweise `~/.local/bin` (Linux) oder `~/Library/Python/3.x/bin` (Mac) zum PATH hinzufügen, oder `python -m graphify` verwenden.
 
 ### Plattformunterstützung
 

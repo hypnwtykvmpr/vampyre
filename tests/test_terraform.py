@@ -1,4 +1,5 @@
 """Tests for the Terraform/HCL extractor (graphify/extract.py, issue #187)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -153,6 +154,8 @@ def test_tfvars_key_value_is_safe(tmp_path):
     # .tfvars files contain only key=value assignments (no block structure),
     # so extract_terraform produces zero block nodes — only the file node.
     # This is the documented intended behaviour for .tfvars.
-    r = extract_terraform(_write(tmp_path, "terraform.tfvars", 'region = "us-east-1"\nenv = "prod"\n'))
+    r = extract_terraform(
+        _write(tmp_path, "terraform.tfvars", 'region = "us-east-1"\nenv = "prod"\n')
+    )
     assert r.get("error") is None
     assert len(r["nodes"]) == 1  # only the file node, no variable nodes

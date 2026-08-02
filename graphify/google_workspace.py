@@ -5,6 +5,7 @@ shortcut files (.gdoc, .gsheet, .gslides). Those files are pointers, not the
 document content. This module exports them to Markdown sidecars via the
 googleworkspace CLI (`gws`) so Graphify can extract their actual contents.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -18,6 +19,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Callable, Any
 
+from graphify.installation import uv_tool_install_command
 
 GOOGLE_WORKSPACE_EXTENSIONS = {".gdoc", ".gsheet", ".gslides"}
 
@@ -91,7 +93,9 @@ def read_google_shortcut(path: Path) -> dict[str, str | None]:
     }
 
 
-def _run_gws_export(file_id: str, mime_type: str, output: Path, resource_key: str | None = None) -> None:
+def _run_gws_export(
+    file_id: str, mime_type: str, output: Path, resource_key: str | None = None
+) -> None:
     exe = shutil.which("gws")
     if not exe:
         raise RuntimeError(
@@ -126,7 +130,9 @@ def _sidecar_path(path: Path, out_dir: Path) -> Path:
     return out_dir / f"{path.stem}_{name_hash}.md"
 
 
-def _with_frontmatter(path: Path, shortcut: dict[str, str | None], body: str, exported_mime_type: str) -> str:
+def _with_frontmatter(
+    path: Path, shortcut: dict[str, str | None], body: str, exported_mime_type: str
+) -> str:
     source_url = shortcut.get("url") or ""
     account = shortcut.get("account") or ""
     account_line = ""
@@ -170,20 +176,26 @@ def convert_google_workspace_file(
         with tempfile.NamedTemporaryFile("w+b", suffix=".md", delete=False, dir=out_dir) as tmp:
             tmp_path = Path(tmp.name)
         try:
-            _run_gws_export(shortcut["file_id"] or "", "text/markdown", tmp_path, shortcut.get("resource_key"))
+            _run_gws_export(
+                shortcut["file_id"] or "", "text/markdown", tmp_path, shortcut.get("resource_key")
+            )
             body = tmp_path.read_text(encoding="utf-8", errors="replace")
         finally:
             tmp_path.unlink(missing_ok=True)
         if not body.strip():
             return None
-        out_path.write_text(_with_frontmatter(path, shortcut, body, "text/markdown"), encoding="utf-8")
+        out_path.write_text(
+            _with_frontmatter(path, shortcut, body, "text/markdown"), encoding="utf-8"
+        )
         return out_path
 
     if ext == ".gslides":
         with tempfile.NamedTemporaryFile("w+b", suffix=".txt", delete=False, dir=out_dir) as tmp:
             tmp_path = Path(tmp.name)
         try:
-            _run_gws_export(shortcut["file_id"] or "", "text/plain", tmp_path, shortcut.get("resource_key"))
+            _run_gws_export(
+                shortcut["file_id"] or "", "text/plain", tmp_path, shortcut.get("resource_key")
+            )
             body = tmp_path.read_text(encoding="utf-8", errors="replace")
         finally:
             tmp_path.unlink(missing_ok=True)
@@ -194,7 +206,10 @@ def convert_google_workspace_file(
 
     if ext == ".gsheet":
         if xlsx_to_markdown is None:
-            raise RuntimeError("Google Sheets export requires the office extra: pip install graphifyy[office,google]")
+            raise RuntimeError(
+                "Google Sheets export requires the office and google extras: "
+                + uv_tool_install_command("office,google")
+            )
         with tempfile.NamedTemporaryFile("w+b", suffix=".xlsx", delete=False, dir=out_dir) as tmp:
             tmp_path = Path(tmp.name)
         try:

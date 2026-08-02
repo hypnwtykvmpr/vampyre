@@ -108,16 +108,20 @@ def _path_proximity_winner(call_site_file: str, candidate_files: dict[str, str])
     call_dir = PurePosixPath(call_norm).parent
 
     # Tier 1: exact same file.
-    same_file = [cid for cid, f in candidate_files.items()
-                 if str(f).replace("\\", "/") == call_norm]
+    same_file = [
+        cid for cid, f in candidate_files.items() if str(f).replace("\\", "/") == call_norm
+    ]
     if len(same_file) == 1:
         return same_file[0]
     if len(same_file) > 1:
         return None  # genuinely ambiguous within one file; bail
 
     # Tier 2: same directory.
-    same_dir = [cid for cid, f in candidate_files.items()
-                if PurePosixPath(str(f).replace("\\", "/")).parent == call_dir]
+    same_dir = [
+        cid
+        for cid, f in candidate_files.items()
+        if PurePosixPath(str(f).replace("\\", "/")).parent == call_dir
+    ]
     if len(same_dir) == 1:
         return same_dir[0]
     if len(same_dir) > 1:
@@ -185,8 +189,7 @@ def disambiguate_ambiguous_candidates(
         # Prefer a test-local definition (same file) first.
         call_norm = str(call_site_file).replace("\\", "/")
         same_file_test = [
-            c for c in test_cands
-            if str(candidate_files.get(c, "")).replace("\\", "/") == call_norm
+            c for c in test_cands if str(candidate_files.get(c, "")).replace("\\", "/") == call_norm
         ]
         if len(same_file_test) == 1:
             return same_file_test[0]
@@ -208,6 +211,7 @@ def disambiguate_ambiguous_candidates(
         call_site_file,
         {c: candidate_files.get(c, "") for c in survivors},
     )
+
 
 # Bare directory name even when GRAPHIFY_OUT is an absolute path. Used by the
 # path guards that walk parents looking for the output dir by name, and by the

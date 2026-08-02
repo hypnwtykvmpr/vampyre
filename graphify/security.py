@@ -5,10 +5,12 @@ import html
 import http.client
 import os
 import re
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
+from email.message import Message
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +20,8 @@ import socket
 from graphify.paths import GRAPHIFY_OUT, GRAPHIFY_OUT_NAME
 
 _ALLOWED_SCHEMES = {"http", "https"}
-_MAX_FETCH_BYTES = 52_428_800   # 50 MB hard cap for binary downloads
-_MAX_TEXT_BYTES  = 10_485_760   # 10 MB hard cap for HTML / text
+_MAX_FETCH_BYTES = 52_428_800  # 50 MB hard cap for binary downloads
+_MAX_TEXT_BYTES = 10_485_760  # 10 MB hard cap for HTML / text
 
 # Graph-load memory-bomb cap: reject .json files larger than this before
 # JSON-parsing them into a dict. Without this, a multi-gigabyte (or
@@ -29,7 +31,7 @@ _MAX_TEXT_BYTES  = 10_485_760   # 10 MB hard cap for HTML / text
 # discoverable and so existing callers/tests that reference it directly keep
 # working; the effective cap is resolved at call time by
 # ``_max_graph_file_bytes`` (which lets ``GRAPHIFY_MAX_GRAPH_BYTES`` override it).
-_MAX_GRAPH_FILE_BYTES = 512 * 1024 * 1024   # 512 MiB
+_MAX_GRAPH_FILE_BYTES = 512 * 1024 * 1024  # 512 MiB
 
 
 def _max_graph_file_bytes() -> int:
@@ -64,6 +66,7 @@ def _max_graph_file_bytes() -> int:
         return _MAX_GRAPH_FILE_BYTES
     return value * multiplier
 
+
 # AWS metadata, link-local, and common cloud metadata endpoints
 _BLOCKED_HOSTS = {"metadata.google.internal", "metadata.google.com"}
 
@@ -79,6 +82,7 @@ _NAT64_WKP = ipaddress.ip_network("64:ff9b::/96")
 # URL validation
 # ---------------------------------------------------------------------------
 
+
 def _ip_is_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Return True if *ip* falls in a private/reserved/internal range.
 
@@ -91,11 +95,7 @@ def _ip_is_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     if isinstance(ip, ipaddress.IPv6Address) and ip in _NAT64_WKP:
         ip = ipaddress.ip_address(int(ip) & 0xFFFFFFFF)
     return (
-        ip.is_private
-        or ip.is_reserved
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip in _CGN_NETWORK
+        ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local or ip in _CGN_NETWORK
     )
 
 
@@ -110,18 +110,14 @@ def validate_url(url: str) -> str:
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme.lower() not in _ALLOWED_SCHEMES:
         raise ValueError(
-            f"Blocked URL scheme '{parsed.scheme}' - only http and https are allowed. "
-            f"Got: {url!r}"
+            f"Blocked URL scheme '{parsed.scheme}' - only http and https are allowed. Got: {url!r}"
         )
 
     hostname = parsed.hostname
     if hostname:
         # Block known cloud metadata hostnames
         if hostname.lower() in _BLOCKED_HOSTS:
-            raise ValueError(
-                f"Blocked cloud metadata endpoint '{hostname}'. "
-                f"Got: {url!r}"
-            )
+            raise ValueError(f"Blocked cloud metadata endpoint '{hostname}'. Got: {url!r}")
 
         # Resolve hostname and block private/reserved IP ranges
         try:
@@ -164,16 +160,40 @@ def _resolve_and_validate(host: str, port: int) -> tuple[int, str]:
     infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
     for family, _type, _proto, _canon, sockaddr in infos:
         addr = sockaddr[0]
+        if not isinstance(addr, str):
+            continue
         try:
             ip = ipaddress.ip_address(addr)
         except ValueError:
             continue
         if _ip_is_blocked(ip):
-            raise OSError(
-                f"SSRF blocked: IP {addr} resolved from '{host}' is private/reserved"
-            )
-        return family, addr
+            raise OSError(f"SSRF blocked: IP {addr} resolved from '{host}' is private/reserved")
+        return int(family), addr
     raise OSError(f"SSRF blocked: no usable address resolved from '{host}'")
+
+
+def _connection_source_address(connection: object) -> tuple[str, int] | None:
+    source_address = getattr(connection, "source_address", None)
+    if source_address is None:
+        return None
+    if not isinstance(source_address, tuple) or len(source_address) != 2:
+        raise OSError("HTTP connection has an invalid source address")
+    host, port = source_address
+    if not isinstance(host, str) or not isinstance(port, int):
+        raise OSError("HTTP connection has an invalid source address")
+    return host, port
+
+
+def _establish_tunnel(connection: http.client.HTTPConnection) -> None:
+    tunnel_host = getattr(connection, "_tunnel_host", None)
+    if tunnel_host is None:
+        return
+    if not isinstance(tunnel_host, str) or not tunnel_host:
+        raise OSError("HTTP connection has an invalid tunnel host")
+    tunnel = getattr(connection, "_tunnel", None)
+    if not callable(tunnel):
+        raise OSError("HTTP connection cannot establish the configured tunnel")
+    tunnel()
 
 
 class _SSRFGuardedHTTPConnection(http.client.HTTPConnection):
@@ -181,14 +201,13 @@ class _SSRFGuardedHTTPConnection(http.client.HTTPConnection):
     exact validated IP (no second resolution = no DNS-rebind TOCTOU)."""
 
     def connect(self) -> None:
-        family, ip = _resolve_and_validate(self.host, self.port)
+        _family, ip = _resolve_and_validate(self.host, self.port)
         self.sock = socket.create_connection(
             (ip, self.port),
             self.timeout,
-            self.source_address,
+            _connection_source_address(self),
         )
-        if self._tunnel_host:
-            self._tunnel()
+        _establish_tunnel(self)
 
 
 class _SSRFGuardedHTTPSConnection(http.client.HTTPSConnection):
@@ -200,17 +219,25 @@ class _SSRFGuardedHTTPSConnection(http.client.HTTPSConnection):
     """
 
     def connect(self) -> None:
-        family, ip = _resolve_and_validate(self.host, self.port)
+        _family, ip = _resolve_and_validate(self.host, self.port)
+        server_hostname = self.host
         sock = socket.create_connection(
             (ip, self.port),
             self.timeout,
-            self.source_address,
+            _connection_source_address(self),
         )
-        if self._tunnel_host:
+        tunnel_host = getattr(self, "_tunnel_host", None)
+        if tunnel_host is not None:
             self.sock = sock
-            self._tunnel()
+            _establish_tunnel(self)
             sock = self.sock
-        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+            server_hostname = tunnel_host
+        if sock is None:
+            raise OSError("HTTP tunnel did not provide a connected socket")
+        context = getattr(self, "_context", None)
+        if not isinstance(context, ssl.SSLContext):
+            raise OSError("HTTPS connection has no valid TLS context")
+        self.sock = context.wrap_socket(sock, server_hostname=server_hostname)
 
 
 class _SSRFGuardedHTTPHandler(urllib.request.HTTPHandler):
@@ -235,7 +262,7 @@ class _NoFileRedirectHandler(urllib.request.HTTPRedirectHandler):
     """
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        validate_url(newurl)          # raises ValueError if scheme is wrong
+        validate_url(newurl)  # raises ValueError if scheme is wrong
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -253,6 +280,7 @@ def _build_opener() -> urllib.request.OpenerDirector:
 # ---------------------------------------------------------------------------
 # Safe fetch
 # ---------------------------------------------------------------------------
+
 
 def safe_fetch(url: str, max_bytes: int = _MAX_FETCH_BYTES, timeout: int = 30) -> bytes:
     """Fetch *url* and return raw bytes.
@@ -279,7 +307,9 @@ def safe_fetch(url: str, max_bytes: int = _MAX_FETCH_BYTES, timeout: int = 30) -
         # with a custom opener we check manually to be safe.
         status = getattr(resp, "status", None) or getattr(resp, "code", None)
         if status is not None and not (200 <= status < 300):
-            raise urllib.error.HTTPError(url, status, f"HTTP {status}", {}, None)
+            response_headers = getattr(resp, "headers", None)
+            headers = response_headers if isinstance(response_headers, Message) else Message()
+            raise urllib.error.HTTPError(url, status, f"HTTP {status}", headers, None)
 
         chunks: list[bytes] = []
         total = 0
@@ -311,6 +341,7 @@ def safe_fetch_text(url: str, max_bytes: int = _MAX_TEXT_BYTES, timeout: int = 1
 # Path validation
 # ---------------------------------------------------------------------------
 
+
 def validate_graph_path(path: str | Path, base: Path | None = None) -> Path:
     """Resolve *path* and verify it stays inside *base*.
 
@@ -334,8 +365,7 @@ def validate_graph_path(path: str | Path, base: Path | None = None) -> Path:
     base = base.resolve()
     if not base.exists():
         raise ValueError(
-            f"Graph base directory does not exist: {base}. "
-            "Run /graphify first to build the graph."
+            f"Graph base directory does not exist: {base}. Run /graphify first to build the graph."
         )
 
     resolved = Path(path).resolve()

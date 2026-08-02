@@ -80,7 +80,7 @@ def _body_content(content: bytes) -> bytes:
     # Slice right after the closing `---` (not after its line) so the output
     # stays byte-identical with the historical implementation for well-formed
     # frontmatter -- existing semantic-cache hashes must not churn.
-    return text[closer.start() + 3:].encode()
+    return text[closer.start() + 3 :].encode()
 
 
 # Stat-based index: maps source root + absolute path → {size, mtime_ns, hash}.
@@ -150,6 +150,7 @@ def _flush_stat_index() -> None:
 def _normalize_path(path: Path) -> Path:
     """Normalize path for consistent cache keys across Windows path spellings."""
     import sys
+
     if sys.platform != "win32":
         return path
     s = str(path)
@@ -158,9 +159,7 @@ def _normalize_path(path: Path) -> Path:
     return Path(os.path.normcase(s))
 
 
-def file_hash(
-    path: Path, root: Path = Path("."), *, cache_root: Path | None = None
-) -> str:
+def file_hash(path: Path, root: Path = Path("."), *, cache_root: Path | None = None) -> str:
     """SHA256 of file contents + path relative to root.
 
     Uses a stat-based fastpath (size + mtime_ns) to skip full reads when the
@@ -186,9 +185,7 @@ def file_hash(
     try:
         st = p.stat()
         entry = _stat_index.get(abs_key)
-        if (entry
-                and entry.get("size") == st.st_size
-                and entry.get("mtime_ns") == st.st_mtime_ns):
+        if entry and entry.get("size") == st.st_size and entry.get("mtime_ns") == st.st_mtime_ns:
             return entry["hash"]
     except OSError:
         pass
@@ -370,6 +367,7 @@ def save_cached(
     on_disk = result
     if isinstance(result, dict) and any(result.get(k) for k in ("nodes", "edges", "hyperedges")):
         import copy as _copy
+
         on_disk = _copy.deepcopy(result)
         _relativize_source_files_in(on_disk, identity_root)
     h = file_hash(p, identity_root, cache_root=root)
@@ -385,6 +383,7 @@ def save_cached(
             # Windows: os.replace can fail with WinError 5 if the target is
             # briefly locked. Fall back to copy-then-delete.
             import shutil
+
             shutil.copy2(tmp_path, entry)
             os.unlink(tmp_path)
     except Exception:
@@ -525,7 +524,7 @@ def save_semantic_cache(
         src = e.get("source_file", "")
         if src:
             by_file[src]["edges"].append(e)
-    for h in (hyperedges or []):
+    for h in hyperedges or []:
         src = h.get("source_file", "")
         if src:
             by_file[src]["hyperedges"].append(h)

@@ -8,6 +8,7 @@ no `imports_from` edge at all (while the equivalent ESM `import * as x from
 "./m"` did). The fix gives the import-equals form exact parity with the ESM
 namespace import: one file-level `imports_from` edge.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -23,10 +24,7 @@ def _write(path: Path, text: str) -> Path:
 
 def _has_edge(result: dict, source: str, target: str, relation: str = "imports_from") -> bool:
     expected = (_file_node_id(Path(source)), _file_node_id(Path(target)), relation)
-    actual = {
-        (edge["source"], edge["target"], edge["relation"])
-        for edge in result["edges"]
-    }
+    actual = {(edge["source"], edge["target"], edge["relation"]) for edge in result["edges"]}
     return expected in actual
 
 
@@ -104,8 +102,5 @@ def test_esm_imports_unaffected(tmp_path: Path):
 
     assert _has_edge(result, "src/app.ts", "src/bar.ts")
     src = _file_node_id(Path("src/app.ts"))
-    sym = [
-        e for e in result["edges"]
-        if e["source"] == src and e["relation"] == "imports"
-    ]
+    sym = [e for e in result["edges"] if e["source"] == src and e["relation"] == "imports"]
     assert sym, "named-import symbol edge should still be emitted"

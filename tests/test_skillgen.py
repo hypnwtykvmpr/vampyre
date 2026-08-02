@@ -1,8 +1,8 @@
 """Tests for the tools/skillgen generator and the claude lean-core split.
 
 skillgen renders graphify's committed skill artifacts from human-edited
-fragments. These tests lock in the anti-drift guards (``--check``,
-``--audit-coverage``), the render idempotency, and the lean-core invariant: the
+fragments. These tests lock in the current anti-drift guard (``--check``),
+render idempotency, and the lean-core invariant: the
 core runs a default extraction with zero reference reads, on-demand content
 lives only in the references, and no reference duplicates core content.
 """
@@ -12,7 +12,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
 
 # tests/ -> repo root is one parent up; put it on the path so tools.skillgen
 # imports regardless of pytest's import mode.
@@ -21,13 +20,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.skillgen import gen  # noqa: E402
-
-
-def test_audit_coverage_passes():
-    """Every v8 heading lands in the lean core or exactly one reference."""
-    platforms = gen.load_platforms()
-    problems = gen.audit_coverage(platforms["claude"])
-    assert problems == [], "\n".join(problems)
 
 
 def test_check_passes():
@@ -249,14 +241,6 @@ def test_check_passes_for_codex_and_windows():
         assert problems == [], f"[{key}]\n" + "\n".join(problems)
 
 
-def test_audit_coverage_passes_for_codex_and_windows():
-    """Every v8 heading single-homes for the cli-inline split hosts too."""
-    platforms = gen.load_platforms()
-    for key in ("codex", "windows"):
-        problems = gen.audit_coverage(platforms[key])
-        assert problems == [], f"[{key}]\n" + "\n".join(problems)
-
-
 UNIFIED_DESCRIPTION = (
     "Use for any question about a codebase, its architecture, file relationships, "
     "or project content — especially when graphify-out/ exists, where the question "
@@ -269,7 +253,7 @@ UNIFIED_DESCRIPTION = (
 def test_descriptions_are_unified():
     """Every platform now carries one unified frontmatter description, byte for byte.
 
-    The two drifted v8 descriptions (claude's short one and the richer 14-host
+    The two legacy descriptions (Claude's short one and the richer 14-host
     line) were collapsed into a single discovery-tuned line that leads with the
     use-condition. Every split host and both monoliths must carry it verbatim,
     and none of the old wording may survive.
@@ -279,7 +263,7 @@ def test_descriptions_are_unified():
     for key, p in platforms.items():
         body = gen.render(p)[0].content
         assert expected_line in body, f"[{key}] missing the unified description line"
-        # None of the drifted v8 wording may survive on any platform.
+        # None of the drifted legacy wording may survive on any platform.
         assert "Provides persistent graph with god nodes" not in body, f"[{key}] kept old wording"
         assert "treat the question as a /graphify query." not in body, f"[{key}] kept old wording"
         assert "clustered communities" not in body, f"[{key}] kept old wording"
@@ -386,14 +370,12 @@ _PROGRESSIVE_HOSTS = (
 )
 
 
-def test_all_progressive_hosts_check_and_audit_clean():
-    """check + audit-coverage pass for every rendered progressive host."""
+def test_all_progressive_hosts_match_current_snapshots():
+    """Every progressive host matches its committed current snapshot."""
     platforms = gen.load_platforms()
     for key in _PROGRESSIVE_HOSTS:
         arts = gen.render_all(platforms, only=key)
         assert gen.check(arts) == [], f"[{key}] check\n" + "\n".join(gen.check(arts))
-        probs = gen.audit_coverage(platforms[key])
-        assert probs == [], f"[{key}] audit\n" + "\n".join(probs)
 
 
 def test_no_host_has_trigger_in_frontmatter():
@@ -486,31 +468,6 @@ def test_monoliths_render_inline_single_file_no_references():
         )
 
 
-def test_monolith_roundtrip_passes_for_aider_and_devin():
-    """Each monolith is diff-clean vs v8 except the file_type enum unification."""
-    platforms = gen.load_platforms()
-    for key in ("aider", "devin"):
-        problems = gen.monolith_roundtrip(platforms[key])
-        assert problems == [], f"[{key}]\n" + "\n".join(problems)
-
-
-def test_monoliths_change_only_sanctioned_lines():
-    """Every line that differs from pristine v8 is a sanctioned change-class.
-
-    The round-trip (multiset diff vs the pinned v8 blob) must come back clean:
-    each added/removed line matches one of the documented sanctioned predicates
-    in gen — the enum unification, the unified description, the chunk-cleanup
-    rewrite (#1172), and the four #1392 runbook fixes. Anything else is drift.
-    """
-    platforms = gen.load_platforms()
-    for key in ("aider", "devin"):
-        assert gen.monolith_roundtrip(platforms[key]) == []
-        # The six-value superset replaced the five-value enum in both files.
-        rendered = gen.render(platforms[key])[0].content
-        assert gen.ENUM_VALUES in rendered
-        assert UNIFIED_DESCRIPTION in rendered
-
-
 def test_monoliths_carry_the_1392_runbook_fixes():
     """The four #1392 data-loss/correctness fixes are present in both monoliths.
 
@@ -540,21 +497,21 @@ def test_monoliths_carry_the_1392_runbook_fixes():
         lines = body.splitlines()
         build_i = next(
             i
-            for i, l in enumerate(lines)
-            if "G = build_from_json(extraction, directed=IS_DIRECTED)" in l
+            for i, line in enumerate(lines)
+            if "G = build_from_json(extraction, directed=IS_DIRECTED)" in line
         )
         guard_i = next(
-            i for i, l in enumerate(lines[build_i:], build_i) if "number_of_nodes() == 0" in l
+            i for i, line in enumerate(lines[build_i:], build_i) if "number_of_nodes() == 0" in line
         )
         report_i = next(
             i
-            for i, l in enumerate(lines[build_i:], build_i)
-            if "GRAPH_REPORT.md').write_text(report)" in l
+            for i, line in enumerate(lines[build_i:], build_i)
+            if "GRAPH_REPORT.md').write_text(report)" in line
         )
         wrote_i = next(
             i
-            for i, l in enumerate(lines[build_i:], build_i)
-            if l.strip().startswith("wrote = to_json(")
+            for i, line in enumerate(lines[build_i:], build_i)
+            if line.strip().startswith("wrote = to_json(")
         )
         # guard fires right after the build, before the graph/report are written.
         assert build_i < guard_i < wrote_i < report_i, f"[{key}] Step 4 ordering not fixed"
@@ -623,44 +580,6 @@ def test_always_on_included_in_full_render_not_per_platform():
     assert "graphify/always_on/claude-md.md" not in claude_only
 
 
-def test_always_on_roundtrip_is_byte_faithful():
-    """Each always_on/*.md reproduces its former __main__.py constant byte for byte.
-
-    This is the load-bearing fidelity check behind the D2-a extraction: the
-    install-string / issue-#580 tests still import the constants from
-    graphify.__main__, so the packaged markdown must round-trip exactly or those
-    contracts silently change.
-    """
-    # The guard passes with zero problems: every always-on block reproduces its
-    # frozen baseline, with the agents-md block allowed exactly the #1530
-    # sanctioned substitution recorded in gen.ALWAYS_ON_SANCTIONED_EDITS.
-    problems = gen.always_on_roundtrip()
-    assert problems == []
-
-    rendered_agents = next(
-        a.content for a in gen.render_always_on() if a.path == "graphify/always_on/agents-md.md"
-    )
-    old_instruction = (
-        "When the user types `/graphify`, invoke the `skill` tool with "
-        '`skill: "graphify"` before doing anything else.'
-    )
-    new_instruction = (
-        "When the user types `/graphify`, use the installed graphify skill or instructions "
-        "before doing anything else."
-    )
-    # The sanctioned-edit registry holds exactly this single old->new substitution.
-    assert gen.ALWAYS_ON_SANCTIONED_EDITS["_AGENTS_MD_SECTION"] == (
-        (old_instruction, new_instruction),
-    )
-    baseline_agents = gen._always_on_constants(gen.ALWAYS_ON_BASELINE_REF)["_AGENTS_MD_SECTION"]
-    # The ONLY divergence from the frozen baseline is the sanctioned sentence —
-    # any other byte drift would have surfaced as a problem above.
-    assert old_instruction in baseline_agents
-    assert baseline_agents.replace(old_instruction, new_instruction) == rendered_agents
-    assert "`skill` tool" not in rendered_agents
-    assert 'skill: "graphify"' not in rendered_agents
-
-
 def test_extracted_constants_equal_the_packaged_always_on_files():
     """The live module constants now equal the packaged files they read at load."""
     from graphify import __main__ as mainmod
@@ -699,116 +618,11 @@ def test_always_on_files_are_guarded_by_check(tmp_path):
 # --- the per-host coverage audit (the systemic guard) --------------------------
 
 
-def test_audit_coverage_passes_for_every_split_host():
-    """Every split host's render single-homes its own v8 body's headings."""
-    platforms = gen.load_platforms()
-    for key, p in platforms.items():
-        if p.bucket != "split":
-            continue
-        problems = gen.audit_coverage(p)
-        assert problems == [], f"[{key}]\n" + "\n".join(problems)
-
-
-def test_audit_reads_each_host_against_its_own_v8_body():
-    """The audit baseline is the host's OWN v8 skill body, not claude's monolith.
-
-    This is the structural fix: a per-host body, so a drop on one host surfaces.
-    """
-    assert (
-        gen._v8_baseline_ref("claude")
-        == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill.md"
-    )
-    assert (
-        gen._v8_baseline_ref("trae")
-        == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill-trae.md"
-    )
-    assert (
-        gen._v8_baseline_ref("vscode")
-        == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill-vscode.md"
-    )
-
-
-def test_audit_catches_an_induced_per_host_drop():
-    """Re-inducing the trae regression (claude-flavored hooks) fails the audit.
-
-    Pointing trae back at the shared CLAUDE.md hooks body drops the
-    '## For native AGENTS.md integration (Trae)' heading from its render. The
-    per-host audit must catch that against trae's own v8 body. The old audit
-    (every host vs claude's monolith) could not see it, because claude's monolith
-    never had that heading.
-    """
-    import dataclasses
-
-    platforms = gen.load_platforms()
-    regressed = dataclasses.replace(platforms["trae"], hooks_variant="claude-md")
-    problems = gen.audit_coverage(regressed)
-    assert any("native AGENTS.md integration (Trae)" in p for p in problems), problems
-
-
-def test_audit_catches_a_dropped_non_allowlisted_heading():
-    """A core fragment that drops a real v8 heading fails the audit.
-
-    Guards that the audit is not a rubber stamp: a host whose v8 has a heading
-    that is neither allowlisted nor present anywhere in the render must fail.
-    """
-    platforms = gen.load_platforms()
-    trae = platforms["trae"]
-    real_arts = gen.render(trae)
-    # Drop the Honesty Rules heading from the rendered core to simulate a real
-    # content loss, then re-run the single-home check by hand against trae's v8.
-    v8_headings = gen.headings(gen._git_show(gen._v8_baseline_ref("trae")))
-    assert "## Honesty Rules" in v8_headings
-    by_path = {a.path: a.content for a in real_arts}
-    core_no_honesty = by_path[trae.skill_dst].replace("## Honesty Rules", "## Closing notes")
-    core_headings = set(gen.headings(core_no_honesty))
-    allowlist = gen._audit_allowlist("trae")
-    homes = [h for h in v8_headings if h == "## Honesty Rules" and h in core_headings]
-    assert "## Honesty Rules" not in allowlist
-    assert homes == [], "a dropped, non-allowlisted heading should have no home"
-
-
-def test_git_show_validators_skip_cleanly_without_origin_v8(monkeypatch, tmp_path, capsys):
-    """On a shallow checkout (no origin/v8) the validators skip with exit 0.
-
-    CI sets fetch-depth: 0 so they run for real; this guards the fallback so a
-    shallow clone gets a clear message instead of a crash.
-    """
-    import subprocess as sp
-
-    repo = tmp_path / "shallow"
-    repo.mkdir()
-    sp.run(["git", "init", "-q", str(repo)], check=True)
-    monkeypatch.setattr(gen, "REPO_ROOT", repo)
-    assert gen._v8_available() is False
-    for flag in ("--audit-coverage", "--monolith-roundtrip", "--always-on-roundtrip"):
-        assert gen.main([flag]) == 0
-    out = capsys.readouterr()
-    assert "SKIPPED" in out.err
-    assert "fetch-depth: 0" in out.err
-
-
-def test_audit_allowlist_documents_only_consolidations():
-    """The allowlist holds only the wave-2/3 consolidations, nothing genuine.
-
-    A genuine drop (trae's native AGENTS.md integration) must never be in the
-    allowlist, or the guard would rubber-stamp the regression it exists to catch.
-    """
-    all_allowlisted = set(gen.SHARED_INTRO_ALLOWLIST)
-    for hs in gen._CONSOLIDATION_ALLOWLIST.values():
-        all_allowlisted |= set(hs)
-    assert "## For native AGENTS.md integration (Trae)" not in all_allowlisted
-    # Only the two minimal-body hosts carry per-host consolidations.
-    assert set(gen._CONSOLIDATION_ALLOWLIST) == {"kilo", "vscode"}
-
-
-# --- the trae / trae-cn native AGENTS.md integration fix -----------------------
-
-
 def test_trae_renders_native_agents_md_integration_not_claude():
     """trae wires `graphify trae install` -> AGENTS.md, never `graphify claude install`."""
     core, refs = _platform_artifacts("trae")
     hooks = refs["hooks.md"]
-    # The hooks reference carries the v8 native AGENTS.md integration section.
+    # The hooks reference carries Trae's native AGENTS.md integration section.
     assert "## For native AGENTS.md integration (Trae)" in hooks
     assert "graphify trae install" in hooks
     assert "graphify trae-cn install" in hooks
@@ -823,7 +637,7 @@ def test_trae_renders_native_agents_md_integration_not_claude():
 
 
 def test_trae_dispatch_carries_the_no_pretooluse_caveat():
-    """trae's B2 dispatch block restores the v8 no-PreToolUse-hook caveat."""
+    """Trae's B2 dispatch block carries the no-PreToolUse-hook caveat."""
     core, _ = _platform_artifacts("trae")
     b2 = core[core.index("**Step B2") : core.index("Pass the extraction prompt")]
     assert "Trae does NOT support PreToolUse hooks" in b2
@@ -831,7 +645,7 @@ def test_trae_dispatch_carries_the_no_pretooluse_caveat():
 
 
 def test_trae_hooks_reference_includes_the_pretooluse_note():
-    """The trae hooks reference keeps the v8 PreToolUse note in full."""
+    """The Trae hooks reference keeps the PreToolUse note in full."""
     _, refs = _platform_artifacts("trae")
     hooks = refs["hooks.md"]
     assert "Unlike Claude Code, Trae does NOT support PreToolUse hooks" in hooks
@@ -839,10 +653,10 @@ def test_trae_hooks_reference_includes_the_pretooluse_note():
 
 
 def test_claude_flavored_hosts_keep_their_hooks_text_unchanged():
-    """Hosts whose v8 shipped the claude-flavored hooks keep it (faithful to them).
+    """Claude-flavored hosts keep their native hooks text.
 
-    droid's v8 dispatch never had the Trae caveat and its hooks section names
-    CLAUDE.md; restoring trae must not bleed into droid or any other host.
+    Droid has no Trae caveat and its hooks section names CLAUDE.md; Trae-specific
+    behavior must not bleed into Droid or another host.
     """
     for key in ("claude", "droid", "codex", "windows", "kilo", "vscode"):
         core, refs = _platform_artifacts(key)
@@ -863,17 +677,17 @@ def test_claude_flavored_hosts_keep_their_hooks_text_unchanged():
 # --- the amp native AGENTS.md integration (the 13th split host) ----------------
 
 
-def test_amp_renders_native_agents_md_integration_v8_faithfully():
-    """amp wires `graphify amp install` -> AGENTS.md exactly as its v8 body had it.
+def test_amp_renders_native_agents_md_integration():
+    """Amp wires `graphify amp install` to its native AGENTS.md integration.
 
     amp shares the agents-md hooks variant with trae but renders its OWN wording:
     a bare "## For native AGENTS.md integration" heading (no "(Trae)" suffix),
     single-line install/uninstall commands (no trae-cn alt), and crucially NO
-    PreToolUse caveat (amp's v8 never carried one).
+    PreToolUse caveat.
     """
     core, refs = _platform_artifacts("amp")
     hooks = refs["hooks.md"]
-    # amp's bare v8 heading and Amp-worded prose.
+    # Amp's bare heading and host-specific prose.
     assert "## For native AGENTS.md integration" in hooks
     assert "## For native AGENTS.md integration (Trae)" not in hooks
     assert "make graphify always-on in Amp sessions" in hooks
@@ -894,7 +708,7 @@ def test_amp_renders_native_agents_md_integration_v8_faithfully():
 
 
 def test_amp_has_no_pretooluse_caveat_anywhere():
-    """amp's v8 had no no-PreToolUse-hooks note, so neither its core nor hooks may.
+    """Amp has no no-PreToolUse-hooks note in either its core or hooks.
 
     This is the explicit guard against injecting trae-specific wording into amp.
     The caveat belongs to trae alone; amp uses the plain task-tool-disk dispatch
@@ -909,25 +723,6 @@ def test_amp_has_no_pretooluse_caveat_anywhere():
     # amp's dispatch is the plain task-tool-disk block (no trae caveat line).
     b2 = core[core.index("**Step B2") : core.index("Pass the extraction prompt")]
     assert "Trae" not in b2
-
-
-def test_amp_audit_coverage_passes_against_its_own_v8():
-    """The per-host audit (the guard amp is the exact case for) passes for amp.
-
-    amp was omitted from wave 3's render list, so its v8 body was never audited
-    against a lean split. The audit reads origin/v8:graphify/skill-amp.md and
-    confirms every heading single-homes in amp's core + references.
-    """
-    platforms = gen.load_platforms()
-    assert (
-        gen._v8_baseline_ref("amp")
-        == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill-amp.md"
-    )
-    problems = gen.audit_coverage(platforms["amp"])
-    assert problems == [], "\n".join(problems)
-
-
-# --- the generic agents platform (#1432) ---------------------------------------
 
 
 def test_agents_renders_its_own_agents_md_hooks_wording():
@@ -959,8 +754,7 @@ def test_agents_body_matches_amp_modulo_hooks_wording():
 
     The two platforms differ only in the hooks reference's install/uninstall
     command wording — everything else (core, query, extraction spec, the other
-    six references) is byte-identical, which is why agents audits cleanly against
-    amp's v8 baseline.
+    six references) is byte-identical.
     """
     platforms = gen.load_platforms()
     amp = {a.path.rsplit("/", 1)[-1]: a.content for a in gen.render(platforms["amp"])}
@@ -973,14 +767,3 @@ def test_agents_body_matches_amp_modulo_hooks_wording():
             continue
         assert amp[name] == agents[name], f"{name} drifted between amp and agents"
     assert amp["hooks.md"] != agents["hooks.md"]
-
-
-def test_agents_audit_baseline_is_amps_v8_body():
-    """`agents` is a post-v8 platform, so its audit baseline is amp's v8 body."""
-    platforms = gen.load_platforms()
-    assert (
-        gen._v8_baseline_ref("agents")
-        == "47042beb05d1f6dd2186c0c499ae2840ce604ead:graphify/skill-amp.md"
-    )
-    problems = gen.audit_coverage(platforms["agents"])
-    assert problems == [], "\n".join(problems)

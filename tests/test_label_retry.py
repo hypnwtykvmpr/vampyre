@@ -1,6 +1,7 @@
 """Tests for graphify.llm._label_batch_with_retry — adaptive split-and-retry
 on JSON parse failure during community labeling (#1278).
 """
+
 from __future__ import annotations
 
 import json
@@ -39,7 +40,10 @@ def test_label_batch_recovers_via_split_on_invalid_json(monkeypatch):
     monkeypatch.setattr(llm_mod, "_call_llm", fake_call_llm)
 
     result = llm_mod._label_batch_with_retry(
-        batch_cids, batch_lines, backend="gemini", model=None,
+        batch_cids,
+        batch_lines,
+        backend="gemini",
+        model=None,
     )
 
     assert result == {42: "Label 42", 99: "Label 99", 137: "Label 137", 201: "Label 201"}

@@ -19,6 +19,7 @@ from rapidfuzz.distance import Jaro, JaroWinkler
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
 def _norm(label: str | None) -> str:
     """Lowercase + collapse non-alphanumeric runs to space (Unicode-aware)."""
     if not isinstance(label, str):
@@ -113,8 +114,9 @@ def _numeric_tokens_differ(a: str, b: str) -> bool:
     """
     if a == b:
         return False
-    return sorted(t.lstrip("0") or "0" for t in _DIGIT_RUN.findall(a)) != \
-        sorted(t.lstrip("0") or "0" for t in _DIGIT_RUN.findall(b))
+    return sorted(t.lstrip("0") or "0" for t in _DIGIT_RUN.findall(a)) != sorted(
+        t.lstrip("0") or "0" for t in _DIGIT_RUN.findall(b)
+    )
 
 
 # file_type values whose identity is anchored to their source location, not
@@ -134,8 +136,10 @@ def _crossfile_fileanchored_blocked(node: dict, neighbor: dict) -> bool:
     apps.<name>. No business logic here...") that differs by one word and sails
     past the JW threshold. Same-file duplicates of these types may still merge.
     """
-    if (node.get("file_type") not in _FILE_ANCHORED_NONCODE
-            and neighbor.get("file_type") not in _FILE_ANCHORED_NONCODE):
+    if (
+        node.get("file_type") not in _FILE_ANCHORED_NONCODE
+        and neighbor.get("file_type") not in _FILE_ANCHORED_NONCODE
+    ):
         return False
     return (node.get("source_file") or "") != (neighbor.get("source_file") or "")
 
@@ -341,7 +345,9 @@ def deduplicate_entities(
                 if neighbor is None:
                     continue
 
-                neighbor_norm = norm_cache.get(neighbor_id) or _norm(neighbor.get("label", neighbor.get("id", "")))
+                neighbor_norm = norm_cache.get(neighbor_id) or _norm(
+                    neighbor.get("label", neighbor.get("id", ""))
+                )
                 # Cross-file long labels score on plain Jaro (no prefix bonus).
                 # Jaro-Winkler's leading-prefix bonus lifts pairs that share a
                 # prefix but diverge in a distinguishing token ("testing-library

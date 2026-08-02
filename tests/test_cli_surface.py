@@ -9,6 +9,7 @@ Each flag is probed against a nonexistent path so we exercise arg-PARSING, not
 execution: a parseable flag yields "path not found" (or a backend error); a DROPPED
 flag yields "unknown ... option: <flag>" -> the test fails.
 """
+
 import subprocess
 import sys
 
@@ -17,14 +18,31 @@ import pytest
 
 def _graphify(*args: str) -> str:
     r = subprocess.run([sys.executable, "-m", "graphify", *args], capture_output=True, text=True)
-    return (r.stdout + r.stderr)
+    return r.stdout + r.stderr
 
 
 # Commands that must always exist in the CLI surface.
 REQUIRED_COMMANDS = [
-    "install", "uninstall", "update", "extract", "watch", "query", "path",
-    "explain", "affected", "merge-graphs", "merge-driver", "global", "diagnose",
-    "cluster-only", "label", "tree", "export", "add", "save-result", "check-update",
+    "install",
+    "uninstall",
+    "update",
+    "extract",
+    "watch",
+    "query",
+    "path",
+    "explain",
+    "affected",
+    "merge-graphs",
+    "merge-driver",
+    "global",
+    "diagnose",
+    "cluster-only",
+    "label",
+    "tree",
+    "export",
+    "add",
+    "save-result",
+    "check-update",
 ]
 
 # Boolean flags that must stay parseable per command. Dropping one regresses the
@@ -51,4 +69,6 @@ def test_command_present_in_help(cmd: str) -> None:
 def test_flag_is_parseable(cmd: str, flag: str) -> None:
     out = _graphify(cmd, _BAD_PATH, flag).lower()
     rejected = "unknown" in out and flag.lower() in out
-    assert not rejected, f"`graphify {cmd} {flag}` is rejected as an unknown option (CLI surface regression)"
+    assert not rejected, (
+        f"`graphify {cmd} {flag}` is rejected as an unknown option (CLI surface regression)"
+    )

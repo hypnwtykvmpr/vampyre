@@ -1,9 +1,10 @@
 # graphify
 
+> **Vampyre fork:** This translation covers upstream-derived features and may lag behind the active fork. The English README is authoritative for current behavior and installation. Install Vampyre from the `v9` branch; the `graphifyy` registry package is upstream Graphify, not this fork.
+
 🇺🇸 [English](../../README.md) | 🇨🇳 [简体中文](README.zh-CN.md) | 🇯🇵 [日本語](README.ja-JP.md) | 🇰🇷 [한국어](README.ko-KR.md) | 🇩🇪 [Deutsch](README.de-DE.md) | 🇫🇷 [Français](README.fr-FR.md) | 🇪🇸 [Español](README.es-ES.md) | 🇮🇳 [हिन्दी](README.hi-IN.md) | 🇧🇷 [Português](README.pt-BR.md) | 🇷🇺 [Русский](README.ru-RU.md) | 🇸🇦 [العربية](README.ar-SA.md) | 🇮🇹 [Italiano](README.it-IT.md) | 🇵🇱 [Polski](README.pl-PL.md) | 🇳🇱 [Nederlands](README.nl-NL.md) | 🇹🇷 [Türkçe](README.tr-TR.md) | 🇺🇦 [Українська](README.uk-UA.md) | 🇻🇳 [Tiếng Việt](README.vi-VN.md) | 🇮🇩 [Bahasa Indonesia](README.id-ID.md) | 🇸🇪 [Svenska](README.sv-SE.md) | 🇬🇷 [Ελληνικά](README.el-GR.md) | 🇷🇴 [Română](README.ro-RO.md) | 🇨🇿 [Čeština](README.cs-CZ.md) | 🇫🇮 [Suomi](README.fi-FI.md) | 🇩🇰 [Dansk](README.da-DK.md) | 🇳🇴 [Norsk](README.no-NO.md) | 🇭🇺 [Magyar](README.hu-HU.md) | 🇹🇭 [ภาษาไทย](README.th-TH.md) | 🇺🇿 [Oʻzbekcha](README.uz-UZ.md) | 🇹🇼 [繁體中文](README.zh-TW.md)
 
-[![CI](https://github.com/safishamsi/graphify/actions/workflows/ci.yml/badge.svg?branch=v3)](https://github.com/safishamsi/graphify/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/graphifyy)](https://pypi.org/project/graphifyy/)
+[![CI](https://github.com/hypnwtykvmpr/vampyre/actions/workflows/ci.yml/badge.svg?branch=v9)](https://github.com/hypnwtykvmpr/vampyre/actions/workflows/ci.yml)
 [![Sponsor](https://img.shields.io/badge/sponsor-safishamsi-ea4aaa?logo=github-sponsors)](https://github.com/sponsors/safishamsi)
 
 **AIコーディングアシスタント向けのスキル。** Claude Code、Codex、OpenCode、OpenClaw、Factory Droid で `/graphify` と入力するだけで、ファイルを読み込んでナレッジグラフを構築し、あなたが気づいていなかった構造を返します。コードベースをより速く理解し、アーキテクチャ上の意思決定の「なぜ」を見つけ出します。
@@ -49,10 +50,8 @@ graphify は 2 パスで動作します。まず、決定論的な AST パスが
 **必要なもの:** Python 3.10+ および以下のいずれか： [Claude Code](https://claude.ai/code), [Codex](https://openai.com/codex), [OpenCode](https://opencode.ai), [OpenClaw](https://openclaw.ai), または [Factory Droid](https://factory.ai)
 
 ```bash
-pip install graphifyy && graphify install
 ```
 
-> PyPI パッケージは `graphify` の名前が再取得されるまでの間、一時的に `graphifyy` となっています。CLI とスキルコマンドは依然として `graphify` です。
 
 ### プラットフォームサポート
 
@@ -106,7 +105,7 @@ Codex ユーザーは並列抽出のために `~/.codex/config.toml` の `[featu
 
 ```bash
 mkdir -p ~/.claude/skills/graphify
-curl -fsSL https://raw.githubusercontent.com/safishamsi/graphify/v3/graphify/skill.md \
+curl -fsSL https://raw.githubusercontent.com/hypnwtykvmpr/vampyre/v9/graphify/skill.md \
   > ~/.claude/skills/graphify/SKILL.md
 ```
 
@@ -176,7 +175,6 @@ graphify query "..." --graph path/to/graph.json
 |------|-----------|------------|
 | コード | `.py .ts .js .go .rs .java .c .cpp .rb .cs .kt .scala .php .swift .lua .zig .ps1 .ex .exs .m .mm` | tree-sitter による AST + コールグラフ + docstring/コメントの根拠 |
 | ドキュメント | `.md .txt .rst` | Claude による概念 + 関係性 + 設計根拠 |
-| Office | `.docx .xlsx` | Markdown に変換した後 Claude で抽出（`pip install graphifyy[office]` が必要） |
 | 論文 | `.pdf` | 引用マイニング + 概念抽出 |
 | 画像 | `.png .jpg .webp .gif` | Claude Vision - スクリーンショット、図、任意の言語 |
 

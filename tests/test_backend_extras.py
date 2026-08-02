@@ -1,11 +1,5 @@
-"""The claude backend must be installable via an extra, and the missing-package
-message must point uv-tool users at the right command.
+"""The Claude backend must be installable through the fork's uv-tool extra."""
 
-Friction this guards: `uv tool install graphifyy` puts graphify in an isolated
-venv. A user with ANTHROPIC_API_KEY set then hit "anthropic package required"
-with no extra to satisfy it (claude was the only backend with no `[extra]`), and
-the message said `pip install anthropic`, which does not reach a uv tool venv.
-"""
 from pathlib import Path
 
 from graphify.llm import _backend_pkg_hint
@@ -37,5 +31,5 @@ def test_anthropic_in_all_extra():
 def test_backend_pkg_hint_points_at_uv_tool_and_extra():
     msg = _backend_pkg_hint("anthropic", "anthropic")
     assert "uv tool install" in msg
-    assert 'graphifyy[anthropic]' in msg
-    assert "pip install anthropic" in msg  # pip/venv fallback still mentioned
+    assert "graphifyy[anthropic]" in msg
+    assert "git+https://github.com/hypnwtykvmpr/vampyre.git@v9" in msg

@@ -46,7 +46,7 @@ dependencies = [
 
 ```bash
 cd /home/safi/graphify
-venv/bin/pip install datasketch rapidfuzz -q
+uv add --dev datasketch rapidfuzz
 ```
 
 Expected: both install without errors.

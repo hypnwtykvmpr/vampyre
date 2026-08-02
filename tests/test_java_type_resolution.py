@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import networkx as nx
+
 from graphify.build import build_from_json
 from graphify.extract import extract
 
@@ -63,7 +65,8 @@ def test_java_ambiguous_implements_disambiguated_by_import(tmp_path: Path):
 
     # No bare shadow stub for the interface should survive.
     shadow = [
-        n for n in result["nodes"]
+        n
+        for n in result["nodes"]
         if n.get("label") == "AIResponseHandler" and not n.get("source_file")
     ]
     assert not shadow, f"orphan shadow node(s) remain: {[n['id'] for n in shadow]}"
@@ -92,9 +95,9 @@ def test_java_implements_edge_survives_build(tmp_path: Path):
     )
     result = extract([iface, impl], cache_root=tmp_path)
     G = build_from_json(result, directed=True)
-    impl_edges = [
-        (u, v) for u, v, d in G.edges(data=True) if d.get("relation") == "implements"
-    ]
+    assert isinstance(G, nx.DiGraph)
+    assert not isinstance(G, nx.MultiDiGraph)
+    impl_edges = [(u, v) for u, v, d in G.edges(data=True) if d.get("relation") == "implements"]
     assert impl_edges
     # The interface node has an incoming implements edge (not isolated).
     assert any(G.in_degree(v) >= 1 for _, v in impl_edges)
@@ -118,8 +121,7 @@ def test_java_record_becomes_type_node(tmp_path: Path):
     )
     result = extract([rec], cache_root=tmp_path)
 
-    foo = [n for n in result["nodes"]
-           if n.get("label") == "Foo" and n.get("source_file")]
+    foo = [n for n in result["nodes"] if n.get("label") == "Foo" and n.get("source_file")]
     assert foo, "record Foo should be a type node, not just the file node"
     contains = _label_edges(result, {"contains"})
     assert ("Foo.java", "contains", "Foo") in contains
@@ -164,18 +166,18 @@ def test_java_cross_file_constructor_call_resolves(tmp_path: Path):
         "package com.app;\n"
         "public class Helper {\n"
         "    public void build() {\n"
-        "        Object o = new Foo(1, \"a\");\n"
+        '        Object o = new Foo(1, "a");\n'
         "        System.out.println(o);\n"
         "    }\n"
         "}\n",
     )
     result = extract([foo, caller], cache_root=tmp_path)
 
-    foo_id = next(n["id"] for n in result["nodes"]
-                  if n.get("label") == "Foo" and n.get("source_file"))
+    foo_id = next(
+        n["id"] for n in result["nodes"] if n.get("label") == "Foo" and n.get("source_file")
+    )
     call_targets = {
-        e["target"] for e in result["edges"]
-        if e.get("relation") in ("calls", "references")
+        e["target"] for e in result["edges"] if e.get("relation") in ("calls", "references")
     }
     assert foo_id in call_targets, "new Foo(...) should produce a calls/references edge to Foo"
 

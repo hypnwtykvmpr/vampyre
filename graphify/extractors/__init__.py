@@ -5,6 +5,7 @@ moved name), so importing from graphify.extract keeps working unchanged.
 LANGUAGE_EXTRACTORS is the registry seed; wiring dispatch through it is a
 later, separate step. See MIGRATION.md for how to port another language.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -2,6 +2,8 @@
   <a href="https://graphifylabs.ai"><img src="https://raw.githubusercontent.com/safishamsi/graphify/v4/docs/logo-text.svg" width="260" height="64" alt="Graphify"/></a>
 </p>
 
+> **Vampyre fork:** This translation covers upstream-derived features and may lag behind the active fork. The English README is authoritative for current behavior and installation. Install Vampyre from the `v9` branch; the `graphifyy` registry package is upstream Graphify, not this fork.
+
 <p align="center">
   🇺🇸 <a href="../../README.md">English</a> | 🇨🇳 <a href="README.zh-CN.md">简体中文</a> | 🇯🇵 <a href="README.ja-JP.md">日本語</a> | 🇰🇷 <a href="README.ko-KR.md">한국어</a> | 🇩🇪 <a href="README.de-DE.md">Deutsch</a> | 🇫🇷 <a href="README.fr-FR.md">Français</a> | 🇪🇸 <a href="README.es-ES.md">Español</a> | 🇮🇳 <a href="README.hi-IN.md">हिन्दी</a> | 🇧🇷 <a href="README.pt-BR.md">Português</a> | 🇷🇺 <a href="README.ru-RU.md">Русский</a> | 🇸🇦 <a href="README.ar-SA.md">العربية</a> | 🇮🇹 <a href="README.it-IT.md">Italiano</a> | 🇵🇱 <a href="README.pl-PL.md">Polski</a> | 🇳🇱 <a href="README.nl-NL.md">Nederlands</a> | 🇹🇷 <a href="README.tr-TR.md">Türkçe</a> | 🇺🇦 <a href="README.uk-UA.md">Українська</a> | 🇻🇳 <a href="README.vi-VN.md">Tiếng Việt</a> | 🇮🇩 <a href="README.id-ID.md">Bahasa Indonesia</a> | 🇸🇪 <a href="README.sv-SE.md">Svenska</a> | 🇬🇷 <a href="README.el-GR.md">Ελληνικά</a> | 🇷🇴 <a href="README.ro-RO.md">Română</a> | 🇨🇿 <a href="README.cs-CZ.md">Čeština</a> | 🇫🇮 <a href="README.fi-FI.md">Suomi</a> | 🇩🇰 <a href="README.da-DK.md">Dansk</a> | 🇳🇴 <a href="README.no-NO.md">Norsk</a> | 🇭🇺 <a href="README.hu-HU.md">Magyar</a> | 🇹🇭 <a href="README.th-TH.md">ภาษาไทย</a> | 🇺🇿 <a href="README.uz-UZ.md">Oʻzbekcha</a> | 🇹🇼 <a href="README.zh-TW.md">繁體中文</a>
 </p>
@@ -9,9 +11,7 @@
 <p align="center">
   <a href="https://www.ycombinator.com/companies/graphify"><img src="https://img.shields.io/badge/Y%20Combinator-S26-F0652F?style=flat&logo=ycombinator&logoColor=white" alt="YC S26"/></a>
   <a href="https://safishamsi.gumroad.com/l/qetvlo"><img src="https://img.shields.io/badge/Book-The%20Memory%20Layer-2ea44f?style=flat&logo=gitbook&logoColor=white" alt="The Memory Layer"/></a>
-  <a href="https://github.com/safishamsi/graphify/actions/workflows/ci.yml"><img src="https://github.com/safishamsi/graphify/actions/workflows/ci.yml/badge.svg?branch=v8" alt="CI"/></a>
-  <a href="https://pypi.org/project/graphifyy/"><img src="https://img.shields.io/pypi/v/graphifyy" alt="PyPI"/></a>
-  <a href="https://clickpy.clickhouse.com/dashboard/graphifyy"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fsql-clickhouse.clickhouse.com%2F%3Fquery%3DSELECT%2520concat%2528toString%2528round%2528sum%2528count%2529%2F1000%2529%2529%2C%2520%2527k%2527%2529%2520AS%2520c%2520FROM%2520pypi.pypi_downloads%2520WHERE%2520project%253D%2527graphifyy%2527%2520FORMAT%2520JSON%26user%3Ddemo&query=%24.data%5B0%5D.c&label=downloads&color=blue" alt="Downloads"/></a>
+  <a href="https://github.com/hypnwtykvmpr/vampyre/actions/workflows/ci.yml"><img src="https://github.com/hypnwtykvmpr/vampyre/actions/workflows/ci.yml/badge.svg?branch=v9" alt="CI"/></a>
   <a href="https://github.com/sponsors/safishamsi"><img src="https://img.shields.io/badge/sponsor-safishamsi-ea4aaa?logo=github-sponsors" alt="Sponsor"/></a>
   <a href="https://www.linkedin.com/company/graphify-labs"><img src="https://img.shields.io/badge/LinkedIn-Graphify%20Labs-0077B5?logo=linkedin" alt="LinkedIn"/></a>
   <a href="https://x.com/graphifyy"><img src="https://img.shields.io/badge/X-graphifyy-000000?logo=x&logoColor=white" alt="X"/></a>
@@ -54,7 +54,6 @@ graphify export callflow-html
 |---|---|---|---|
 | Python | 3.10+ | `python --version` | [python.org](https://www.python.org/downloads/) |
 | uv *(рекомендовано)* | будь-яка | `uv --version` | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| pipx *(альтернатива)* | будь-яка | `pipx --version` | `pip install pipx` |
 
 **Швидке встановлення на macOS (Homebrew):**
 ```bash
@@ -68,7 +67,6 @@ winget install astral-sh.uv
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt install python3.12 python3-pip pipx
 # або встановити uv:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
@@ -77,17 +75,14 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## Встановлення
 
-> **Офіційний пакет:** Пакет PyPI — `graphifyy` (подвійна y). Інші пакети `graphify*` на PyPI не є афілійованими. Команда CLI залишається `graphify`.
 
 **Крок 1 — встановити пакет:**
 
 ```bash
 # Рекомендовано (uv автоматично додає graphify до PATH):
-uv tool install graphifyy
+uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
 
 # Альтернативи:
-pipx install graphifyy
-pip install graphifyy
 ```
 
 **Крок 2 — зареєструвати навичку у вашому ШІ-асистенті:**
@@ -109,7 +104,6 @@ graphify install --project --platform codex
 
 > **Примітка для PowerShell:** Використовуйте `graphify .` замість `/graphify .` — ведучий слеш є роздільником шляху в PowerShell.
 
-> **`graphify: command not found`?** Використовуйте `uv tool install graphifyy` або `pipx install graphifyy` — обидва автоматично додають CLI до PATH. При використанні звичайного `pip` додайте `~/.local/bin` (Linux) або `~/Library/Python/3.x/bin` (Mac) до вашого PATH, або запустіть `python -m graphify`.
 
 ### Оберіть платформу
 
@@ -143,20 +137,6 @@ graphify install --project --platform codex
 
 | Пакет | Що додає | Встановлення |
 |---|---|---|
-| `pdf` | Вилучення PDF | `pip install "graphifyy[pdf]"` |
-| `office` | Підтримка `.docx` та `.xlsx` | `pip install "graphifyy[office]"` |
-| `google` | Рендеринг Google Sheets | `pip install "graphifyy[google]"` |
-| `video` | Транскрипція відео/аудіо (faster-whisper + yt-dlp) | `pip install "graphifyy[video]"` |
-| `mcp` | MCP stdio-сервер | `pip install "graphifyy[mcp]"` |
-| `neo4j` | Підтримка надсилання до Neo4j | `pip install "graphifyy[neo4j]"` |
-| `svg` | Експорт графу в SVG | `pip install "graphifyy[svg]"` |
-| `leiden` | Виявлення спільнот Leiden (лише Python < 3.13) | `pip install "graphifyy[leiden]"` |
-| `ollama` | Локальний вивід Ollama | `pip install "graphifyy[ollama]"` |
-| `openai` | OpenAI / OpenAI-сумісні API | `pip install "graphifyy[openai]"` |
-| `gemini` | Google Gemini API | `pip install "graphifyy[gemini]"` |
-| `bedrock` | AWS Bedrock (використовує IAM, без API-ключа) | `pip install "graphifyy[bedrock]"` |
-| `sql` | Вилучення SQL схем | `pip install "graphifyy[sql]"` |
-| `all` | Все вищезазначене | `pip install "graphifyy[all]"` |
 
 ---
 
@@ -206,19 +186,14 @@ graphify install --project --platform codex
 |------|-----------|
 | Код (31 мова) | `.py .ts .js .jsx .tsx .mjs .go .rs .java .c .cpp .h .hpp .rb .cs .kt .scala .php .swift .lua .luau .zig .ps1 .ex .exs .m .mm .jl .vue .svelte .astro .groovy .gradle .dart .v .sv .sql .f .f90 .f95 .f03 .f08 .pas .pp .dpr .dpk .lpr .inc .dfm .lfm .lpk .sh .bash .json` |
 | Документи | `.md .mdx .qmd .html .txt .rst .yaml .yml` |
-| Office | `.docx .xlsx` (потрібен `pip install graphifyy[office]`) |
-| Google Workspace | `.gdoc .gsheet .gslides` (опціонально; потрібна автентифікація `gws` та `--google-workspace`; Sheets потребує `pip install graphifyy[google]`) |
 | PDF | `.pdf` |
 | Зображення | `.png .jpg .webp .gif` |
-| Відео / Аудіо | `.mp4 .mov .mp3 .wav` та інші (потрібен `pip install graphifyy[video]`) |
-| YouTube / URL | будь-який URL відео (потрібен `pip install graphifyy[video]`) |
 
 Код витягується локально без API-викликів (AST через tree-sitter). Все інше обробляється через API моделі вашого ШІ-асистента.
 
 Файли `.gdoc`, `.gsheet` та `.gslides` з Google Drive for desktop — це ярлики-посилання, а не вміст документів. Щоб включити нативні Google Docs, Sheets та Slides у безголове витягування, встановіть та автентифікуйте [`gws` CLI](https://github.com/googleworkspace/cli), потім запустіть:
 
 ```bash
-pip install "graphifyy[google]"  # потрібен для рендерингу таблиць Google Sheets
 gws auth login -s drive
 graphify extract ./docs --google-workspace
 ```
@@ -314,7 +289,6 @@ MCP-сервер надає асистенту структурований до
 
 > **Примітка для WSL / Linux:** Ubuntu постачає `python3`, а не `python`. Використовуйте venv, щоб уникнути конфліктів:
 > ```bash
-> python3 -m venv .venv && .venv/bin/pip install "graphifyy[mcp]"
 > ```
 
 ---
@@ -360,14 +334,11 @@ MCP-сервер надає асистенту структурований до
 
 ## Вирішення проблем
 
-**`graphify: command not found` після `pip install graphifyy`**
 pip встановлює скрипти в директорію bin для користувача, яка може не бути в PATH. Виправлення:
 - macOS: додайте `~/Library/Python/3.x/bin` до PATH у `~/.zshrc`
 - Linux: додайте `~/.local/bin` до PATH у `~/.bashrc`
-- Або використовуйте `uv tool install graphifyy` / `pipx install graphifyy` — обидва автоматично керують PATH.
 
 **`python -m graphify` працює, але команда `graphify` — ні**
-PATH вашої оболонки не включає директорію скриптів Python. Використовуйте `uv` або `pipx` замість звичайного `pip`.
 
 **`/graphify .` викликає "path not recognized" в PowerShell**
 PowerShell трактує ведучий `/` як роздільник шляху. Використовуйте `graphify .` (без слеша) на Windows.
@@ -406,7 +377,7 @@ ANTHROPIC_API_KEY=sk-... graphify extract ./docs --backend claude
 **Попередження про невідповідність версій навички у вашому IDE**
 Встановлена версія graphify відрізняється від файлу навички. Оновіть:
 ```bash
-uv tool upgrade graphifyy
+uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
 graphify install  # перезаписує файл навички
 ```
 
@@ -545,7 +516,7 @@ graphify cluster-only ./my-project --exclude-hubs 99           # виключи�
 Клонуйте репо і встановіть у редагованому режимі:
 
 ```bash
-git clone https://github.com/safishamsi/graphify.git
+git clone https://github.com/hypnwtykvmpr/vampyre.git
 cd graphify
 git checkout v8                        # гілка активної розробки
 
@@ -554,7 +525,6 @@ python3 -m venv .venv
 source .venv/bin/activate              # Windows: .venv\Scripts\activate
 
 # Встановіть у редагованому режимі з усіма опціональними пакетами:
-pip install -e ".[all]"
 ```
 
 Перевірте редаговане встановлення:
@@ -566,7 +536,6 @@ python -c "import graphify; print(graphify.__file__)"
 ### Запуск тестів
 
 ```bash
-pip install pytest
 pytest tests/ -q                       # запустити весь набір тестів
 pytest tests/test_extract.py -q        # один модуль
 pytest tests/ -q -k "python"           # фільтрація за назвою

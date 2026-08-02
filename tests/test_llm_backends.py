@@ -1,5 +1,9 @@
 """Tests for direct semantic-extraction backend selection."""
 
+import json as _json
+import os
+import subprocess
+import sys as _sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -172,6 +176,7 @@ def test_corpus_parallel_oversized_markdown_does_not_crash_on_fileslice(tmp_path
     # FileSlice units must not crash extract_files_direct's Path() coercion
     # (#1386). The earlier str-path tests used tiny files, so slicing never ran.
     from graphify.llm import _FILE_CHAR_CAP
+
     _clear_backend_env(monkeypatch)
     monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
     big = tmp_path / "big.md"
@@ -196,9 +201,11 @@ def test_str_path_entry_points_handle_edge_cases(tmp_path, monkeypatch):
         # empty list: no chunks, nothing to extract, no crash
         empty = llm.extract_corpus_parallel([], backend="gemini", root=tmp_path)
         assert empty["nodes"] == [] and empty["failed_chunks"] == 0
+
         # a Path subclass is still a Path and must pass through unchanged
         class _SubPath(type(Path())):  # concrete OS-specific Path subclass
             pass
+
         sub = _SubPath(tmp_path / "c.md")
         sub.write_text("# C\n\nNode.\n")
         assert llm.extract_files_direct([sub], backend="gemini", root=tmp_path) is result
@@ -331,6 +338,7 @@ def test_response_is_hollow_accepts_real_extraction():
 
 def _fake_openai_response(content, *, finish_reason="stop", prompt_tokens=100, completion_tokens=0):
     """Build a minimal stand-in for an `openai` SDK ChatCompletion response."""
+
     class _Usage:
         def __init__(self):
             self.prompt_tokens = prompt_tokens
@@ -364,10 +372,14 @@ def _install_fake_openai(monkeypatch, fake_resp):
         def __init__(self, *_, **__):
             self.chat = self
             self.completions = self
+
         def create(self, **__):
             return fake_resp
 
-    fake_module = types.ModuleType("openai")
+    class _OpenAIModule(types.ModuleType):
+        OpenAI: type[_FakeOpenAI]
+
+    fake_module = _OpenAIModule("openai")
     fake_module.OpenAI = _FakeOpenAI
     monkeypatch.setitem(sys.modules, "openai", fake_module)
 
@@ -381,8 +393,13 @@ def test_call_openai_compat_relabels_empty_content_as_length(monkeypatch):
     _install_fake_openai(monkeypatch, fake_resp)
 
     result = llm._call_openai_compat(
-        "http://localhost:11434/v1", "ollama", "qwen2.5-coder:7b",
-        "user msg", temperature=0, max_completion_tokens=8192, backend="ollama",
+        "http://localhost:11434/v1",
+        "ollama",
+        "qwen2.5-coder:7b",
+        "user msg",
+        temperature=0,
+        max_completion_tokens=8192,
+        backend="ollama",
     )
     assert result["finish_reason"] == "length", (
         "empty content from a 'successful' call must be re-labelled so the "
@@ -395,8 +412,13 @@ def test_call_openai_compat_relabels_none_content_as_length(monkeypatch):
     _install_fake_openai(monkeypatch, fake_resp)
 
     result = llm._call_openai_compat(
-        "http://localhost:11434/v1", "ollama", "qwen2.5-coder:7b",
-        "u", temperature=0, max_completion_tokens=8192, backend="ollama",
+        "http://localhost:11434/v1",
+        "ollama",
+        "qwen2.5-coder:7b",
+        "u",
+        temperature=0,
+        max_completion_tokens=8192,
+        backend="ollama",
     )
     assert result["finish_reason"] == "length"
 
@@ -405,12 +427,19 @@ def test_call_openai_compat_relabels_unparseable_json_as_length(monkeypatch):
     # A half-generated response: `{"nodes": [{"id":` parses to {} (empty
     # fragment) via _parse_llm_json's JSONDecodeError fallback. That is also
     # hollow and must trigger bisection.
-    fake_resp = _fake_openai_response('{"nodes": [{"id":', finish_reason="stop", completion_tokens=20)
+    fake_resp = _fake_openai_response(
+        '{"nodes": [{"id":', finish_reason="stop", completion_tokens=20
+    )
     _install_fake_openai(monkeypatch, fake_resp)
 
     result = llm._call_openai_compat(
-        "http://localhost:11434/v1", "ollama", "qwen2.5-coder:7b",
-        "u", temperature=0, max_completion_tokens=8192, backend="ollama",
+        "http://localhost:11434/v1",
+        "ollama",
+        "qwen2.5-coder:7b",
+        "u",
+        temperature=0,
+        max_completion_tokens=8192,
+        backend="ollama",
     )
     assert result["finish_reason"] == "length"
 
@@ -425,8 +454,13 @@ def test_call_openai_compat_preserves_real_finish_reason(monkeypatch):
     _install_fake_openai(monkeypatch, fake_resp)
 
     result = llm._call_openai_compat(
-        "http://localhost:11434/v1", "k", "m",
-        "u", temperature=0, max_completion_tokens=8192, backend="kimi",
+        "http://localhost:11434/v1",
+        "k",
+        "m",
+        "u",
+        temperature=0,
+        max_completion_tokens=8192,
+        backend="kimi",
     )
     assert result["finish_reason"] == "stop"
     assert result["nodes"] == [{"id": "a"}]
@@ -458,7 +492,10 @@ def _install_capturing_openai(monkeypatch):
                 completion_tokens=100,
             )
 
-    fake_module = types.ModuleType("openai")
+    class _OpenAIModule(types.ModuleType):
+        OpenAI: type[_FakeOpenAI]
+
+    fake_module = _OpenAIModule("openai")
     fake_module.OpenAI = _FakeOpenAI
     monkeypatch.setitem(sys.modules, "openai", fake_module)
     return captured
@@ -470,8 +507,13 @@ def test_ollama_extra_body_sets_num_ctx_and_keep_alive(monkeypatch):
     monkeypatch.delenv("GRAPHIFY_OLLAMA_KEEP_ALIVE", raising=False)
 
     llm._call_openai_compat(
-        "http://localhost:11434/v1", "ollama", "qwen2.5-coder:7b",
-        "user msg", temperature=0, max_completion_tokens=8192, backend="ollama",
+        "http://localhost:11434/v1",
+        "ollama",
+        "qwen2.5-coder:7b",
+        "user msg",
+        temperature=0,
+        max_completion_tokens=8192,
+        backend="ollama",
     )
 
     assert "extra_body" in captured, "extra_body must be sent to Ollama"
@@ -494,8 +536,13 @@ def test_ollama_num_ctx_scales_with_small_token_budget(monkeypatch):
     small_chunk_msg = "x" * 32_000
 
     llm._call_openai_compat(
-        "http://localhost:11434/v1", "ollama", "qwen2.5-coder:7b",
-        small_chunk_msg, temperature=0, max_completion_tokens=16384, backend="ollama",
+        "http://localhost:11434/v1",
+        "ollama",
+        "qwen2.5-coder:7b",
+        small_chunk_msg,
+        temperature=0,
+        max_completion_tokens=16384,
+        backend="ollama",
     )
 
     num_ctx = captured["extra_body"]["options"]["num_ctx"]
@@ -514,8 +561,13 @@ def test_ollama_num_ctx_env_override(monkeypatch):
     monkeypatch.delenv("GRAPHIFY_OLLAMA_KEEP_ALIVE", raising=False)
 
     llm._call_openai_compat(
-        "http://localhost:11434/v1", "ollama", "qwen2.5-coder:7b",
-        "u", temperature=0, max_completion_tokens=8192, backend="ollama",
+        "http://localhost:11434/v1",
+        "ollama",
+        "qwen2.5-coder:7b",
+        "u",
+        temperature=0,
+        max_completion_tokens=8192,
+        backend="ollama",
     )
 
     assert captured["extra_body"]["options"]["num_ctx"] == 65536
@@ -525,8 +577,13 @@ def test_non_ollama_backend_gets_no_num_ctx_extra_body(monkeypatch):
     captured = _install_capturing_openai(monkeypatch)
 
     llm._call_openai_compat(
-        "https://api.openai.com/v1", "sk-test", "gpt-4.1-mini",
-        "u", temperature=0, max_completion_tokens=8192, backend="openai",
+        "https://api.openai.com/v1",
+        "sk-test",
+        "gpt-4.1-mini",
+        "u",
+        temperature=0,
+        max_completion_tokens=8192,
+        backend="openai",
     )
 
     eb = captured.get("extra_body")
@@ -537,8 +594,13 @@ def test_openai_compat_forces_non_streaming_response(monkeypatch):
     captured = _install_capturing_openai(monkeypatch)
 
     llm._call_openai_compat(
-        "https://gateway.example/v1", "sk-test", "gpt-4.1-mini",
-        "u", temperature=0, max_completion_tokens=8192, backend="openai",
+        "https://gateway.example/v1",
+        "sk-test",
+        "gpt-4.1-mini",
+        "u",
+        temperature=0,
+        max_completion_tokens=8192,
+        backend="openai",
     )
 
     assert captured["stream"] is False
@@ -556,8 +618,13 @@ def test_call_openai_compat_uses_explicit_extra_body(monkeypatch):
     captured = _install_capturing_openai(monkeypatch)
 
     llm._call_openai_compat(
-        "https://kitor.example/vllm/v1", "tk", "Qwen3.6-27B",
-        "u", temperature=0, max_completion_tokens=8192, backend="kitor-vllm",
+        "https://kitor.example/vllm/v1",
+        "tk",
+        "Qwen3.6-27B",
+        "u",
+        temperature=0,
+        max_completion_tokens=8192,
+        backend="kitor-vllm",
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
 
@@ -570,8 +637,13 @@ def test_call_openai_compat_extra_body_wins_over_moonshot_default(monkeypatch):
     captured = _install_capturing_openai(monkeypatch)
 
     llm._call_openai_compat(
-        "https://api.moonshot.ai/v1", "tk", "kimi-k2-thinking",
-        "u", temperature=0, max_completion_tokens=8192, backend="kimi",
+        "https://api.moonshot.ai/v1",
+        "tk",
+        "kimi-k2-thinking",
+        "u",
+        temperature=0,
+        max_completion_tokens=8192,
+        backend="kimi",
         extra_body={"thinking": {"type": "enabled"}},
     )
 
@@ -586,8 +658,13 @@ def test_call_openai_compat_explicit_extra_body_skips_ollama_auto_derive(monkeyp
     monkeypatch.delenv("GRAPHIFY_OLLAMA_KEEP_ALIVE", raising=False)
 
     llm._call_openai_compat(
-        "http://localhost:11434/v1", "ollama", "qwen2.5-coder:7b",
-        "u", temperature=0, max_completion_tokens=8192, backend="ollama",
+        "http://localhost:11434/v1",
+        "ollama",
+        "qwen2.5-coder:7b",
+        "u",
+        temperature=0,
+        max_completion_tokens=8192,
+        backend="ollama",
         extra_body={"options": {"num_ctx": 4096}},
     )
 
@@ -615,8 +692,14 @@ def test_extract_corpus_parallel_ollama_runs_serially(tmp_path, monkeypatch):
     with patch("graphify.llm.extract_files_direct", side_effect=fake_extract):
         with patch("graphify.llm.ThreadPoolExecutor") as mock_pool:
             result = llm.extract_corpus_parallel(
-                files, backend="ollama", api_key="ollama", model="qwen2.5-coder:7b",
-                root=tmp_path, token_budget=None, chunk_size=2, max_concurrency=4,
+                files,
+                backend="ollama",
+                api_key="ollama",
+                model="qwen2.5-coder:7b",
+                root=tmp_path,
+                token_budget=None,
+                chunk_size=2,
+                max_concurrency=4,
             )
 
     mock_pool.assert_not_called()
@@ -639,8 +722,14 @@ def test_extract_corpus_parallel_ollama_parallel_env_restores_concurrency(tmp_pa
             )()
             try:
                 llm.extract_corpus_parallel(
-                    files, backend="ollama", api_key="ollama", model="m",
-                    root=tmp_path, token_budget=None, chunk_size=2, max_concurrency=4,
+                    files,
+                    backend="ollama",
+                    api_key="ollama",
+                    model="m",
+                    root=tmp_path,
+                    token_budget=None,
+                    chunk_size=2,
+                    max_concurrency=4,
                 )
             except Exception:
                 pass  # mock scaffolding may not be complete; we only care about the call
@@ -666,16 +755,24 @@ def test_adaptive_retry_bisects_on_hollow_ollama_response(tmp_path):
             # Hollow response: looks successful, finish_reason already
             # rewritten to "length" by _call_openai_compat.
             return {
-                "nodes": [], "edges": [], "hyperedges": [],
-                "input_tokens": 100, "output_tokens": 0,
-                "model": "m", "finish_reason": "length",
+                "nodes": [],
+                "edges": [],
+                "hyperedges": [],
+                "input_tokens": 100,
+                "output_tokens": 0,
+                "model": "m",
+                "finish_reason": "length",
             }
         return _ok(nodes=[{"id": f.stem} for f in chunk])
 
     with patch("graphify.llm.extract_files_direct", side_effect=fake_extract):
         result = llm._extract_with_adaptive_retry(
-            files, backend="ollama", api_key="ollama", model="qwen2.5-coder:7b",
-            root=tmp_path, max_depth=3,
+            files,
+            backend="ollama",
+            api_key="ollama",
+            model="qwen2.5-coder:7b",
+            root=tmp_path,
+            max_depth=3,
         )
 
     assert len(result["nodes"]) == 4, (
@@ -708,7 +805,10 @@ def _install_fake_azure_openai(monkeypatch, fake_resp):
             captured["create_kwargs"] = kwargs
             return fake_resp
 
-    fake_module = types.ModuleType("openai")
+    class _AzureOpenAIModule(types.ModuleType):
+        AzureOpenAI: type[_FakeAzureOpenAI]
+
+    fake_module = _AzureOpenAIModule("openai")
     fake_module.AzureOpenAI = _FakeAzureOpenAI
     monkeypatch.setitem(sys.modules, "openai", fake_module)
     return captured
@@ -735,7 +835,9 @@ def test_call_azure_uses_correct_client_params_and_max_completion_tokens(monkeyp
 
     assert captured["init_kwargs"].get("azure_endpoint") == "https://my-resource.openai.azure.com/"
     assert captured["init_kwargs"].get("api_version") == "2024-08-01-preview"
-    assert "max_completion_tokens" in captured["create_kwargs"], "must use max_completion_tokens not max_tokens"
+    assert "max_completion_tokens" in captured["create_kwargs"], (
+        "must use max_completion_tokens not max_tokens"
+    )
     assert "max_tokens" not in captured["create_kwargs"], "deprecated max_tokens must not be sent"
     assert result["nodes"] == [{"id": "a"}]
 
@@ -770,7 +872,17 @@ def test_estimate_cost_azure_no_keyerror():
 
 @pytest.mark.parametrize(
     "model",
-    ["o1", "o1-preview", "o1-mini", "o3", "o3-mini", "o4-mini", "gpt-5", "gpt-5-mini", "openai/o3-mini"],
+    [
+        "o1",
+        "o1-preview",
+        "o1-mini",
+        "o3",
+        "o3-mini",
+        "o4-mini",
+        "gpt-5",
+        "gpt-5-mini",
+        "openai/o3-mini",
+    ],
 )
 def test_model_requires_default_temperature_true_for_reasoning_models(model):
     assert llm._model_requires_default_temperature(model) is True
@@ -870,7 +982,9 @@ def test_native_extraction_prompt_requests_hyperedges():
         assert "3 or more nodes" in prompt, f"deep={deep}: prompt lacks the hyperedge guidance"
         # The schema example must show a populated hyperedge, not an empty array.
         assert '"hyperedges":[]' not in prompt, f"deep={deep}: schema still shows empty hyperedges"
-        assert '"nodes":["node_id1"' in prompt, f"deep={deep}: schema lacks a populated hyperedge example"
+        assert '"nodes":["node_id1"' in prompt, (
+            f"deep={deep}: schema lacks a populated hyperedge example"
+        )
 
 
 def test_native_extraction_prompt_matches_skill_spec_on_hyperedges():
@@ -880,55 +994,73 @@ def test_native_extraction_prompt_matches_skill_spec_on_hyperedges():
     """
     spec = (
         Path(__file__).resolve().parents[1]
-        / "tools" / "skillgen" / "fragments" / "references" / "shared" / "extraction-spec.md"
+        / "tools"
+        / "skillgen"
+        / "fragments"
+        / "references"
+        / "shared"
+        / "extraction-spec.md"
     ).read_text(encoding="utf-8")
     shared = "3 or more nodes clearly participate together"
     assert shared in spec, "skill extraction-spec changed its hyperedge wording"
-    assert shared in llm._EXTRACTION_SYSTEM, "native prompt drifted from the skill hyperedge wording"
+    assert shared in llm._EXTRACTION_SYSTEM, (
+        "native prompt drifted from the skill hyperedge wording"
+    )
 
 
 # --- *_BASE_URL env overrides for kimi / gemini / deepseek (#1458) -------------
 # BACKENDS reads the env at import time, so each case runs in a fresh interpreter
 # (subprocess) to avoid reload contamination of the test session.
-import subprocess
-import sys as _sys
-
-
 def _backend_base_url(backend: str, env_extra: dict) -> str:
     out = subprocess.run(
-        [_sys.executable, "-c",
-         f"import graphify.llm as l; print(l.BACKENDS[{backend!r}]['base_url'])"],
-        env={**os.environ, **env_extra}, capture_output=True, text=True, check=True,
+        [
+            _sys.executable,
+            "-c",
+            f"import graphify.llm as l; print(l.BACKENDS[{backend!r}]['base_url'])",
+        ],
+        env={**os.environ, **env_extra},
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return out.stdout.strip()
 
 
-import os  # noqa: E402
-
-
-@pytest.mark.parametrize("backend,env_var,override", [
-    ("kimi", "KIMI_BASE_URL", "https://proxy.example/kimi/v1"),
-    ("gemini", "GEMINI_BASE_URL", "https://proxy.example/gemini"),
-    ("deepseek", "DEEPSEEK_BASE_URL", "https://proxy.example/deepseek"),
-])
+@pytest.mark.parametrize(
+    "backend,env_var,override",
+    [
+        ("kimi", "KIMI_BASE_URL", "https://proxy.example/kimi/v1"),
+        ("gemini", "GEMINI_BASE_URL", "https://proxy.example/gemini"),
+        ("deepseek", "DEEPSEEK_BASE_URL", "https://proxy.example/deepseek"),
+    ],
+)
 def test_base_url_env_overrides(backend, env_var, override):
     assert _backend_base_url(backend, {env_var: override}) == override
 
 
-@pytest.mark.parametrize("backend,default", [
-    ("kimi", "https://api.moonshot.ai/v1"),
-    ("gemini", "https://generativelanguage.googleapis.com/v1beta/openai/"),
-    ("deepseek", "https://api.deepseek.com"),
-])
+@pytest.mark.parametrize(
+    "backend,default",
+    [
+        ("kimi", "https://api.moonshot.ai/v1"),
+        ("gemini", "https://generativelanguage.googleapis.com/v1beta/openai/"),
+        ("deepseek", "https://api.deepseek.com"),
+    ],
+)
 def test_base_url_defaults_without_env(backend, default):
     # Ensure the override env vars are unset so the hardcoded default is used.
     cleared = {k: "" for k in ("KIMI_BASE_URL", "GEMINI_BASE_URL", "DEEPSEEK_BASE_URL")}
     # empty string would be falsy-but-set; delete instead by reconstructing env without them
     env = {k: v for k, v in os.environ.items() if k not in cleared}
     out = subprocess.run(
-        [_sys.executable, "-c",
-         f"import graphify.llm as l; print(l.BACKENDS[{backend!r}]['base_url'])"],
-        env=env, capture_output=True, text=True, check=True,
+        [
+            _sys.executable,
+            "-c",
+            f"import graphify.llm as l; print(l.BACKENDS[{backend!r}]['base_url'])",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     assert out.stdout.strip() == default
 
@@ -938,8 +1070,6 @@ def test_base_url_defaults_without_env(backend, default):
 # bytes from claude.cmd on Chinese Windows (GBK/cp936) don't crash the reader
 # thread.
 # ---------------------------------------------------------------------------
-
-import json as _json
 
 
 def _make_cli_envelope(result_text: str) -> str:
@@ -959,13 +1089,16 @@ def test_call_claude_cli_passes_errors_replace_to_subprocess():
     mock_proc.stdout = valid_envelope
     mock_proc.stderr = ""
 
-    with patch("platform.system", return_value="Linux"), \
-         patch("shutil.which", return_value="/usr/bin/claude"), \
-         patch("subprocess.run", return_value=mock_proc) as mock_run:
+    with (
+        patch("platform.system", return_value="Linux"),
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", return_value=mock_proc) as mock_run,
+    ):
         llm._call_claude_cli("test prompt")
 
-    assert mock_run.call_args.kwargs.get("errors") == "replace", \
+    assert mock_run.call_args.kwargs.get("errors") == "replace", (
         "subprocess.run missing errors='replace' — non-UTF-8 bytes will crash the reader thread"
+    )
 
 
 def test_call_claude_cli_tolerates_non_utf8_in_stderr():
@@ -978,9 +1111,11 @@ def test_call_claude_cli_tolerates_non_utf8_in_stderr():
     mock_proc.stdout = ""
     mock_proc.stderr = "GBK error: ��"  # replacement chars after decode
 
-    with patch("platform.system", return_value="Linux"), \
-         patch("shutil.which", return_value="/usr/bin/claude"), \
-         patch("subprocess.run", return_value=mock_proc):
+    with (
+        patch("platform.system", return_value="Linux"),
+        patch("shutil.which", return_value="/usr/bin/claude"),
+        patch("subprocess.run", return_value=mock_proc),
+    ):
         with pytest.raises(RuntimeError, match="claude -p exited 1"):
             llm._call_claude_cli("test prompt")
 
@@ -992,9 +1127,9 @@ def test_resolve_max_retries_default_and_env(monkeypatch):
     monkeypatch.setenv("GRAPHIFY_MAX_RETRIES", "10")
     assert llm._resolve_max_retries() == 10
     monkeypatch.setenv("GRAPHIFY_MAX_RETRIES", "0")
-    assert llm._resolve_max_retries() == 0          # disable is allowed
+    assert llm._resolve_max_retries() == 0  # disable is allowed
     monkeypatch.setenv("GRAPHIFY_MAX_RETRIES", "bogus")
-    assert llm._resolve_max_retries() >= 5          # invalid -> default
+    assert llm._resolve_max_retries() >= 5  # invalid -> default
 
 
 def test_openai_compat_client_built_with_retries(monkeypatch):
@@ -1014,18 +1149,27 @@ def test_openai_compat_client_built_with_retries(monkeypatch):
 
         def create(self, **_):
             return _fake_openai_response(
-                '{"nodes":[],"edges":[],"hyperedges":[]}', finish_reason="stop",
+                '{"nodes":[],"edges":[],"hyperedges":[]}',
+                finish_reason="stop",
                 completion_tokens=10,
             )
 
-    fake_module = types.ModuleType("openai")
+    class _OpenAIModule(types.ModuleType):
+        OpenAI: type[_FakeOpenAI]
+
+    fake_module = _OpenAIModule("openai")
     fake_module.OpenAI = _FakeOpenAI
     monkeypatch.setitem(sys.modules, "openai", fake_module)
     monkeypatch.delenv("GRAPHIFY_MAX_RETRIES", raising=False)
 
     llm._call_openai_compat(
-        "https://api.moonshot.ai/v1", "fake-key", "kimi-k2",
-        "user msg", temperature=0, max_completion_tokens=4096, backend="kimi",
+        "https://api.moonshot.ai/v1",
+        "fake-key",
+        "kimi-k2",
+        "user msg",
+        temperature=0,
+        max_completion_tokens=4096,
+        backend="kimi",
     )
     assert ctor_kwargs.get("max_retries", 0) >= 5, ctor_kwargs
 
@@ -1049,7 +1193,10 @@ def test_call_llm_claude_client_built_with_timeout_and_retries(monkeypatch):
             ctor_kwargs.update(kwargs)
             self.messages = _FakeMessages()
 
-    fake_module = types.ModuleType("anthropic")
+    class _AnthropicModule(types.ModuleType):
+        Anthropic: type[_FakeAnthropic]
+
+    fake_module = _AnthropicModule("anthropic")
     fake_module.Anthropic = _FakeAnthropic
     monkeypatch.setitem(sys.modules, "anthropic", fake_module)
     monkeypatch.setattr(llm, "_get_backend_api_key", lambda _b: "fake-key")
@@ -1077,7 +1224,10 @@ def test_call_llm_openai_compat_client_built_with_timeout_and_retries(monkeypatc
         def create(self, **_):
             return _fake_openai_response("ok", finish_reason="stop", completion_tokens=1)
 
-    fake_module = types.ModuleType("openai")
+    class _OpenAIModule(types.ModuleType):
+        OpenAI: type[_FakeOpenAI]
+
+    fake_module = _OpenAIModule("openai")
     fake_module.OpenAI = _FakeOpenAI
     monkeypatch.setitem(sys.modules, "openai", fake_module)
     monkeypatch.setattr(llm, "_get_backend_api_key", lambda _b: "fake-key")

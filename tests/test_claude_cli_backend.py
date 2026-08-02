@@ -3,6 +3,7 @@
 Mocks subprocess.run + shutil.which so the suite runs on CI without
 the `claude` binary or a live network call.
 """
+
 from __future__ import annotations
 
 import json
@@ -16,19 +17,31 @@ _ENVELOPE = {
     "type": "result",
     "subtype": "success",
     "is_error": False,
-    "result": json.dumps({
-        "nodes": [
-            {"id": "foo_module", "label": "Foo", "file_type": "document", "source_file": "foo.md"},
-            {"id": "foo_greet", "label": "greet", "file_type": "code", "source_file": "foo.md"},
-        ],
-        "edges": [
-            {"source": "foo_module", "target": "foo_greet",
-             "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0},
-        ],
-        "hyperedges": [],
-        "input_tokens": 0,
-        "output_tokens": 0,
-    }),
+    "result": json.dumps(
+        {
+            "nodes": [
+                {
+                    "id": "foo_module",
+                    "label": "Foo",
+                    "file_type": "document",
+                    "source_file": "foo.md",
+                },
+                {"id": "foo_greet", "label": "greet", "file_type": "code", "source_file": "foo.md"},
+            ],
+            "edges": [
+                {
+                    "source": "foo_module",
+                    "target": "foo_greet",
+                    "relation": "references",
+                    "confidence": "EXTRACTED",
+                    "confidence_score": 1.0,
+                },
+            ],
+            "hyperedges": [],
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+    ),
     "stop_reason": "end_turn",
     "usage": {
         "input_tokens": 6,
@@ -44,8 +57,10 @@ _ENVELOPE = {
 def fake_claude(monkeypatch):
     completed = MagicMock(returncode=0, stdout=json.dumps(_ENVELOPE), stderr="")
     monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
-    with patch("shutil.which", return_value="/fake/bin/claude"), \
-         patch("subprocess.run", return_value=completed) as run:
+    with (
+        patch("shutil.which", return_value="/fake/bin/claude"),
+        patch("subprocess.run", return_value=completed) as run,
+    ):
         yield run
 
 
@@ -67,8 +82,10 @@ def test_finish_reason_length_on_max_tokens(monkeypatch):
     envelope = dict(_ENVELOPE, stop_reason="max_tokens")
     completed = MagicMock(returncode=0, stdout=json.dumps(envelope), stderr="")
     monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
-    with patch("shutil.which", return_value="/fake/bin/claude"), \
-         patch("subprocess.run", return_value=completed):
+    with (
+        patch("shutil.which", return_value="/fake/bin/claude"),
+        patch("subprocess.run", return_value=completed),
+    ):
         result = llm._call_claude_cli("dummy", max_tokens=8192)
     assert result["finish_reason"] == "length"
 
@@ -81,16 +98,20 @@ def test_raises_when_cli_missing():
 
 def test_raises_on_nonzero_exit():
     completed = MagicMock(returncode=2, stdout="", stderr="auth failed")
-    with patch("shutil.which", return_value="/fake/bin/claude"), \
-         patch("subprocess.run", return_value=completed):
+    with (
+        patch("shutil.which", return_value="/fake/bin/claude"),
+        patch("subprocess.run", return_value=completed),
+    ):
         with pytest.raises(RuntimeError, match="exited 2"):
             llm._call_claude_cli("dummy", max_tokens=8192)
 
 
 def test_raises_on_garbage_envelope():
     completed = MagicMock(returncode=0, stdout="not json", stderr="")
-    with patch("shutil.which", return_value="/fake/bin/claude"), \
-         patch("subprocess.run", return_value=completed):
+    with (
+        patch("shutil.which", return_value="/fake/bin/claude"),
+        patch("subprocess.run", return_value=completed),
+    ):
         with pytest.raises(RuntimeError, match="unparseable JSON envelope"):
             llm._call_claude_cli("dummy", max_tokens=8192)
 
@@ -174,9 +195,11 @@ def test_windows_prefers_claude_cmd_over_bare_claude(monkeypatch):
             "claude.cmd": r"C:\Users\u\AppData\Roaming\npm\claude.cmd",
         }.get(name)
 
-    with patch("platform.system", return_value="Windows"), \
-         patch("shutil.which", side_effect=fake_which), \
-         patch("subprocess.run", return_value=completed) as run:
+    with (
+        patch("platform.system", return_value="Windows"),
+        patch("shutil.which", side_effect=fake_which),
+        patch("subprocess.run", return_value=completed) as run,
+    ):
         llm._call_claude_cli("dummy", max_tokens=8192)
 
     argv = run.call_args.args[0]
@@ -199,9 +222,11 @@ def test_windows_falls_back_to_bare_claude_when_cmd_missing(monkeypatch):
             return "/usr/local/bin/claude"
         return None
 
-    with patch("platform.system", return_value="Windows"), \
-         patch("shutil.which", side_effect=fake_which), \
-         patch("subprocess.run", return_value=completed) as run:
+    with (
+        patch("platform.system", return_value="Windows"),
+        patch("shutil.which", side_effect=fake_which),
+        patch("subprocess.run", return_value=completed) as run,
+    ):
         llm._call_claude_cli("dummy", max_tokens=8192)
 
     argv = run.call_args.args[0]
@@ -211,8 +236,7 @@ def test_windows_falls_back_to_bare_claude_when_cmd_missing(monkeypatch):
 def test_windows_raises_when_neither_cmd_nor_bare_claude_present():
     """If neither `claude.cmd` nor `claude` are on PATH on Windows,
     raise the standard not-found error."""
-    with patch("platform.system", return_value="Windows"), \
-         patch("shutil.which", return_value=None):
+    with patch("platform.system", return_value="Windows"), patch("shutil.which", return_value=None):
         with pytest.raises(RuntimeError, match="Claude Code CLI not found"):
             llm._call_claude_cli("dummy", max_tokens=8192)
 
@@ -223,9 +247,11 @@ def test_non_windows_uses_bare_claude(monkeypatch):
     completed = MagicMock(returncode=0, stdout=json.dumps(_ENVELOPE), stderr="")
     monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
 
-    with patch("platform.system", return_value="Linux"), \
-         patch("shutil.which", return_value="/usr/local/bin/claude"), \
-         patch("subprocess.run", return_value=completed) as run:
+    with (
+        patch("platform.system", return_value="Linux"),
+        patch("shutil.which", return_value="/usr/local/bin/claude"),
+        patch("subprocess.run", return_value=completed) as run,
+    ):
         llm._call_claude_cli("dummy", max_tokens=8192)
 
     argv = run.call_args.args[0]
@@ -285,9 +311,11 @@ def test_simple_completion_resolves_cmd_shim_on_windows(monkeypatch):
     def fake_which(name):
         return r"C:\npm\claude.cmd" if name == "claude.cmd" else r"C:\npm\claude"
 
-    with patch("platform.system", return_value="Windows"), \
-         patch("shutil.which", side_effect=fake_which), \
-         patch("subprocess.run", side_effect=fake_run):
+    with (
+        patch("platform.system", return_value="Windows"),
+        patch("shutil.which", side_effect=fake_which),
+        patch("subprocess.run", side_effect=fake_run),
+    ):
         out = llm._call_llm("hi", backend="claude-cli")
 
     assert out == "ok"

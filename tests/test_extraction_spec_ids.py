@@ -17,6 +17,7 @@ parses every example straight out of the shipped specs and asserts the real
 functions reproduce each one. It fails if the spec examples are edited to a wrong
 value, OR if the ID functions change so the documented examples no longer hold.
 """
+
 import re
 from pathlib import Path
 

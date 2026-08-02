@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import sys
 import time
+import os
 from collections import Counter
 from pathlib import Path
 
@@ -30,9 +31,6 @@ from pathlib import Path
 _project_root = Path(__file__).resolve().parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
-
-from graphify.extract import extract, collect_files
-from graphify.cache import clear_cache
 
 
 def _count_by_ext(paths: list[Path]) -> dict[str, int]:
@@ -100,11 +98,12 @@ def _run_extraction(
     max_workers: int | None = None,
 ) -> tuple[float, int, int]:
     """Run extraction, return (elapsed_seconds, node_count, edge_count)."""
+    from graphify.cache import clear_cache
+    from graphify.extract import extract
+
     clear_cache(cache_root)
     t0 = time.perf_counter()
-    result = extract(
-        paths, cache_root=cache_root, parallel=parallel, max_workers=max_workers
-    )
+    result = extract(paths, cache_root=cache_root, parallel=parallel, max_workers=max_workers)
     elapsed = time.perf_counter() - t0
     nodes = len(result.get("nodes", []))
     edges = len(result.get("edges", []))
@@ -112,6 +111,9 @@ def _run_extraction(
 
 
 def main() -> None:
+    from graphify.cache import clear_cache
+    from graphify.extract import collect_files
+
     target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
     target = target.resolve()
 
@@ -135,8 +137,6 @@ def main() -> None:
     cache_root = target if target.is_dir() else target.parent
 
     # Workers count (same logic as _extract_parallel)
-    import os
-
     workers = min(os.cpu_count() or 4, len(paths), 8)
 
     # Run sequential
@@ -149,9 +149,7 @@ def main() -> None:
     par_time, par_nodes, par_edges = _run_extraction(
         paths, cache_root, parallel=True, max_workers=workers
     )
-    print(
-        f"Parallel ({workers}): {par_time:.2f}s ({par_nodes:,} nodes, {par_edges:,} edges)"
-    )
+    print(f"Parallel ({workers}): {par_time:.2f}s ({par_nodes:,} nodes, {par_edges:,} edges)")
 
     # Results
     print()

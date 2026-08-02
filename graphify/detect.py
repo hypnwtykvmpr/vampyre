@@ -4,6 +4,7 @@ import fnmatch
 import json
 import os
 import re
+import sys
 import shlex
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
@@ -14,6 +15,7 @@ from graphify.google_workspace import (
     convert_google_workspace_file,
     google_workspace_enabled,
 )
+from graphify.installation import uv_tool_install_command
 from graphify.paths import GRAPHIFY_OUT, GRAPHIFY_OUT_NAME, out_path
 
 
@@ -27,25 +29,118 @@ class FileType(str, Enum):
 
 _MANIFEST_PATH = str(out_path("manifest.json"))
 
-CODE_EXTENSIONS = {'.py', '.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.ejs', '.ets', '.go', '.rs', '.java', '.groovy', '.gradle', '.cpp', '.cc', '.cxx', '.c', '.h', '.hpp', '.cu', '.cuh', '.metal', '.rb', '.swift', '.kt', '.kts', '.cs', '.scala', '.php', '.lua', '.luau', '.toc', '.zig', '.ps1', '.psm1', '.psd1', '.ex', '.exs', '.m', '.mm', '.jl', '.vue', '.svelte', '.astro', '.dart', '.v', '.sv', '.svh', '.sql', '.r', '.f', '.F', '.f90', '.F90', '.f95', '.F95', '.f03', '.F03', '.f08', '.F08', '.pas', '.pp', '.dpr', '.dpk', '.lpr', '.inc', '.dfm', '.lfm', '.lpk', '.sh', '.bash', '.json', '.tf', '.tfvars', '.hcl', '.dm', '.dme', '.dmi', '.dmm', '.dmf', '.sln', '.slnx', '.csproj', '.fsproj', '.vbproj', '.xaml', '.razor', '.cshtml', '.cls', '.trigger'}
-DOC_EXTENSIONS = {'.md', '.mdx', '.qmd', '.txt', '.rst', '.html', '.yaml', '.yml'}
-PAPER_EXTENSIONS = {'.pdf'}
-IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'}
-OFFICE_EXTENSIONS = {'.docx', '.xlsx'}
-VIDEO_EXTENSIONS = {'.mp4', '.mov', '.webm', '.mkv', '.avi', '.m4v', '.mp3', '.wav', '.m4a', '.ogg'}
+CODE_EXTENSIONS = {
+    ".py",
+    ".ts",
+    ".tsx",
+    ".mts",
+    ".cts",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".ejs",
+    ".ets",
+    ".go",
+    ".rs",
+    ".java",
+    ".groovy",
+    ".gradle",
+    ".cpp",
+    ".cc",
+    ".cxx",
+    ".c",
+    ".h",
+    ".hpp",
+    ".cu",
+    ".cuh",
+    ".metal",
+    ".rb",
+    ".swift",
+    ".kt",
+    ".kts",
+    ".cs",
+    ".scala",
+    ".php",
+    ".lua",
+    ".luau",
+    ".toc",
+    ".zig",
+    ".ps1",
+    ".psm1",
+    ".psd1",
+    ".ex",
+    ".exs",
+    ".m",
+    ".mm",
+    ".jl",
+    ".vue",
+    ".svelte",
+    ".astro",
+    ".dart",
+    ".v",
+    ".sv",
+    ".svh",
+    ".sql",
+    ".r",
+    ".f",
+    ".F",
+    ".f90",
+    ".F90",
+    ".f95",
+    ".F95",
+    ".f03",
+    ".F03",
+    ".f08",
+    ".F08",
+    ".pas",
+    ".pp",
+    ".dpr",
+    ".dpk",
+    ".lpr",
+    ".inc",
+    ".dfm",
+    ".lfm",
+    ".lpk",
+    ".sh",
+    ".bash",
+    ".json",
+    ".tf",
+    ".tfvars",
+    ".hcl",
+    ".dm",
+    ".dme",
+    ".dmi",
+    ".dmm",
+    ".dmf",
+    ".sln",
+    ".slnx",
+    ".csproj",
+    ".fsproj",
+    ".vbproj",
+    ".xaml",
+    ".razor",
+    ".cshtml",
+    ".cls",
+    ".trigger",
+}
+DOC_EXTENSIONS = {".md", ".mdx", ".qmd", ".txt", ".rst", ".html", ".yaml", ".yml"}
+PAPER_EXTENSIONS = {".pdf"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+OFFICE_EXTENSIONS = {".docx", ".xlsx"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".mp3", ".wav", ".m4a", ".ogg"}
 
-CORPUS_WARN_THRESHOLD = 50_000    # words - below this, warn "you may not need a graph"
+CORPUS_WARN_THRESHOLD = 50_000  # words - below this, warn "you may not need a graph"
 CORPUS_UPPER_THRESHOLD = 500_000  # words - above this, warn about token cost
-FILE_COUNT_UPPER = 500             # files - above this, warn about token cost
+FILE_COUNT_UPPER = 500  # files - above this, warn about token cost
 
 # Resource caps for parsing untrusted office/PDF files (F2). A corpus is
 # attacker-controllable (graphify runs on cloned/shared folders), and .docx/.xlsx
 # are zip+XML containers: a few-KB zip-bomb can decompress to gigabytes and
 # OOM-kill the process at load_workbook/Document time. Screen the file before any
 # parser touches it.
-_OFFICE_MAX_RAW_BYTES = 50 * 1024 * 1024            # 50 MiB on-disk
+_OFFICE_MAX_RAW_BYTES = 50 * 1024 * 1024  # 50 MiB on-disk
 _OFFICE_MAX_DECOMPRESSED_BYTES = 512 * 1024 * 1024  # 512 MiB total uncompressed
-_OFFICE_MAX_COMPRESSION_RATIO = 200                 # uncompressed : compressed
+_OFFICE_MAX_COMPRESSION_RATIO = 200  # uncompressed : compressed
 
 
 def _file_within_size_cap(path: Path, cap: int = _OFFICE_MAX_RAW_BYTES) -> bool:
@@ -68,6 +163,7 @@ def _zip_within_caps(path: Path) -> bool:
        and bounded, so checking a bomb never materializes more than the ceiling.
     """
     import zipfile
+
     if not _file_within_size_cap(path):
         return False
     try:
@@ -93,21 +189,30 @@ def _zip_within_caps(path: Path) -> bool:
         return False
     return True
 
+
 # Parent directories whose contents are always sensitive.
 # Checked against path.parts[:-1] (parents only) so a root-level file named
 # "credentials" or "secrets" is not falsely flagged by this stage.
-_SENSITIVE_DIRS = frozenset({
-    ".ssh", ".gnupg", ".aws", ".gcloud", "secrets", ".secrets", "credentials",
-})
+_SENSITIVE_DIRS = frozenset(
+    {
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".gcloud",
+        "secrets",
+        ".secrets",
+        "credentials",
+    }
+)
 
 # Files that may contain secrets - skip silently. These patterns are specific
 # (extensions, exact credential-store names) and always apply.
 _SENSITIVE_PATTERNS = [
-    re.compile(r'(^|[\\/])\.(env|envrc)(\.|$)', re.IGNORECASE),
-    re.compile(r'\.(pem|key|p12|pfx|cert|crt|der|p8)$', re.IGNORECASE),
-    re.compile(r'(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$'),
-    re.compile(r'(\.netrc|\.pgpass|\.htpasswd)$', re.IGNORECASE),
-    re.compile(r'(aws_credentials|gcloud_credentials|service.account)', re.IGNORECASE),
+    re.compile(r"(^|[\\/])\.(env|envrc)(\.|$)", re.IGNORECASE),
+    re.compile(r"\.(pem|key|p12|pfx|cert|crt|der|p8)$", re.IGNORECASE),
+    re.compile(r"(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$"),
+    re.compile(r"(\.netrc|\.pgpass|\.htpasswd)$", re.IGNORECASE),
+    re.compile(r"(aws_credentials|gcloud_credentials|service.account)", re.IGNORECASE),
 ]
 
 # Generic keyword patterns - these only count when the keyword is LOAD-BEARING
@@ -121,14 +226,17 @@ _SENSITIVE_PATTERNS = [
 # `token` is kept separate because its longer suffix "izer"/"ize" is the only
 # common false-positive; other keywords have no such well-known derivatives.
 _GENERIC_KEYWORD_PATTERNS = [
-    re.compile(r'(?<![a-zA-Z0-9])(credential|secret|passwd|password|private_key)s?(?![a-zA-Z])', re.IGNORECASE),
-    re.compile(r'(?<![a-zA-Z0-9])tokens?(?![a-zA-Z])', re.IGNORECASE),
+    re.compile(
+        r"(?<![a-zA-Z0-9])(credential|secret|passwd|password|private_key)s?(?![a-zA-Z])",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?<![a-zA-Z0-9])tokens?(?![a-zA-Z])", re.IGNORECASE),
 ]
 
 # Word separators for the load-bearing check (underscore intentionally included;
 # multi-word keywords like private_key are handled by the end-of-stem check,
 # which runs before word counting).
-_WORD_SPLIT = re.compile(r'[-_\s]+')
+_WORD_SPLIT = re.compile(r"[-_\s]+")
 
 
 def _generic_keyword_hit(name: str) -> bool:
@@ -143,7 +251,7 @@ def _generic_keyword_hit(name: str) -> bool:
     """
     # Stem = name up to the first dot, ignoring leading dots so dotfiles like
     # ".token" keep their keyword ("" stems would never match).
-    stem = name.lstrip('.').split('.')[0]
+    stem = name.lstrip(".").split(".")[0]
     for pat in _GENERIC_KEYWORD_PATTERNS:
         hit = False
         for m in pat.finditer(stem):
@@ -154,21 +262,22 @@ def _generic_keyword_hit(name: str) -> bool:
             return True  # short name like token_config.yaml / secret_handler.txt
     return False
 
+
 # Signals that a .md/.txt file is actually a converted academic paper
 _PAPER_SIGNALS = [
-    re.compile(r'\barxiv\b', re.IGNORECASE),
-    re.compile(r'\bdoi\s*:', re.IGNORECASE),
-    re.compile(r'\babstract\b', re.IGNORECASE),
-    re.compile(r'\bproceedings\b', re.IGNORECASE),
-    re.compile(r'\bjournal\b', re.IGNORECASE),
-    re.compile(r'\bpreprint\b', re.IGNORECASE),
-    re.compile(r'\\cite\{'),          # LaTeX citation
-    re.compile(r'\[\d+\]'),           # Numbered citation [1], [23] (inline)
-    re.compile(r'\[\n\d+\n\]'),       # Numbered citation spread across lines (markdown conversion)
-    re.compile(r'eq\.\s*\d+|equation\s+\d+', re.IGNORECASE),
-    re.compile(r'\d{4}\.\d{4,5}'),   # arXiv ID like 1706.03762
-    re.compile(r'\bwe propose\b', re.IGNORECASE),   # common academic phrasing
-    re.compile(r'\bliterature\b', re.IGNORECASE),   # "from the literature"
+    re.compile(r"\barxiv\b", re.IGNORECASE),
+    re.compile(r"\bdoi\s*:", re.IGNORECASE),
+    re.compile(r"\babstract\b", re.IGNORECASE),
+    re.compile(r"\bproceedings\b", re.IGNORECASE),
+    re.compile(r"\bjournal\b", re.IGNORECASE),
+    re.compile(r"\bpreprint\b", re.IGNORECASE),
+    re.compile(r"\\cite\{"),  # LaTeX citation
+    re.compile(r"\[\d+\]"),  # Numbered citation [1], [23] (inline)
+    re.compile(r"\[\n\d+\n\]"),  # Numbered citation spread across lines (markdown conversion)
+    re.compile(r"eq\.\s*\d+|equation\s+\d+", re.IGNORECASE),
+    re.compile(r"\d{4}\.\d{4,5}"),  # arXiv ID like 1706.03762
+    re.compile(r"\bwe propose\b", re.IGNORECASE),  # common academic phrasing
+    re.compile(r"\bliterature\b", re.IGNORECASE),  # "from the literature"
 ]
 _PAPER_SIGNAL_THRESHOLD = 3  # need at least this many signals to call it a paper
 
@@ -203,10 +312,24 @@ _ASSET_DIR_MARKERS = {".imageset", ".xcassets", ".appiconset", ".colorset", ".la
 
 
 _SHEBANG_CODE_INTERPRETERS = {
-    "python", "python3", "python2",
-    "ruby", "perl", "node", "nodejs",
-    "bash", "sh", "dash", "zsh", "fish", "ksh", "tcsh",
-    "lua", "php", "julia", "Rscript",
+    "python",
+    "python3",
+    "python2",
+    "ruby",
+    "perl",
+    "node",
+    "nodejs",
+    "bash",
+    "sh",
+    "dash",
+    "zsh",
+    "fish",
+    "ksh",
+    "tcsh",
+    "lua",
+    "php",
+    "julia",
+    "Rscript",
 }
 
 
@@ -249,7 +372,7 @@ def _env_command_args(args: list[str], *, allow_split: bool = True) -> list[str]
         arg = args[i]
 
         if arg == "--":
-            return args[i + 1:]
+            return args[i + 1 :]
 
         # Split-string forms: tokenize the packed payload, then re-parse it
         # as env args (so leading assignments/flags inside the payload are
@@ -259,36 +382,36 @@ def _env_command_args(args: list[str], *, allow_split: bool = True) -> list[str]
                 if i + 1 >= len(args):
                     return []
                 return _env_command_args(
-                    _split_env_s(" ".join(args[i + 1:]), []),
+                    _split_env_s(" ".join(args[i + 1 :]), []),
                     allow_split=False,
                 )
             if arg.startswith("-S") and len(arg) > 2:
                 return _env_command_args(
-                    _split_env_s(arg[2:], args[i + 1:]),
+                    _split_env_s(arg[2:], args[i + 1 :]),
                     allow_split=False,
                 )
             if arg == "-vS":
                 if i + 1 >= len(args):
                     return []
                 return _env_command_args(
-                    _split_env_s(" ".join(args[i + 1:]), []),
+                    _split_env_s(" ".join(args[i + 1 :]), []),
                     allow_split=False,
                 )
             if arg.startswith("-vS") and len(arg) > 3:
                 return _env_command_args(
-                    _split_env_s(arg[3:], args[i + 1:]),
+                    _split_env_s(arg[3:], args[i + 1 :]),
                     allow_split=False,
                 )
             if arg.startswith("--split-string="):
                 return _env_command_args(
-                    _split_env_s(arg.split("=", 1)[1], args[i + 1:]),
+                    _split_env_s(arg.split("=", 1)[1], args[i + 1 :]),
                     allow_split=False,
                 )
             if arg == "--split-string":
                 if i + 1 >= len(args):
                     return []
                 return _env_command_args(
-                    _split_env_s(args[i + 1], args[i + 2:]),
+                    _split_env_s(args[i + 1], args[i + 2 :]),
                     allow_split=False,
                 )
 
@@ -300,11 +423,7 @@ def _env_command_args(args: list[str], *, allow_split: bool = True) -> list[str]
             continue
 
         # Clumped short option + operand
-        if (
-            arg.startswith(("-u", "-C", "-P", "-a"))
-            and len(arg) > 2
-            and not arg.startswith("--")
-        ):
+        if arg.startswith(("-u", "-C", "-P", "-a")) and len(arg) > 2 and not arg.startswith("--"):
             i += 1
             continue
 
@@ -314,8 +433,16 @@ def _env_command_args(args: list[str], *, allow_split: bool = True) -> list[str]
             continue
 
         # No-operand flags
-        if arg in {"-", "-i", "-0", "-v", "--ignore-environment", "--null",
-                   "--debug", "--list-signal-handling"}:
+        if arg in {
+            "-",
+            "-i",
+            "-0",
+            "-v",
+            "--ignore-environment",
+            "--null",
+            "--debug",
+            "--list-signal-handling",
+        }:
             i += 1
             continue
 
@@ -389,6 +516,7 @@ def classify_file(path: Path) -> FileType | None:
     # document path — otherwise apm.yml (a .yml "document") would be LLM-extracted
     # and a package would split into duplicate file-anchored nodes (#1377).
     from graphify.manifest_ingest import is_package_manifest_path
+
     if is_package_manifest_path(path):
         return FileType.CODE
     # Compound extensions must be checked before simple suffix lookup
@@ -426,6 +554,7 @@ def extract_pdf_text(path: Path) -> str:
         return ""
     try:
         from pypdf import PdfReader
+
         reader = PdfReader(str(path))
         pages = []
         for page in reader.pages:
@@ -443,11 +572,12 @@ def docx_to_markdown(path: Path) -> str:
         return ""
     try:
         from docx import Document
-        from docx.oxml.ns import qn
+
         doc = Document(str(path))
         lines = []
         for para in doc.paragraphs:
-            style = para.style.name if para.style else ""
+            style_name = para.style.name if para.style else None
+            style = style_name if isinstance(style_name, str) else ""
             text = para.text.strip()
             if not text:
                 lines.append("")
@@ -485,6 +615,7 @@ def xlsx_to_markdown(path: Path) -> str:
         return ""
     try:
         import openpyxl
+
         wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
         sections = []
         for sheet_name in wb.sheetnames:
@@ -517,6 +648,7 @@ def xlsx_extract_structure(path: Path) -> dict:
     Returns a nodes/edges dict compatible with the graphify extract pipeline.
     Used in addition to xlsx_to_markdown so Claude sees both structure and content.
     """
+
     def _nid(*parts: str) -> str:
         return re.sub(r"[^a-z0-9_]", "_", "_".join(p.lower() for p in parts).strip("_"))
 
@@ -538,21 +670,43 @@ def xlsx_extract_structure(path: Path) -> dict:
     stem = re.sub(r"[^a-z0-9]", "_", path.stem.lower())
     str_path = str(path)
     file_nid = _nid(str_path)
-    nodes: list[dict] = [{"id": file_nid, "label": path.name, "file_type": "document",
-                           "source_file": str_path, "source_location": None}]
+    nodes: list[dict] = [
+        {
+            "id": file_nid,
+            "label": path.name,
+            "file_type": "document",
+            "source_file": str_path,
+            "source_location": None,
+        }
+    ]
     edges: list[dict] = []
     seen: set[str] = {file_nid}
 
     def _add(nid: str, label: str) -> None:
         if nid not in seen:
             seen.add(nid)
-            nodes.append({"id": nid, "label": label, "file_type": "document",
-                           "source_file": str_path, "source_location": None})
+            nodes.append(
+                {
+                    "id": nid,
+                    "label": label,
+                    "file_type": "document",
+                    "source_file": str_path,
+                    "source_location": None,
+                }
+            )
 
     def _edge(src: str, tgt: str, relation: str) -> None:
-        edges.append({"source": src, "target": tgt, "relation": relation,
-                       "confidence": "EXTRACTED", "source_file": str_path,
-                       "source_location": None, "weight": 1.0})
+        edges.append(
+            {
+                "source": src,
+                "target": tgt,
+                "relation": relation,
+                "confidence": "EXTRACTED",
+                "source_file": str_path,
+                "source_location": None,
+                "weight": 1.0,
+            }
+        )
 
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
@@ -571,10 +725,17 @@ def xlsx_extract_structure(path: Path) -> dict:
                 if ref:
                     try:
                         from openpyxl.utils import range_boundaries
+
                         min_col, min_row, max_col, _ = range_boundaries(ref)
-                        header_row = list(ws.iter_rows(min_row=min_row, max_row=min_row,
-                                                       min_col=min_col, max_col=max_col,
-                                                       values_only=True))
+                        header_row = list(
+                            ws.iter_rows(
+                                min_row=min_row,
+                                max_row=min_row,
+                                min_col=min_col,
+                                max_col=max_col,
+                                values_only=True,
+                            )
+                        )
                         if header_row:
                             for col_name in header_row[0]:
                                 if col_name:
@@ -627,6 +788,7 @@ def convert_office_file(path: Path, out_dir: Path) -> Path | None:
     # to treat every Office file as new and re-extract it (#1226).
     import hashlib
     import unicodedata
+
     normalized_path = unicodedata.normalize("NFC", str(path.resolve()))
     name_hash = hashlib.sha256(normalized_path.encode()).hexdigest()[:8]
     out_path = out_dir / f"{path.stem}_{name_hash}.md"
@@ -658,32 +820,65 @@ def count_words(path: Path) -> int:
 
 # Directory names to always skip - venvs, caches, build artifacts, deps
 _SKIP_DIRS = {
-    "venv", ".venv", "env", ".env",
-    "node_modules", "__pycache__", ".git",
-    "dist", "build", "target", "out",
-    "site-packages", "lib64",
-    ".pytest_cache", ".mypy_cache", ".ruff_cache",
-    ".tox", ".eggs", "*.egg-info",
-    "graphify-out", GRAPHIFY_OUT_NAME,  # never treat own output as source input (#524); honour GRAPHIFY_OUT (#1423)
+    "venv",
+    ".venv",
+    "env",
+    ".env",
+    "node_modules",
+    "__pycache__",
+    ".git",
+    "dist",
+    "build",
+    "target",
+    "out",
+    "site-packages",
+    "lib64",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".eggs",
+    "*.egg-info",
+    "graphify-out",
+    GRAPHIFY_OUT_NAME,  # never treat own output as source input (#524); honour GRAPHIFY_OUT (#1423)
     # Coverage/test-artefact dirs — generated, never architecturally meaningful
-    "coverage", "lcov-report",              # Vitest/Istanbul/nyc HTML reports (#870)
-    "visual-tests", "visual-test",          # Playwright/visual-regression bundles (#869)
-    "__snapshots__", "snapshots",           # Jest/Vitest snapshot dirs
-    "storybook-static",                     # Storybook production build output
-    "dist-protected",                       # Protected dist variants (same noise as dist)
+    "coverage",
+    "lcov-report",  # Vitest/Istanbul/nyc HTML reports (#870)
+    "visual-tests",
+    "visual-test",  # Playwright/visual-regression bundles (#869)
+    "__snapshots__",
+    "snapshots",  # Jest/Vitest snapshot dirs
+    "storybook-static",  # Storybook production build output
+    "dist-protected",  # Protected dist variants (same noise as dist)
     # Framework cache/build dirs — generated, never architecturally meaningful (#873)
-    ".next", ".nuxt", ".turbo", ".angular",
-    ".idea", ".cache", ".parcel-cache", ".svelte-kit", ".terraform", ".serverless",
+    ".next",
+    ".nuxt",
+    ".turbo",
+    ".angular",
+    ".idea",
+    ".cache",
+    ".parcel-cache",
+    ".svelte-kit",
+    ".terraform",
+    ".serverless",
     ".graphify",  # graphify's own extraction cache — never index self-generated data
     ".worktrees",  # git worktree convention (#947) — sibling checkouts, always redundant
 }
 
 # Large generated files that are never useful to extract
 _SKIP_FILES = {
-    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-    "Cargo.lock", "poetry.lock", "Gemfile.lock",
-    "composer.lock", "go.sum", "go.work.sum",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "Cargo.lock",
+    "poetry.lock",
+    "Gemfile.lock",
+    "composer.lock",
+    "go.sum",
+    "go.work.sum",
+    ".graphifyinclude",
 }
+
 
 def _is_noise_dir(part: str, parent: "Path | None" = None) -> bool:
     """Return True if this directory name looks like a venv, cache, or dep dir."""
@@ -812,6 +1007,7 @@ def _is_ignored(
         """Apply last-match-wins to a single target path."""
         if _cache is not None and target in _cache:
             return _cache[target]
+
         def _matches(rel: str, p: str, anchored: bool) -> bool:
             if anchored:
                 return fnmatch.fnmatch(rel, p)
@@ -823,7 +1019,7 @@ def _is_ignored(
             for i, part in enumerate(parts):
                 if fnmatch.fnmatch(part, p):
                     return True
-                if fnmatch.fnmatch("/".join(parts[:i + 1]), p):
+                if fnmatch.fnmatch("/".join(parts[: i + 1]), p):
                     return True
             return False
 
@@ -879,115 +1075,18 @@ def _is_ignored(
     return _eval(path)
 
 
-def _load_graphifyinclude(root: Path) -> list[tuple[Path, str]]:
-    """Read .graphifyinclude allowlist patterns from root and ancestors.
-
-    Include patterns opt matching hidden files/dirs into traversal. Sensitive
-    files and hard-skipped noise directories are still excluded later.
-    Uses the same VCS-root ceiling logic as _load_graphifyignore.
-    """
+def _find_legacy_graphifyinclude(root: Path) -> Path | None:
+    """Find a legacy .graphifyinclude between root and its VCS boundary."""
     root = root.resolve()
     ceiling = _find_vcs_root(root) or root
-
-    dirs: list[Path] = []
     current = root
     while True:
-        dirs.append(current)
+        candidate = current / ".graphifyinclude"
+        if candidate.is_file():
+            return candidate
         if current == ceiling:
-            break
+            return None
         current = current.parent
-    dirs.reverse()
-
-    patterns: list[tuple[Path, str]] = []
-    for d in dirs:
-        include_file = d / ".graphifyinclude"
-        if include_file.exists():
-            for raw in include_file.read_text(encoding="utf-8", errors="ignore").splitlines():
-                line = _parse_gitignore_line(raw)
-                if line:
-                    patterns.append((d, line))
-    return patterns
-
-
-def _is_included(path: Path, root: Path, patterns: list[tuple[Path, str]]) -> bool:
-    """Return True if path matches any .graphifyinclude allowlist pattern."""
-    if not patterns:
-        return False
-
-    def _matches(rel: str, p: str, anchored: bool) -> bool:
-        if anchored:
-            return fnmatch.fnmatch(rel, p)
-        parts = rel.split("/")
-        if fnmatch.fnmatch(rel, p):
-            return True
-        if fnmatch.fnmatch(path.name, p):
-            return True
-        for i, part in enumerate(parts):
-            if fnmatch.fnmatch(part, p):
-                return True
-            if fnmatch.fnmatch("/".join(parts[:i + 1]), p):
-                return True
-        return False
-
-    for anchor, pattern in patterns:
-        anchored = pattern.startswith("/")
-        p = pattern.strip("/")
-        if not p:
-            continue
-        if anchored:
-            try:
-                rel_anchor = str(path.relative_to(anchor)).replace(os.sep, "/")
-                if _matches(rel_anchor, p, anchored=True):
-                    return True
-            except ValueError:
-                pass
-        else:
-            try:
-                rel = str(path.relative_to(root)).replace(os.sep, "/")
-                if _matches(rel, p, anchored=False):
-                    return True
-            except ValueError:
-                pass
-            if anchor != root:
-                try:
-                    rel_anchor = str(path.relative_to(anchor)).replace(os.sep, "/")
-                    if _matches(rel_anchor, p, anchored=False):
-                        return True
-                except ValueError:
-                    pass
-    return False
-
-
-def _could_contain_included_path(path: Path, root: Path, patterns: list[tuple[Path, str]]) -> bool:
-    """Return True if a directory may contain files matched by .graphifyinclude."""
-    if not patterns:
-        return False
-
-    rels: list[str] = []
-    try:
-        rels.append(str(path.relative_to(root)).replace(os.sep, "/"))
-    except ValueError:
-        pass
-    for anchor, _ in patterns:
-        if anchor != root:
-            try:
-                rels.append(str(path.relative_to(anchor)).replace(os.sep, "/"))
-            except ValueError:
-                pass
-
-    for rel in rels:
-        rel = rel.strip("/")
-        if not rel:
-            return True
-        for _, pattern in patterns:
-            p = pattern.strip("/")
-            if not p:
-                continue
-            if p == rel or p.startswith(rel + "/"):
-                return True
-            if fnmatch.fnmatch(rel, p):
-                return True
-    return False
 
 
 def _auto_follow_symlinks(root: Path) -> bool:
@@ -1015,8 +1114,21 @@ def _resolves_under_root(path: Path, root: Path) -> bool:
     return True
 
 
-def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace: bool | None = None, extra_excludes: list[str] | None = None) -> dict:
+def detect(
+    root: Path,
+    *,
+    follow_symlinks: bool | None = None,
+    google_workspace: bool | None = None,
+    extra_excludes: list[str] | None = None,
+) -> dict:
     root = root.resolve()
+    if _find_legacy_graphifyinclude(root) is not None:
+        print(
+            "[graphify] WARNING: .graphifyinclude is no longer supported because hidden "
+            "directories are indexed by default; use .graphifyignore negation rules to "
+            "re-include paths excluded by ignore patterns.",
+            file=sys.stderr,
+        )
     if follow_symlinks is None:
         follow_symlinks = False
     google_workspace = google_workspace_enabled() if google_workspace is None else google_workspace
@@ -1039,8 +1151,6 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
             line = _parse_gitignore_line(pat)
             if line:
                 ignore_patterns.append((root, line))
-    include_patterns = _load_graphifyinclude(root)
-
     # Always include graphify-out/memory/ - query results filed back into the graph
     memory_dir = root / GRAPHIFY_OUT / "memory"
     scan_paths = [root]
@@ -1074,7 +1184,8 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
                 # bin/, obj/, wwwroot/, generated/, … : a pathological slowdown on large
                 # repos for no correctness gain.
                 dirnames[:] = [
-                    d for d in dirnames
+                    d
+                    for d in dirnames
                     if not _is_noise_dir(d, dp)
                     and not _is_ignored(dp / d, root, ignore_patterns, _cache=ignore_cache)
                 ]
@@ -1083,7 +1194,9 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
                     for d in dirnames:
                         child = dp / d
                         if child.is_symlink() and not _resolves_under_root(child, root):
-                            skipped_sensitive.append(str(child) + " [symlink target outside scan root]")
+                            skipped_sensitive.append(
+                                str(child) + " [symlink target outside scan root]"
+                            )
                             continue
                         safe_dirs.append(d)
                     dirnames[:] = safe_dirs
@@ -1119,13 +1232,14 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
             if p.suffix.lower() in GOOGLE_WORKSPACE_EXTENSIONS:
                 if not google_workspace:
                     skipped_sensitive.append(
-                        str(p)
-                        + " [Google Workspace shortcut skipped - pass --google-workspace "
+                        str(p) + " [Google Workspace shortcut skipped - pass --google-workspace "
                         "or set GRAPHIFY_GOOGLE_WORKSPACE=1]"
                     )
                     continue
                 try:
-                    md_path = convert_google_workspace_file(p, converted_dir, xlsx_to_markdown=xlsx_to_markdown)
+                    md_path = convert_google_workspace_file(
+                        p, converted_dir, xlsx_to_markdown=xlsx_to_markdown
+                    )
                 except Exception as exc:
                     skipped_sensitive.append(str(p) + f" [Google Workspace export failed: {exc}]")
                     continue
@@ -1135,7 +1249,9 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
                     files[ftype].append(str(md_path))
                     total_words += count_words(md_path)
                 else:
-                    skipped_sensitive.append(str(p) + " [Google Workspace export produced no readable text]")
+                    skipped_sensitive.append(
+                        str(p) + " [Google Workspace export produced no readable text]"
+                    )
                 continue
             # Office files: convert to markdown sidecar so subagents can read them
             if p.suffix.lower() in OFFICE_EXTENSIONS:
@@ -1147,7 +1263,10 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
                     total_words += count_words(md_path)
                 else:
                     # Conversion failed (library not installed) - skip with note
-                    skipped_sensitive.append(str(p) + " [office conversion failed - pip install graphifyy[office]]")
+                    skipped_sensitive.append(
+                        str(p)
+                        + f" [office conversion failed - {uv_tool_install_command('office')}]"
+                    )
                 continue
             files[ftype].append(str(p))
             if ftype != FileType.VIDEO:
@@ -1188,6 +1307,7 @@ def detect(root: Path, *, follow_symlinks: bool | None = None, google_workspace:
 def _md5_file(path: Path) -> str:
     """MD5 of file contents streamed in 64KB chunks — for change detection only."""
     import hashlib as _hl
+
     h = _hl.md5(usedforsecurity=False)
     try:
         with path.open("rb") as f:
@@ -1325,9 +1445,7 @@ def save_manifest(
     all_files = [f for file_list in files.values() for f in file_list]
     with ThreadPoolExecutor() as pool:
         raw = pool.map(_stat_and_hash, all_files)
-    hashed: dict[str, tuple[float, str]] = {
-        r[0]: (r[1], r[2]) for r in raw if r is not None
-    }
+    hashed: dict[str, tuple[float, str]] = {r[0]: (r[1], r[2]) for r in raw if r is not None}
 
     for f in all_files:
         if f not in hashed:
@@ -1343,7 +1461,9 @@ def save_manifest(
             entry["semantic_hash"] = h
         else:
             # Preserve semantic_hash only when content is unchanged
-            entry["semantic_hash"] = prev.get("semantic_hash", "") if h == prev.get("ast_hash", "") else ""
+            entry["semantic_hash"] = (
+                prev.get("semantic_hash", "") if h == prev.get("ast_hash", "") else ""
+            )
         manifest[f] = entry
     if root is not None:
         # Persist in portable form: forward-slash relative paths. Keys outside
@@ -1386,7 +1506,12 @@ def detect_incremental(
     runs. ``None`` (default) does not follow symlinked directories; callers must
     opt in explicitly, and resolved targets outside the scan root are skipped.
     """
-    full = detect(root, follow_symlinks=follow_symlinks, google_workspace=google_workspace, extra_excludes=extra_excludes)
+    full = detect(
+        root,
+        follow_symlinks=follow_symlinks,
+        google_workspace=google_workspace,
+        extra_excludes=extra_excludes,
+    )
     # Pass ``root`` so a manifest written with relative keys (post-#777) is
     # re-anchored to the absolute form the rest of this function compares
     # against. Legacy absolute-keyed manifests pass through unchanged.
@@ -1417,7 +1542,11 @@ def detect_incremental(
             elif isinstance(stored, dict):
                 # Normalise legacy {mtime, hash} to new schema
                 if "hash" in stored and "ast_hash" not in stored:
-                    stored = {"mtime": stored.get("mtime", 0), "ast_hash": stored["hash"], "semantic_hash": ""}
+                    stored = {
+                        "mtime": stored.get("mtime", 0),
+                        "ast_hash": stored["hash"],
+                        "semantic_hash": "",
+                    }
                 hash_key = "semantic_hash" if kind == "semantic" else "ast_hash"
                 stored_hash = stored.get(hash_key, "")
                 # Missing semantic_hash means update ran but extract hasn't — always re-extract

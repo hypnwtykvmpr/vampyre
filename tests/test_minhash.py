@@ -1,4 +1,5 @@
 """Tests for graphify/_minhash.py — MinHash sketch and band-LSH."""
+
 from __future__ import annotations
 import numpy as np
 import pytest
@@ -8,11 +9,12 @@ from graphify._minhash import MinHash, MinHashLSH, _optimal_lsh_params
 def _minhash_for(text: str, num_perm: int = 128) -> MinHash:
     m = MinHash(num_perm=num_perm)
     for i in range(0, len(text) - 2):
-        m.update(text[i:i + 3].encode())
+        m.update(text[i : i + 3].encode())
     return m
 
 
 # ── MinHash ───────────────────────────────────────────────────────────────────
+
 
 def test_identical_texts_produce_identical_hashvalues():
     a = _minhash_for("graphextractor")
@@ -42,6 +44,7 @@ def test_update_mutates_hashvalues():
 
 
 # ── MinHashLSH ────────────────────────────────────────────────────────────────
+
 
 def test_near_duplicates_are_candidates():
     lsh = MinHashLSH(threshold=0.5, num_perm=128)
@@ -78,6 +81,7 @@ def test_duplicate_insert_raises():
 
 # ── _optimal_lsh_params ───────────────────────────────────────────────────────
 
+
 def test_optimal_params_within_budget():
     b, r = _optimal_lsh_params(0.5, 128)
     assert b >= 1 and r >= 1
@@ -92,10 +96,13 @@ def test_optimal_params_cached():
 
 # ── EDR regression: scipy / numpy.testing must not be imported ──────────────────
 
+
 def test_dedup_import_does_not_pull_scipy_or_numpy_testing():
     import sys
+
     for mod in ("scipy", "numpy.testing"):
         sys.modules.pop(mod, None)
     import graphify.dedup  # noqa: F401
+
     assert "scipy" not in sys.modules
     assert "numpy.testing" not in sys.modules

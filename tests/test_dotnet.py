@@ -1,9 +1,16 @@
 """Tests for .NET project file extraction (.sln, .csproj, .xaml, .razor)."""
+
 from pathlib import Path
 import shutil
 import tempfile
-import pytest
-from graphify.extract import extract, extract_sln, extract_slnx, extract_csproj, extract_xaml, extract_razor
+from graphify.extract import (
+    extract,
+    extract_sln,
+    extract_slnx,
+    extract_csproj,
+    extract_xaml,
+    extract_razor,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -18,12 +25,12 @@ def _relations(r):
 
 def _view_model_edges(r):
     return [
-        e for e in r["edges"]
-        if e["relation"] == "references" and e.get("context") == "view_model"
+        e for e in r["edges"] if e["relation"] == "references" and e.get("context") == "view_model"
     ]
 
 
 # ── .sln ─────────────────────────────────────────────────────────────────────
+
 
 def test_sln_extracts_projects():
     r = extract_sln(FIXTURES / "sample.sln")
@@ -46,6 +53,7 @@ def test_sln_project_dependency():
 
 
 # ── .slnx ────────────────────────────────────────────────────────────────────
+
 
 def test_slnx_extracts_projects():
     r = extract_slnx(FIXTURES / "sample.slnx")
@@ -82,13 +90,14 @@ def test_slnx_missing_file():
 
 # ── .csproj ──────────────────────────────────────────────────────────────────
 
+
 def test_csproj_packages():
     r = extract_csproj(FIXTURES / "sample.csproj")
     assert "error" not in r
     labels = _labels(r)
-    assert any("MediatR" in l for l in labels)
-    assert any("FluentValidation" in l for l in labels)
-    assert any("Swashbuckle" in l for l in labels)
+    assert any("MediatR" in label for label in labels)
+    assert any("FluentValidation" in label for label in labels)
+    assert any("Swashbuckle" in label for label in labels)
 
 
 def test_csproj_project_references():
@@ -117,11 +126,13 @@ def test_csproj_invalid_xml():
 
 # ── .xaml ────────────────────────────────────────────────────────────────────
 
+
 def test_xaml_class_resolves_to_codebehind_partial_class():
     r = extract_xaml(FIXTURES / "sample.xaml")
     assert "error" not in r
     class_nodes = [
-        n for n in r["nodes"]
+        n
+        for n in r["nodes"]
         if n["label"] == "MainWindow" and str(n.get("source_file", "")).endswith("sample.xaml.cs")
     ]
     assert class_nodes
@@ -137,7 +148,9 @@ def test_xaml_named_controls_and_bindings():
     r = extract_xaml(FIXTURES / "sample.xaml")
     labels = set(_labels(r))
     assert {"RootPanel", "UserNameBox", "SaveButton", "UserName"} <= labels
-    assert any(e["relation"] == "references" and e.get("context") == "binding_path" for e in r["edges"])
+    assert any(
+        e["relation"] == "references" and e.get("context") == "binding_path" for e in r["edges"]
+    )
 
 
 def test_xaml_extracts_binding_paths_commands_and_converters():
@@ -308,7 +321,7 @@ def test_xaml_viewmodel_resolution_respects_graphifyignore(tmp_path):
 def test_xaml_ambiguous_viewmodel_names_emit_no_edge(tmp_path):
     (tmp_path / "Views").mkdir()
     (tmp_path / "ViewModels").mkdir()
-    (tmp_path / "App.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\" />", encoding="utf-8")
+    (tmp_path / "App.csproj").write_text('<Project Sdk="Microsoft.NET.Sdk" />', encoding="utf-8")
     xaml = (
         '<Window x:Class="Demo.MainWindow"\n'
         '        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"\n'
@@ -339,7 +352,8 @@ def test_xaml_events_resolve_to_codebehind_methods():
     }
     assert {"Window_Loaded", "UserNameChanged", "Save_Click"} <= set(method_nodes)
     event_targets = {
-        e["target"] for e in r["edges"]
+        e["target"]
+        for e in r["edges"]
         if e["relation"] == "references" and e.get("context") == "event"
     }
     assert method_nodes["Window_Loaded"] in event_targets
@@ -348,8 +362,11 @@ def test_xaml_events_resolve_to_codebehind_methods():
 
 
 def _event_targets(r):
-    return {e["target"] for e in r["edges"]
-            if e["relation"] == "references" and e.get("context") == "event"}
+    return {
+        e["target"]
+        for e in r["edges"]
+        if e["relation"] == "references" and e.get("context") == "event"
+    }
 
 
 def test_xaml_event_match_requires_handler_signature():
@@ -399,8 +416,11 @@ def test_xaml_non_event_attribute_value_does_not_fabricate_event():
         p.write_text(xaml)
         (Path(d) / "view.xaml.cs").write_text(cs)
         r = extract_xaml(p)
-    handlers = {n["label"].strip("()").lstrip("."): n["id"]
-                for n in r["nodes"] if str(n.get("source_file", "")).endswith("view.xaml.cs")}
+    handlers = {
+        n["label"].strip("()").lstrip("."): n["id"]
+        for n in r["nodes"]
+        if str(n.get("source_file", "")).endswith("view.xaml.cs")
+    }
     targets = _event_targets(r)
     # Click -> Save_Click is the only real event; OnLoaded (referenced only via Tag) is not.
     assert handlers["Save_Click"] in targets
@@ -429,6 +449,7 @@ def test_xaml_viewmodel_with_non_utf8_codebehind_does_not_crash(tmp_path):
 
 # ── .razor ───────────────────────────────────────────────────────────────────
 
+
 def test_razor_using_and_inject():
     r = extract_razor(FIXTURES / "sample.razor")
     assert "error" not in r
@@ -446,7 +467,7 @@ def test_razor_components():
 
 def test_razor_page_route():
     r = extract_razor(FIXTURES / "sample.razor")
-    assert any("/counter" in l for l in _labels(r))
+    assert any("/counter" in label for label in _labels(r))
 
 
 def test_razor_inherits():
@@ -468,13 +489,16 @@ def test_razor_missing_file():
 
 # ── dispatch & detect integration ────────────────────────────────────────────
 
+
 def test_dispatch_table():
     from graphify.extract import _get_extractor
+
     for ext in (".sln", ".slnx", ".csproj", ".fsproj", ".vbproj", ".xaml", ".razor", ".cshtml"):
         assert _get_extractor(Path(f"foo{ext}")) is not None, f"{ext} not in dispatch"
 
 
 def test_code_extensions():
     from graphify.detect import CODE_EXTENSIONS
+
     for ext in (".sln", ".slnx", ".csproj", ".fsproj", ".vbproj", ".xaml", ".razor", ".cshtml"):
         assert ext in CODE_EXTENSIONS, f"{ext} missing"

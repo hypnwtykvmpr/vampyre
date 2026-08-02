@@ -8,10 +8,12 @@ the C# home for the parts that *are* cleanly separable — today, the cross-file
 type-reference resolver below — and is where ``extract_csharp`` will land when
 the core migration happens.
 """
+
 from __future__ import annotations
 
 import html
 from pathlib import Path
+from typing import TypeGuard
 
 from graphify.extractors.base import _make_id
 
@@ -141,10 +143,15 @@ def _resolve_cross_file_csharp_imports(
 
     still_referenced: set[str] = set()
     for edge in all_edges:
-        still_referenced.add(edge.get("source"))
-        still_referenced.add(edge.get("target"))
+        source = edge.get("source")
+        target = edge.get("target")
+        if isinstance(source, str):
+            still_referenced.add(source)
+        if isinstance(target, str):
+            still_referenced.add(target)
     all_nodes[:] = [
-        node for node in all_nodes
+        node
+        for node in all_nodes
         if node.get("id") not in repointed_from or node.get("id") in still_referenced
     ]
 
@@ -164,7 +171,7 @@ def _resolve_csharp_type_references(
     """
     _ = (per_file, paths)
 
-    def _is_cs_file(value: object) -> bool:
+    def _is_cs_file(value: object) -> TypeGuard[str]:
         return isinstance(value, str) and value.endswith(".cs")
 
     def _metadata(value: object) -> dict:
@@ -180,9 +187,7 @@ def _resolve_csharp_type_references(
             items.append(value)
 
     node_by_id = {
-        node["id"]: node
-        for node in all_nodes
-        if isinstance(node.get("id"), str) and node.get("id")
+        node["id"]: node for node in all_nodes if isinstance(node.get("id"), str) and node.get("id")
     }
     type_def_index = _build_csharp_type_def_index(all_nodes)
     known_namespaces = {
@@ -214,7 +219,10 @@ def _resolve_csharp_type_references(
         if not isinstance(target_fqn, str) or not target_fqn:
             continue
         scope_kind = metadata.get("scope_kind") or "file"
-        scope_id = metadata.get("scope_id")
+        if not isinstance(scope_kind, str):
+            scope_kind = "file"
+        scope_id_value = metadata.get("scope_id")
+        scope_id = scope_id_value if isinstance(scope_id_value, str) else None
         using_kind = metadata.get("using_kind")
         if using_kind == "namespace":
             entry = (target_fqn, scope_kind, scope_id)
@@ -274,14 +282,17 @@ def _resolve_csharp_type_references(
                 candidates.append(hit)
         return candidates[0] if len(candidates) == 1 else None
 
-    def _resolve_qualified(label: str, qualifier: object, source_node: dict, source_file: str) -> str | None:
+    def _resolve_qualified(
+        label: str, qualifier: object, source_node: dict, source_file: str
+    ) -> str | None:
         # Sound qualified resolution: an in-scope alias for Q shadows the namespace Q. For a qualified
         # ref Q.label, look up (alias_target_namespace, label). If no in-scope alias, fall through to an
         # exact known namespace. Dangle on ambiguity / no hit / unknown qualifier.
         if not isinstance(qualifier, str) or not qualifier:
             return None
         in_scope = [
-            entry for entry in aliases_by_file.get(source_file, {}).get(qualifier, [])
+            entry
+            for entry in aliases_by_file.get(source_file, {}).get(qualifier, [])
             if _using_in_scope(entry[1], entry[2], source_node)
         ]
         if in_scope:
@@ -320,16 +331,12 @@ def _resolve_csharp_type_references(
 
     def _dangling_stub_id(label: str, current_target: object) -> str:
         current = node_by_id.get(current_target)
-        if _is_placeholder(current) and current.get("label") == label:
+        if current is not None and _is_placeholder(current) and current.get("label") == label:
             return str(current_target)
 
         for node in all_nodes:
             nid = node.get("id")
-            if (
-                isinstance(nid, str)
-                and node.get("label") == label
-                and _is_placeholder(node)
-            ):
+            if isinstance(nid, str) and node.get("label") == label and _is_placeholder(node):
                 return nid
 
         stem = _make_id(label)
@@ -367,10 +374,12 @@ def _resolve_csharp_type_references(
             continue
         metadata = _metadata(edge.get("metadata"))
         label = metadata.get("ref_token") or _label_for_type_ref_target(target_node, source_file)
-        if not label:
+        if not isinstance(label, str) or not label:
             continue
         if metadata.get("qualified"):
-            resolved = _resolve_qualified(label, metadata.get("ref_qualifier"), source_node, source_file)
+            resolved = _resolve_qualified(
+                label, metadata.get("ref_qualifier"), source_node, source_file
+            )
         else:
             resolved = _resolve_label(label, source_node, source_file)
         target = edge.get("target")
@@ -385,9 +394,14 @@ def _resolve_csharp_type_references(
 
     still_referenced: set[str] = set()
     for edge in all_edges:
-        still_referenced.add(edge.get("source"))
-        still_referenced.add(edge.get("target"))
+        source = edge.get("source")
+        target = edge.get("target")
+        if isinstance(source, str):
+            still_referenced.add(source)
+        if isinstance(target, str):
+            still_referenced.add(target)
     all_nodes[:] = [
-        node for node in all_nodes
+        node
+        for node in all_nodes
         if node.get("id") not in repointed_from or node.get("id") in still_referenced
     ]

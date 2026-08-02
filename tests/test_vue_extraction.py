@@ -4,6 +4,7 @@ Feeding a whole SFC to the JS grammar produces a top-level ERROR node, dropping
 imports and symbols. :func:`extract_vue` masks the non-script regions and parses
 the ``<script>`` with the TypeScript grammar, recovering the full graph.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -243,7 +244,6 @@ function go(): void {
     assert (by_label["go()"], by_label["helper()"], "calls") in edges
 
 
-
 def test_generic_component_open_tag_with_angle_brackets(tmp_path):
     """A Vue 3.3+ generic= attribute containing '>' (e.g. Record<string, unknown>)
     must not prematurely end the <script> open tag and swallow the body (#1468)."""
@@ -264,4 +264,4 @@ const value = helper()
     masked, lang = _vue_mask_non_script(comp.read_text(encoding="utf-8"))
     assert lang == "ts"
     assert 'generic="T extends Record' not in masked  # open tag fully blanked
-    assert "import { helper }" in masked               # body preserved
+    assert "import { helper }" in masked  # body preserved

@@ -30,26 +30,36 @@ def _edge_labels(result: dict, relations=("calls", "references")) -> set[tuple[s
 
 def _issue_fixture(base: Path) -> list[Path]:
     """The three cross-file patterns from #1356, plus a constructor-in-initializer."""
-    f1 = _write(base / "Models/SessionViewModel.swift",
-                "class SessionViewModel {\n    func update() {}\n}\n")
-    f2 = _write(base / "Services/NetworkService.swift",
-                "class NetworkService {\n    func fetch() {}\n}\n")
-    f3 = _write(base / "Core/SessionType.swift",
-                "enum SessionType {\n    static func staticMethod() {}\n}\n")
-    f4 = _write(base / "Core/Singleton.swift",
-                "class Singleton {\n    static let shared = Singleton()\n    func method() {}\n}\n")
-    f5 = _write(base / "Views/HomeView.swift", (
-        "class HomeView {\n"
-        "    let vm = SessionViewModel()\n"
-        "    var svc: NetworkService\n\n"
-        "    func go() {\n"
-        "        vm.update()\n"
-        "        SessionType.staticMethod()\n"
-        "        Singleton.shared.method()\n"
-        "        self.svc.fetch()\n"
-        "    }\n"
-        "}\n"
-    ))
+    f1 = _write(
+        base / "Models/SessionViewModel.swift",
+        "class SessionViewModel {\n    func update() {}\n}\n",
+    )
+    f2 = _write(
+        base / "Services/NetworkService.swift", "class NetworkService {\n    func fetch() {}\n}\n"
+    )
+    f3 = _write(
+        base / "Core/SessionType.swift",
+        "enum SessionType {\n    static func staticMethod() {}\n}\n",
+    )
+    f4 = _write(
+        base / "Core/Singleton.swift",
+        "class Singleton {\n    static let shared = Singleton()\n    func method() {}\n}\n",
+    )
+    f5 = _write(
+        base / "Views/HomeView.swift",
+        (
+            "class HomeView {\n"
+            "    let vm = SessionViewModel()\n"
+            "    var svc: NetworkService\n\n"
+            "    func go() {\n"
+            "        vm.update()\n"
+            "        SessionType.staticMethod()\n"
+            "        Singleton.shared.method()\n"
+            "        self.svc.fetch()\n"
+            "    }\n"
+            "}\n"
+        ),
+    )
     return [f1, f2, f3, f4, f5]
 
 
@@ -63,11 +73,11 @@ def test_swift_cross_file_member_calls_resolve(tmp_path: Path):
     # Stage 1: constructor in a property initializer.
     assert ("HomeView", "calls", "SessionViewModel") in edges
     # Stage 2: receiver typed via the file's local type table.
-    assert (".go()", "calls", ".update()") in edges        # vm.update()
-    assert (".go()", "calls", ".fetch()") in edges         # self.svc.fetch()
+    assert (".go()", "calls", ".update()") in edges  # vm.update()
+    assert (".go()", "calls", ".fetch()") in edges  # self.svc.fetch()
     # Stage 2: upper-cased receiver is itself a type.
     assert (".go()", "calls", ".staticMethod()") in edges  # SessionType.staticMethod()
-    assert (".go()", "calls", ".method()") in edges        # Singleton.shared.method()
+    assert (".go()", "calls", ".method()") in edges  # Singleton.shared.method()
 
 
 def test_swift_cross_file_member_calls_have_correct_confidence_and_resolve(tmp_path: Path):
@@ -104,7 +114,8 @@ def test_swift_cross_file_member_calls_have_correct_confidence_and_resolve(tmp_p
     # Edges survive graph construction (no dangling targets pruned).
     g = build_from_json(result)
     surviving = sum(
-        1 for _, _, d in g.edges(data=True)
+        1
+        for _, _, d in g.edges(data=True)
         if d.get("relation") == "calls" and d.get("confidence") in ("INFERRED", "EXTRACTED")
     )
     assert surviving >= 5
@@ -116,20 +127,24 @@ def test_swift_ambiguous_type_does_not_over_connect(tmp_path: Path):
     base = tmp_path / "src"
     for sub in ("a", "b", "c"):
         _write(base / sub / "Widget.swift", "class Widget {\n    func update() {}\n}\n")
-    _write(base / "Caller.swift", (
-        "class Caller {\n"
-        "    var w: Widget\n"
-        "    func run() {\n"
-        "        w.update()\n"
-        "        unknown.update()\n"
-        "    }\n"
-        "}\n"
-    ))
+    _write(
+        base / "Caller.swift",
+        (
+            "class Caller {\n"
+            "    var w: Widget\n"
+            "    func run() {\n"
+            "        w.update()\n"
+            "        unknown.update()\n"
+            "    }\n"
+            "}\n"
+        ),
+    )
     files = sorted(base.rglob("*.swift"))
     result = extract(files, cache_root=tmp_path / "cache")
 
     inferred_calls = [
-        e for e in result["edges"]
+        e
+        for e in result["edges"]
         if e.get("relation") == "calls" and e.get("confidence") == "INFERRED"
     ]
     # Ambiguous `Widget` (3 defs) -> no member-call edge; unknown receiver -> none.
@@ -140,13 +155,10 @@ def test_swift_unknown_receiver_emits_no_edge(tmp_path: Path):
     # A lowercase receiver absent from the file's type table is never guessed.
     base = tmp_path / "src"
     _write(base / "Helper.swift", "class Helper {\n    func help() {}\n}\n")
-    _write(base / "Caller.swift", (
-        "class Caller {\n"
-        "    func run() {\n"
-        "        mystery.help()\n"
-        "    }\n"
-        "}\n"
-    ))
+    _write(
+        base / "Caller.swift",
+        ("class Caller {\n    func run() {\n        mystery.help()\n    }\n}\n"),
+    )
     files = sorted(base.rglob("*.swift"))
     result = extract(files, cache_root=tmp_path / "cache")
 
@@ -160,15 +172,19 @@ def test_deferred_singleton_local_var_resolves(tmp_path):
     was previously untyped, so the singleton-into-local idiom produced zero edges.
     The constructor form `let x = Type()` is exercised alongside it."""
     base = tmp_path / "src"
-    _write(base / "NetworkManager.swift",
-           "class NetworkManager {\n    static let shared = NetworkManager()\n"
-           "    func fetchData() { }\n    func isLoading() -> Bool { return false }\n}\n")
-    _write(base / "ViewController.swift",
-           "class ViewControllerA {\n    func loadIfNeeded() {\n"
-           "        let manager = NetworkManager.shared\n"
-           "        if manager.isLoading() { return }\n"
-           "        manager.fetchData()\n    }\n"
-           "    func makeFresh() {\n        let m = NetworkManager()\n        m.fetchData()\n    }\n}\n")
+    _write(
+        base / "NetworkManager.swift",
+        "class NetworkManager {\n    static let shared = NetworkManager()\n"
+        "    func fetchData() { }\n    func isLoading() -> Bool { return false }\n}\n",
+    )
+    _write(
+        base / "ViewController.swift",
+        "class ViewControllerA {\n    func loadIfNeeded() {\n"
+        "        let manager = NetworkManager.shared\n"
+        "        if manager.isLoading() { return }\n"
+        "        manager.fetchData()\n    }\n"
+        "    func makeFresh() {\n        let m = NetworkManager()\n        m.fetchData()\n    }\n}\n",
+    )
     result = extract(sorted(base.glob("*.swift")), cache_root=tmp_path / "cache", parallel=False)
     calls = {(s, t) for s, r, t in _edge_labels(result, ("calls",))}
     # deferred singleton local var -> both later member calls resolve (method

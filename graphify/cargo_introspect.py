@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from graphify.installation import uv_tool_install_command
+
 
 _CONFIDENCE_EXTRACTED = "EXTRACTED"
 
@@ -17,7 +19,8 @@ def _load_toml(path: Path) -> dict[str, Any]:
             import tomli as tomllib  # type: ignore[import-not-found,no-redef]
         except ModuleNotFoundError:
             raise ImportError(
-                "--cargo on Python 3.10 needs tomli. Install with: pip install tomli"
+                "--cargo on Python 3.10 needs tomli. Install with: "
+                + uv_tool_install_command(with_packages=("tomli",))
             ) from None
 
     with path.open("rb") as manifest:

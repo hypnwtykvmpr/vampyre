@@ -27,10 +27,7 @@ def _targets(result: dict, relation: str, label: str) -> list[dict]:
 
 
 def _defs(result: dict, label: str) -> list[dict]:
-    return [
-        n for n in result["nodes"]
-        if n.get("label") == label and n.get("source_file")
-    ]
+    return [n for n in result["nodes"] if n.get("label") == label and n.get("source_file")]
 
 
 def test_csharp_declaration_nodes_carry_enclosing_namespace(tmp_path: Path):
@@ -50,52 +47,69 @@ def test_csharp_declaration_nodes_carry_enclosing_namespace(tmp_path: Path):
 
     assert _defs(result, "Damage")[0].get("metadata", {}).get("namespace") == "Game.Core"
     assert _defs(result, "NestedDamage")[0].get("metadata", {}).get("namespace") == "Outer.Inner"
-    assert _defs(result, "FileScopedDamage")[0].get("metadata", {}).get("namespace") == "FileScoped.Core"
-    assert _defs(result, "Damage")[0]["metadata"].get("scope_chain"), "lexical scope_chain must be stamped"
+    assert (
+        _defs(result, "FileScopedDamage")[0].get("metadata", {}).get("namespace")
+        == "FileScoped.Core"
+    )
+    assert _defs(result, "Damage")[0]["metadata"].get("scope_chain"), (
+        "lexical scope_chain must be stamped"
+    )
 
 
 def test_csharp_cross_file_inherits_resolves_to_real_def(tmp_path: Path):
-    core = _write(tmp_path / "core.cs",
-                  "namespace Game.Core { public class Damage { public int Calc() { return 1; } } }\n")
-    combat = _write(tmp_path / "combat.cs",
-                    "using Game.Core;\nnamespace Game.Combat { public class Weapon : Damage {} }\n")
+    core = _write(
+        tmp_path / "core.cs",
+        "namespace Game.Core { public class Damage { public int Calc() { return 1; } } }\n",
+    )
+    combat = _write(
+        tmp_path / "combat.cs",
+        "using Game.Core;\nnamespace Game.Combat { public class Weapon : Damage {} }\n",
+    )
     result = extract([core, combat], cache_root=tmp_path)
 
     damage = _targets(result, "inherits", "Damage")
     assert damage, "expected an inherits edge to Damage"
-    assert all(d.get("source_file") for d in damage), \
+    assert all(d.get("source_file") for d in damage), (
         "Weapon : Damage must resolve to the real Damage def, not a shadow stub"
+    )
 
 
 def test_csharp_collision_disambiguated_by_using(tmp_path: Path):
-    core = _write(tmp_path / "core.cs",
-                  "namespace Game.Core { public class WeaponData { public int Number; } }\n")
-    ui = _write(tmp_path / "ui.cs",
-                "namespace Game.UI { public class WeaponData { public int Width; } }\n")
-    combat = _write(tmp_path / "combat.cs",
-                    "using Game.Core;\nnamespace Game.Combat { public class Holder { public WeaponData data; } }\n")
+    core = _write(
+        tmp_path / "core.cs",
+        "namespace Game.Core { public class WeaponData { public int Number; } }\n",
+    )
+    ui = _write(
+        tmp_path / "ui.cs", "namespace Game.UI { public class WeaponData { public int Width; } }\n"
+    )
+    combat = _write(
+        tmp_path / "combat.cs",
+        "using Game.Core;\nnamespace Game.Combat { public class Holder { public WeaponData data; } }\n",
+    )
     result = extract([core, ui, combat], cache_root=tmp_path)
 
-    shadow = [n for n in result["nodes"]
-              if n.get("label") == "WeaponData" and not n.get("source_file")]
+    shadow = [
+        n for n in result["nodes"] if n.get("label") == "WeaponData" and not n.get("source_file")
+    ]
     assert not shadow, f"orphan WeaponData shadow node(s) remain: {[n['id'] for n in shadow]}"
 
     resolved = [w for w in _targets(result, "references", "WeaponData") if w.get("source_file")]
     assert resolved, "WeaponData reference should resolve to a real def"
-    assert all("core.cs" in w["source_file"] for w in resolved), \
+    assert all("core.cs" in w["source_file"] for w in resolved), (
         "must disambiguate to Game.Core.WeaponData via `using Game.Core;`, not Game.UI"
+    )
 
 
 def test_csharp_global_using_and_global_namespace(tmp_path: Path):
     gadget = _write(tmp_path / "gadget.cs", "public class Gadget {}\n")
-    user = _write(tmp_path / "user.cs",
-                  "global using System;\npublic class Widget : Gadget {}\n")
+    user = _write(tmp_path / "user.cs", "global using System;\npublic class Widget : Gadget {}\n")
     result = extract([gadget, user], cache_root=tmp_path)
 
     g = _targets(result, "inherits", "Gadget")
     assert g, "expected an inherits edge to Gadget"
-    assert all(x.get("source_file") for x in g), \
+    assert all(x.get("source_file") for x in g), (
         "Widget : Gadget (both global namespace) must resolve; `global using` must not break parsing"
+    )
 
 
 def test_csharp_cross_namespace_enum_reference_resolves_to_real_def(tmp_path: Path):
@@ -181,8 +195,7 @@ def test_csharp_using_alias_resolves_to_aliased_type(tmp_path: Path):
     )
     combat = _write(
         tmp_path / "combat.cs",
-        "using Dmg = Game.Core.Damage;\n"
-        "namespace Game.Combat { public class Weapon : Dmg {} }\n",
+        "using Dmg = Game.Core.Damage;\nnamespace Game.Combat { public class Weapon : Dmg {} }\n",
     )
     result = extract([core, combat], cache_root=tmp_path)
 
@@ -216,7 +229,11 @@ def test_csharp_import_edges_carry_using_kind(tmp_path: Path):
     )
     result = extract([f], cache_root=tmp_path)
     imports = {
-        (e["metadata"].get("using_kind"), e["metadata"].get("target_fqn"), e["metadata"].get("alias"))
+        (
+            e["metadata"].get("using_kind"),
+            e["metadata"].get("target_fqn"),
+            e["metadata"].get("alias"),
+        )
         for e in result["edges"]
         if e.get("relation") == "imports" and e.get("metadata")
     }
@@ -249,27 +266,23 @@ def test_csharp_import_edges_resolve_internal_namespace_and_alias(tmp_path: Path
     ]
 
     assert ("namespace", "Game.Core", "namespace") in [
-        (kind, fqn, target.get("type") if target else None)
-        for kind, fqn, target in imports
+        (kind, fqn, target.get("type") if target else None) for kind, fqn, target in imports
     ]
     assert ("namespace", "UnityEngine", None) in [
-        (kind, fqn, target.get("type") if target else None)
-        for kind, fqn, target in imports
+        (kind, fqn, target.get("type") if target else None) for kind, fqn, target in imports
     ]
     assert ("alias", "Game.Core.Damage", "Damage") in [
-        (kind, fqn, target.get("label") if target else None)
-        for kind, fqn, target in imports
+        (kind, fqn, target.get("label") if target else None) for kind, fqn, target in imports
     ]
     assert ("alias", "System.Math", None) in [
-        (kind, fqn, target.get("label") if target else None)
-        for kind, fqn, target in imports
+        (kind, fqn, target.get("label") if target else None) for kind, fqn, target in imports
     ]
     assert ("static", "Game.Core.Damage", None) in [
-        (kind, fqn, target.get("label") if target else None)
-        for kind, fqn, target in imports
+        (kind, fqn, target.get("label") if target else None) for kind, fqn, target in imports
     ]
     assert not [
-        n for n in result["nodes"]
+        n
+        for n in result["nodes"]
         if not n.get("source_file") and n.get("label") in {"Game.Core", "Game.Core.Damage"}
     ]
 
@@ -277,8 +290,9 @@ def test_csharp_import_edges_resolve_internal_namespace_and_alias(tmp_path: Path
 def test_csharp_qualified_base_ref_is_flagged(tmp_path: Path):
     f = _write(tmp_path / "a.cs", "namespace N { class T {} class Use : B.T {} }\n")
     result = extract([f], cache_root=tmp_path)
-    assert any((e.get("metadata") or {}).get("qualified") for e in result["edges"]), \
+    assert any((e.get("metadata") or {}).get("qualified") for e in result["edges"]), (
         "the qualified base ref B.T must carry metadata.qualified"
+    )
 
 
 def test_csharp_one_file_same_name_no_collision_flag(tmp_path: Path):
@@ -287,8 +301,9 @@ def test_csharp_one_file_same_name_no_collision_flag(tmp_path: Path):
     result = extract([dup], cache_root=tmp_path)
     tnodes = [n for n in result["nodes"] if n.get("label") == "T" and n.get("source_file")]
     assert len({n["id"] for n in tnodes}) == 2, tnodes
-    assert not any((n.get("metadata") or {}).get("ns_collision") for n in tnodes), \
+    assert not any((n.get("metadata") or {}).get("ns_collision") for n in tnodes), (
         "ns_collision must no longer be stamped"
+    )
 
 
 def test_csharp_type_parameter_emits_no_reference(tmp_path: Path):
@@ -296,7 +311,8 @@ def test_csharp_type_parameter_emits_no_reference(tmp_path: Path):
     result = extract([f], cache_root=tmp_path)
     real_t = {n["id"] for n in result["nodes"] if n.get("label") == "T" and n.get("source_file")}
     box_to_t = [
-        e for e in result["edges"]
+        e
+        for e in result["edges"]
         if e.get("relation") in ("references", "inherits", "implements")
         and e.get("target") in real_t
         and "box" in str(e.get("source", "")).lower()
@@ -332,7 +348,9 @@ def test_csharp_inherits_does_not_bind_namespace_node(tmp_path: Path):
     f = _write(tmp_path / "y.cs", "namespace Game { class Damage {} class Use : Game {} }\n")
     result = extract([f], cache_root=tmp_path)
     nsids = {n["id"] for n in result["nodes"] if n.get("type") == "namespace"}
-    bad = [e for e in result["edges"] if e.get("relation") == "inherits" and e.get("target") in nsids]
+    bad = [
+        e for e in result["edges"] if e.get("relation") == "inherits" and e.get("target") in nsids
+    ]
     assert not bad, f"inherits must not target a namespace node: {bad}"
 
 
@@ -360,10 +378,13 @@ def test_csharp_qualified_generic_resolves_to_real_def(tmp_path: Path):
     result = extract([f], cache_root=tmp_path)
     box = next(n for n in result["nodes"] if n.get("label") == "Box" and n.get("source_file"))
     use = next(n for n in result["nodes"] if n.get("label") == "Use")
-    refs = {(e["source"], e["target"]) for e in result["edges"] if e.get("relation") == "references"}
+    refs = {
+        (e["source"], e["target"]) for e in result["edges"] if e.get("relation") == "references"
+    }
     assert (use["id"], box["id"]) in refs, "N.Box<int> field must resolve to the real N.Box def"
-    assert not any("<" in (n.get("label") or "") for n in result["nodes"]), \
+    assert not any("<" in (n.get("label") or "") for n in result["nodes"]), (
         "no node should carry a junk generic label"
+    )
 
 
 def test_csharp_qualified_alias_namespace_resolves(tmp_path: Path):
@@ -381,8 +402,9 @@ def test_csharp_qualified_out_of_scope_alias_falls_through_to_namespace(tmp_path
     # B is a real namespace AND an out-of-scope alias (declared in A, used in M):
     # B.T in M must resolve to namespace B's T, not dangle.
     a = _write(tmp_path / "b.cs", "namespace B { class T {} }\n")
-    c = _write(tmp_path / "m.cs",
-               "namespace A { using B = X.Y; }\nnamespace M { class Use : B.T {} }\n")
+    c = _write(
+        tmp_path / "m.cs", "namespace A { using B = X.Y; }\nnamespace M { class Use : B.T {} }\n"
+    )
     result = extract([a, c], cache_root=tmp_path)
     b_t = next(n for n in result["nodes"] if n.get("label") == "T" and n.get("source_file"))
     use = next(n for n in result["nodes"] if n.get("label") == "Use")
@@ -395,13 +417,21 @@ def test_csharp_qualified_in_scope_alias_shadows_namespace(tmp_path: Path):
     # alias (B = Z.Q in C) must not overwrite it. Good : B.T -> X.Y.T, not namespace B's T.
     a = _write(tmp_path / "xy.cs", "namespace X.Y { class T {} }\n")
     b = _write(tmp_path / "b.cs", "namespace B { class T {} }\n")
-    c = _write(tmp_path / "use.cs",
-               "namespace A { using B = X.Y; class Good : B.T {} }\nnamespace C { using B = Z.Q; }\n")
+    c = _write(
+        tmp_path / "use.cs",
+        "namespace A { using B = X.Y; class Good : B.T {} }\nnamespace C { using B = Z.Q; }\n",
+    )
     result = extract([a, b, c], cache_root=tmp_path)
-    xy_t = next(n for n in result["nodes"]
-                if n.get("label") == "T" and (n.get("metadata") or {}).get("namespace") == "X.Y")
-    b_t = next(n for n in result["nodes"]
-               if n.get("label") == "T" and (n.get("metadata") or {}).get("namespace") == "B")
+    xy_t = next(
+        n
+        for n in result["nodes"]
+        if n.get("label") == "T" and (n.get("metadata") or {}).get("namespace") == "X.Y"
+    )
+    b_t = next(
+        n
+        for n in result["nodes"]
+        if n.get("label") == "T" and (n.get("metadata") or {}).get("namespace") == "B"
+    )
     good = next(n for n in result["nodes"] if n.get("label") == "Good")
     inh = {(e["source"], e["target"]) for e in result["edges"] if e.get("relation") == "inherits"}
     assert (good["id"], xy_t["id"]) in inh, "in-scope alias B=X.Y must resolve B.T to X.Y.T"
@@ -415,10 +445,16 @@ def test_csharp_one_file_same_name_binds_own_namespace(tmp_path: Path):
         "namespace A { class T {} } namespace B { class T {} class Use : T {} }\n",
     )
     result = extract([f], cache_root=tmp_path)
-    b_t = next(n for n in result["nodes"]
-               if n.get("label") == "T" and (n.get("metadata") or {}).get("namespace") == "B")
-    a_t = next(n for n in result["nodes"]
-               if n.get("label") == "T" and (n.get("metadata") or {}).get("namespace") == "A")
+    b_t = next(
+        n
+        for n in result["nodes"]
+        if n.get("label") == "T" and (n.get("metadata") or {}).get("namespace") == "B"
+    )
+    a_t = next(
+        n
+        for n in result["nodes"]
+        if n.get("label") == "T" and (n.get("metadata") or {}).get("namespace") == "A"
+    )
     use = next(n for n in result["nodes"] if n.get("label") == "Use")
     inh = {(e["source"], e["target"]) for e in result["edges"] if e.get("relation") == "inherits"}
     assert (use["id"], b_t["id"]) in inh, "Use:T in B must bind B.T"
@@ -447,9 +483,11 @@ def test_csharp_type_ref_never_targets_a_file_label(tmp_path: Path):
     b = _write(tmp_path / "b.cs", "using B = N.Box;\nclass Use : B {}\n")
     result = extract([core, b], cache_root=tmp_path)
     bad = [
-        e for e in result["edges"]
+        e
+        for e in result["edges"]
         if e.get("relation") in ("inherits", "implements", "references")
-        and str(_node_by_id(result, e.get("target")).get("label", "") if _node_by_id(result, e.get("target")) else "").endswith(".cs")
+        and (target := _node_by_id(result, e.get("target"))) is not None
+        and str(target.get("label", "")).endswith(".cs")
     ]
     assert not bad, f"a C# type ref must not target a .cs file-labeled node: {bad}"
 
@@ -459,13 +497,14 @@ def test_csharp_type_ref_edges_carry_ref_token(tmp_path: Path):
     use = _write(tmp_path / "use.cs", "using N;\nnamespace M { class Use : Base {} }\n")
     result = extract([core, use], cache_root=tmp_path)
     inh = [
-        e for e in result["edges"]
-        if e.get("relation") == "inherits"
-        and "use" in str(e.get("source", "")).lower()
+        e
+        for e in result["edges"]
+        if e.get("relation") == "inherits" and "use" in str(e.get("source", "")).lower()
     ]
     assert inh, "expected the Use : Base inherits edge"
-    assert any((e.get("metadata") or {}).get("ref_token") == "Base" for e in inh), \
+    assert any((e.get("metadata") or {}).get("ref_token") == "Base" for e in inh), (
         "the inherits edge must carry metadata.ref_token == 'Base'"
+    )
 
 
 def test_csharp_alias_matching_file_stem_resolves_via_token(tmp_path: Path):
@@ -489,6 +528,7 @@ def test_csharp_same_name_diff_namespace_have_distinct_ids(tmp_path: Path):
 def test_csharp_global_scope_id_unchanged(tmp_path: Path):
     # A C# type at global scope (no namespace) keeps the bare stem+name id (empty namespace dropped by make_id).
     from graphify.extractors.base import _make_id, _file_stem
+
     f = _write(tmp_path / "g.cs", "class Glob {}\n")
     result = extract([f], cache_root=tmp_path)
     glob = next(n for n in result["nodes"] if n.get("label") == "Glob")
@@ -506,6 +546,7 @@ def test_csharp_namespaced_id_carries_namespace_segment(tmp_path: Path):
     assert order["id"].endswith("order") and "game_core" in order["id"], order["id"]
     assert (order.get("metadata") or {}).get("namespace") == "Game.Core"
 
+
 def test_csharp_two_namespaces_each_resolve_own_type(tmp_path: Path):
     f = _write(
         tmp_path / "two.cs",
@@ -514,8 +555,11 @@ def test_csharp_two_namespaces_each_resolve_own_type(tmp_path: Path):
     result = extract([f], cache_root=tmp_path)
 
     def _n(label, ns):
-        return next(x for x in result["nodes"]
-                    if x.get("label") == label and (x.get("metadata") or {}).get("namespace") == ns)
+        return next(
+            x
+            for x in result["nodes"]
+            if x.get("label") == label and (x.get("metadata") or {}).get("namespace") == ns
+        )
 
     a_t, b_t, use_a, use_b = _n("T", "A"), _n("T", "B"), _n("UseA", "A"), _n("UseB", "B")
     inh = {(e["source"], e["target"]) for e in result["edges"] if e.get("relation") == "inherits"}
@@ -525,7 +569,10 @@ def test_csharp_two_namespaces_each_resolve_own_type(tmp_path: Path):
 
 def test_csharp_file_level_using_applies_across_blocks(tmp_path: Path):
     a = _write(tmp_path / "n.cs", "namespace N { class T {} }\n")
-    b = _write(tmp_path / "u.cs", "using N;\nnamespace A { class X : T {} } namespace B { class Y : T {} }\n")
+    b = _write(
+        tmp_path / "u.cs",
+        "using N;\nnamespace A { class X : T {} } namespace B { class Y : T {} }\n",
+    )
     result = extract([a, b], cache_root=tmp_path)
     resolved = [t["id"] for t in _targets(result, "inherits", "T") if t.get("source_file")]
     assert len(resolved) >= 2, f"file-level using N must reach both A.X and B.Y: {resolved}"

@@ -4,6 +4,7 @@ Names each community after its highest-degree member so a report reads "log_acti
 instead of "Community 70", with no backend. Ties break by node id for run-to-run
 stability; a community with no members present in the graph falls back to "Community N".
 """
+
 import networkx as nx
 
 from graphify.cluster import label_communities_by_hub
@@ -58,8 +59,7 @@ def test_node_without_label_attr_uses_id():
 
 def test_multiple_communities_each_get_their_own_hub():
     g = _g(
-        {"h1": "auth()", "a1": "a1()", "a2": "a2()",
-         "h2": "billing()", "b1": "b1()", "b2": "b2()"},
+        {"h1": "auth()", "a1": "a1()", "a2": "a2()", "h2": "billing()", "b1": "b1()", "b2": "b2()"},
         [("h1", "a1"), ("h1", "a2"), ("h2", "b1"), ("h2", "b2")],
     )
     labels = label_communities_by_hub(g, {0: ["h1", "a1", "a2"], 1: ["h2", "b1", "b2"]})
@@ -68,8 +68,10 @@ def test_multiple_communities_each_get_their_own_hub():
 
 # ── community membership signatures (stale-label detection, cluster-only) ──────
 
+
 def test_community_member_sigs_are_deterministic_and_order_independent():
     from graphify.cluster import community_member_sigs
+
     a = community_member_sigs({0: ["x", "y", "z"], 1: ["a"]})
     b = community_member_sigs({0: ["z", "x", "y"], 1: ["a"]})  # member order shuffled
     assert a == b
@@ -78,6 +80,7 @@ def test_community_member_sigs_are_deterministic_and_order_independent():
 
 def test_community_member_sigs_change_when_membership_changes():
     from graphify.cluster import community_member_sigs
+
     before = community_member_sigs({0: ["x", "y", "z"]})
     after = community_member_sigs({0: ["x", "y"]})  # a node left the community
     assert before[0] != after[0], "signature must change when a community's members change"

@@ -9,6 +9,7 @@ The bare ``graphify install`` behaviour (claude/windows only) is unchanged; the
 named platform is opt-in. The ``graphify agents install`` subcommand is the
 amp-twin: it also wires AGENTS.md, matching the rendered hooks reference.
 """
+
 import os
 import sys
 from pathlib import Path
