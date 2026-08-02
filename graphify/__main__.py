@@ -21,7 +21,11 @@ except Exception:
 # Accepts a relative name ("graphify-out-feature") or an absolute path ("/shared/graphify-out").
 # Defined once in graphify.paths so the security/callflow path guards honour the
 # same override (#1423).
-from graphify.paths import GRAPHIFY_OUT as _GRAPHIFY_OUT
+from graphify.paths import (
+    GRAPHIFY_OUT as _GRAPHIFY_OUT,
+    resolve_scan_root_marker as _resolve_scan_root_marker,
+    write_scan_root_marker as _persist_scan_root_marker,
+)
 
 
 @functools.lru_cache(maxsize=None)
@@ -4091,7 +4095,7 @@ def main() -> None:
             # Try to recover the scan root saved by the last full build
             saved = Path(_GRAPHIFY_OUT) / ".graphify_root"
             if saved.exists():
-                watch_path = Path(saved.read_text(encoding="utf-8").strip())
+                watch_path = _resolve_scan_root_marker(saved) or Path(".")
             else:
                 watch_path = Path(".")
         if not watch_path.exists():
@@ -5236,13 +5240,7 @@ def main() -> None:
         def _write_scan_root_marker() -> None:
             if not has_path:
                 return
-            try:
-                recorded_root = os.path.relpath(target, out_root).replace(os.sep, "/")
-            except ValueError:
-                recorded_root = target.as_posix()
-            (graphify_out / ".graphify_root").write_text(
-                recorded_root, encoding="utf-8"
-            )
+            _persist_scan_root_marker(graphify_out / ".graphify_root", target)
 
         stages = _StageTimer(cli_timing)
 

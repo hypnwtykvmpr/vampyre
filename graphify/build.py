@@ -32,7 +32,10 @@ from pathlib import Path
 import networkx as nx
 from .edge_identity import make_stable_key, strip_schema_key
 from .ids import make_id, normalize_id as _normalize_id
-from .paths import default_graph_json as _default_graph_json
+from .paths import (
+    default_graph_json as _default_graph_json,
+    resolve_scan_root_marker,
+)
 from .validate import is_hashable, validate_extraction
 
 
@@ -179,9 +182,9 @@ def _infer_merge_root(graph_path: Path) -> str | None:
     try:
         marker = graph_path.parent / ".graphify_root"
         if marker.exists():
-            recorded = marker.read_text(encoding="utf-8").strip()
-            if recorded:
-                return str(Path(recorded).resolve())
+            recorded = resolve_scan_root_marker(marker)
+            if recorded is not None:
+                return str(recorded)
     except OSError:
         pass
     try:

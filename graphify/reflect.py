@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from graphify.ingest import OUTCOMES
-from graphify.paths import GRAPHIFY_OUT_NAME
+from graphify.paths import GRAPHIFY_OUT_NAME, resolve_scan_root_marker
 
 _UNCATEGORIZED = "Uncategorized"
 
@@ -690,12 +690,9 @@ def _resolve_source_path(src: str, graph_path: Path) -> Path | None:
     gp = Path(graph_path)
     out_dir = gp.parent
     candidates: list[Path] = []
-    try:
-        recorded = (out_dir / ".graphify_root").read_text(encoding="utf-8").strip()
-        if recorded:
-            candidates.append(Path(recorded))
-    except (OSError, ValueError):
-        pass  # unreadable/non-UTF-8 marker -> fall through (best-effort)
+    recorded = resolve_scan_root_marker(out_dir / ".graphify_root")
+    if recorded is not None:
+        candidates.append(recorded)
     # Layout-appropriate root first (precision), then the other (robustness).
     if out_dir.name == GRAPHIFY_OUT_NAME:
         candidates += [out_dir.parent, out_dir]

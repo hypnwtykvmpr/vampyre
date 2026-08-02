@@ -129,6 +129,62 @@ def test_prune_without_root_uses_graphify_root_marker(tmp_path):
     assert "handoff" not in {d["label"] for _, d in G.nodes(data=True)}
 
 
+def test_infer_merge_root_reads_phase1_output_relative_marker(tmp_path, monkeypatch):
+    root = tmp_path / "project" / "Sources"
+    out = root / "graphify-out"
+    out.mkdir(parents=True)
+    graph_path = out / "graph.json"
+    graph_path.write_text('{"nodes": [], "links": []}', encoding="utf-8")
+    (out / ".graphify_root").write_text(".", encoding="utf-8")
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+
+    assert _infer_merge_root(graph_path) == str(root.resolve())
+
+
+def test_portable_marker_prunes_ghost_node_from_unrelated_cwd(tmp_path, monkeypatch):
+    source_root = tmp_path / "project" / "Sources"
+    source_root.mkdir(parents=True)
+    out = tmp_path / "canonical" / "graphify-out"
+    out.mkdir(parents=True)
+    graph_path = out / "graph.json"
+    marker = out / ".graphify_root"
+    relative = os.path.relpath(source_root, marker.parent).replace(os.sep, "/")
+    marker.write_text(f"marker-relative:{relative}", encoding="utf-8")
+    _write_graph(
+        graph_path,
+        [
+            {
+                "id": "gone",
+                "label": "gone",
+                "file_type": "code",
+                "source_file": "gone.py",
+            },
+            {
+                "id": "keep",
+                "label": "keep",
+                "file_type": "code",
+                "source_file": "keep.py",
+            },
+        ],
+        [],
+        [],
+    )
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+
+    assert _infer_merge_root(graph_path) == str(source_root.resolve())
+    G = build_merge(
+        [],
+        graph_path,
+        prune_sources=[str(source_root / "gone.py")],
+        dedup=False,
+    )
+    assert {data["label"] for _, data in G.nodes(data=True)} == {"keep"}
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
 def test_prune_matches_across_symlinked_root(tmp_path):
     """A symlinked scan root (macOS /var -> /private/var, symlinked home/worktree)

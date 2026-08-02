@@ -18,7 +18,10 @@ from graphify.detect import (
 )
 
 # Single source of truth in graphify.paths (#1423); re-exported as _GRAPHIFY_OUT.
-from graphify.paths import GRAPHIFY_OUT as _GRAPHIFY_OUT
+from graphify.paths import (
+    GRAPHIFY_OUT as _GRAPHIFY_OUT,
+    write_scan_root_marker,
+)
 
 _PENDING_FILENAME = ".pending_changes"
 _PENDING_DRAIN_MAX_PASSES = 20
@@ -1061,12 +1064,7 @@ def _rebuild_code(
         rebuilt_sources |= set(deleted_paths)
         result["edges"] = _dedupe_rebuilt_edge_records(result.get("edges", []))
         out.mkdir(exist_ok=True)
-        # Write the user-supplied path rather than the resolved absolute form
-        # so a committed ``graphify-out/.graphify_root`` is portable across
-        # clones and CI runners (#777). When ``watch_path`` is ``.`` (the
-        # common case for ``graphify update``), this writes ``.`` and the
-        # subsequent re-run resolves it against the caller's CWD.
-        (out / ".graphify_root").write_text(str(watch_path), encoding="utf-8")
+        write_scan_root_marker(out / ".graphify_root", project_root)
 
         if no_cluster:
             # Normalise to "links" key so schema is consistent with the full clustered path.

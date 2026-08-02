@@ -213,6 +213,77 @@ def disambiguate_ambiguous_candidates(
 # path guards that walk parents looking for the output dir by name, and by the
 # detect scan-exclude so a custom output dir is never re-ingested as source.
 GRAPHIFY_OUT_NAME = os.path.basename(os.path.normpath(GRAPHIFY_OUT))
+SCAN_ROOT_MARKER_PREFIX = "marker-relative:"
+
+
+def write_scan_root_marker(marker_path: Path, scan_root: Path) -> None:
+    """Write a portable scan-root marker anchored to the marker directory."""
+    marker = Path(marker_path)
+    root = Path(scan_root).resolve()
+    try:
+        recorded = os.path.relpath(root, marker.parent.resolve()).replace(os.sep, "/")
+        value = f"{SCAN_ROOT_MARKER_PREFIX}{recorded}"
+    except ValueError:
+        # Windows cross-drive paths cannot be relative; an absolute marker is
+        # still unambiguous and preserves existing cross-drive behavior.
+        value = root.as_posix()
+    marker.write_text(value, encoding="utf-8")
+
+
+def resolve_scan_root_marker(
+    marker_path: Path,
+    *,
+    cwd: Path | None = None,
+) -> Path | None:
+    """Resolve canonical and legacy scan-root markers.
+
+    New markers use ``marker-relative:`` and are relative to the directory
+    containing the marker. Unprefixed absolute markers remain supported.
+    Unprefixed relative markers are legacy: first try the output-root-relative
+    form written by graphify 0.9.5, then the older CWD-relative watch form.
+    """
+    marker = Path(marker_path)
+    try:
+        recorded = marker.read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+    if not recorded:
+        return None
+
+    if recorded.startswith(SCAN_ROOT_MARKER_PREFIX):
+        relative = recorded[len(SCAN_ROOT_MARKER_PREFIX) :]
+        if not relative:
+            return None
+        try:
+            relative_path = Path(relative)
+            if relative_path.is_absolute():
+                return None
+            return (marker.parent / relative_path).resolve()
+        except (OSError, RuntimeError, ValueError):
+            return None
+
+    try:
+        legacy_path = Path(recorded)
+        if legacy_path.is_absolute():
+            return legacy_path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+    if marker.parent.name == GRAPHIFY_OUT_NAME:
+        bases = [marker.parent.parent, marker.parent]
+    else:
+        bases = [marker.parent, marker.parent.parent]
+    bases.append(Path.cwd() if cwd is None else Path(cwd))
+    candidates: list[Path] = []
+    for base in bases:
+        try:
+            candidates.append((base / legacy_path).resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return candidates[0] if candidates else None
 
 
 def out_path(*parts: str) -> Path:

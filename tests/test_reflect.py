@@ -12,6 +12,7 @@ first" worked example from the issue.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -880,6 +881,35 @@ def test_relative_source_file_resolved_via_graphify_root_marker(tmp_path):
     _write_raw_doc(mem, "b.md", "2026-05-10", outcome="useful", nodes=["login()"])
     reflect(mem, out / "reflections" / "LESSONS.md",
             graph_path=out / "graph.json", now=_NOW)
+    assert load_learning_overlay(out / "graph.json")["auth_login"]["stale"] is False
+
+
+def test_portable_graphify_root_marker_resolves_from_unrelated_cwd(tmp_path, monkeypatch):
+    proj = tmp_path / "project" / "Sources"
+    proj.mkdir(parents=True)
+    (proj / "auth.py").write_text("def login(): pass\n", encoding="utf-8")
+    out = tmp_path / "canonical" / "graphify-out"
+    _overlay_graph(
+        out,
+        [{"id": "auth_login", "label": "login()", "source_file": "auth.py", "community": 0}],
+    )
+    marker = out / ".graphify_root"
+    relative = os.path.relpath(proj, marker.parent).replace(os.sep, "/")
+    marker.write_text(f"marker-relative:{relative}", encoding="utf-8")
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+    mem = out / "memory"
+    _write_raw_doc(mem, "a.md", "2026-05-01", outcome="useful", nodes=["login()"])
+    _write_raw_doc(mem, "b.md", "2026-05-10", outcome="useful", nodes=["login()"])
+
+    reflect(
+        mem,
+        out / "reflections" / "LESSONS.md",
+        graph_path=out / "graph.json",
+        now=_NOW,
+    )
+
     assert load_learning_overlay(out / "graph.json")["auth_login"]["stale"] is False
 
 

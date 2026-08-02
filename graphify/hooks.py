@@ -118,6 +118,7 @@ print(f'[graphify hook] {len(changed)} file(s) changed - rebuilding graph...')
 
 try:
     from graphify.watch import _rebuild_code, _apply_resource_limits
+    from graphify.paths import resolve_scan_root_marker
     _apply_resource_limits()
     _timeout = int(os.environ.get('GRAPHIFY_REBUILD_TIMEOUT', '600'))
     if _timeout > 0 and hasattr(signal, 'SIGALRM'):
@@ -128,9 +129,7 @@ try:
     _out = os.environ.get('GRAPHIFY_OUT', 'graphify-out')
     _saved = Path(_out) / '.graphify_root'
     if _saved.exists():
-        _txt = _saved.read_text(encoding='utf-8').strip()
-        if _txt:
-            _root = Path(_txt)
+        _root = resolve_scan_root_marker(_saved) or _root
     _rebuild_code(_root, changed_paths=changed, force=_force)
     # Refresh the work-memory lessons doc when saved Q&A outcomes exist
     # (best-effort; never fails the hook).
@@ -153,6 +152,7 @@ except Exception as exc:
 
 _REBUILD_BODY_CHECKOUT = """\
 from graphify.watch import _rebuild_code, _apply_resource_limits
+from graphify.paths import resolve_scan_root_marker
 from pathlib import Path
 import os, signal, sys
 try:
@@ -169,9 +169,7 @@ try:
     _out = os.environ.get('GRAPHIFY_OUT', 'graphify-out')
     _saved = Path(_out) / '.graphify_root'
     if _saved.exists():
-        _txt = _saved.read_text(encoding='utf-8').strip()
-        if _txt:
-            _root = Path(_txt)
+        _root = resolve_scan_root_marker(_saved) or _root
     _rebuild_code(_root, force=_force)
     # Refresh the work-memory lessons doc when saved Q&A outcomes exist
     # (best-effort; never fails the hook).

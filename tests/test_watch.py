@@ -156,9 +156,7 @@ def test_rebuild_lock_does_not_accumulate_pids_across_runs(tmp_path):
 
 
 def test_graphify_root_preserves_relative_when_invoked_with_relative_path(tmp_path, monkeypatch):
-    """#777: ``.graphify_root`` stores the user-supplied path (``.``), not the
-    resolved absolute, so a committed ``graphify-out/.graphify_root`` is
-    portable across clones and CI runners."""
+    """#777: marker paths are portable and anchored to the marker directory."""
     from graphify.watch import _rebuild_code
 
     corpus = tmp_path / "corpus"
@@ -169,12 +167,11 @@ def test_graphify_root_preserves_relative_when_invoked_with_relative_path(tmp_pa
     assert _rebuild_code(Path("."), acquire_lock=False) is True
 
     saved = (corpus / "graphify-out" / ".graphify_root").read_text(encoding="utf-8")
-    assert saved == ".", f".graphify_root must preserve the user-supplied path; got {saved!r}"
+    assert saved == "marker-relative:.."
 
 
 def test_graphify_root_preserves_absolute_when_user_supplied(tmp_path):
-    """When the caller supplies an absolute path, ``.graphify_root`` stores
-    that absolute form verbatim — preserving explicit-absolute intent."""
+    """Absolute caller paths are persisted in the same portable marker form."""
     from graphify.watch import _rebuild_code
 
     corpus = tmp_path / "corpus"
@@ -183,7 +180,7 @@ def test_graphify_root_preserves_absolute_when_user_supplied(tmp_path):
     assert _rebuild_code(corpus, acquire_lock=False) is True
 
     saved = (corpus / "graphify-out" / ".graphify_root").read_text(encoding="utf-8")
-    assert saved == str(corpus), f"absolute caller path must be preserved as-is; got {saved!r}"
+    assert saved == "marker-relative:.."
 
 
 def test_rebuild_code_evicts_nodes_from_deleted_files(tmp_path):

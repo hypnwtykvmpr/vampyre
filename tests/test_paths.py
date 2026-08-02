@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from graphify.paths import (
     _is_test_path,
     disambiguate_ambiguous_candidates,
+    resolve_scan_root_marker,
+    write_scan_root_marker,
 )
 
 
@@ -97,3 +101,70 @@ def test_disambiguate_path_proximity_same_dir() -> None:
         "pkg/a/caller.py",
     )
     assert winner == "near"
+
+
+def test_scan_root_marker_round_trips_from_unrelated_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "project" / "Sources"
+    source_root.mkdir(parents=True)
+    marker = tmp_path / "canonical" / "graphify-out" / ".graphify_root"
+    marker.parent.mkdir(parents=True)
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+
+    write_scan_root_marker(marker, source_root)
+    monkeypatch.chdir(unrelated)
+
+    assert marker.read_text(encoding="utf-8").startswith("marker-relative:")
+    assert resolve_scan_root_marker(marker) == source_root.resolve()
+
+
+def test_resolve_scan_root_marker_supports_phase1_relative_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "project" / "Sources"
+    marker = source_root / "graphify-out" / ".graphify_root"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(".", encoding="utf-8")
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+
+    assert resolve_scan_root_marker(marker) == source_root.resolve()
+
+
+def test_resolve_scan_root_marker_supports_legacy_absolute_marker(tmp_path: Path) -> None:
+    source_root = tmp_path / "project" / "Sources"
+    source_root.mkdir(parents=True)
+    marker = tmp_path / "canonical" / "graphify-out" / ".graphify_root"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(str(source_root), encoding="utf-8")
+
+    assert resolve_scan_root_marker(marker) == source_root.resolve()
+
+
+def test_resolve_scan_root_marker_supports_legacy_cwd_relative_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    source_root = project / "Sources"
+    source_root.mkdir(parents=True)
+    marker = tmp_path / "canonical" / "graphify-out" / ".graphify_root"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("Sources", encoding="utf-8")
+    monkeypatch.chdir(project)
+
+    assert resolve_scan_root_marker(marker) == source_root.resolve()
+
+
+@pytest.mark.parametrize(
+    "recorded", ["", "marker-relative:", "bad\x00path", "marker-relative:bad\x00path"]
+)
+def test_resolve_scan_root_marker_rejects_malformed_values(
+    tmp_path: Path, recorded: str
+) -> None:
+    marker = tmp_path / ".graphify_root"
+    marker.write_text(recorded, encoding="utf-8")
+
+    assert resolve_scan_root_marker(marker) is None

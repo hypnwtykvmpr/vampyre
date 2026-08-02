@@ -318,8 +318,7 @@ def test_rebuild_bodies_read_graphify_root(name, body):
     assert "GRAPHIFY_OUT" in body, f"{name} ignores the GRAPHIFY_OUT override (#1423)"
     # The recovered root is what gets rebuilt, not a hardcoded cwd.
     assert "_rebuild_code(_root" in body, f"{name} does not pass the recovered root"
-    # Quote-safe inside the shell-double-quoted launcher: single quotes only.
-    assert "read_text(encoding='utf-8')" in body, f"{name} root read is not single-quoted"
+    assert "resolve_scan_root_marker" in body, f"{name} bypasses marker resolution"
 
 
 def test_rebuild_bodies_with_graphify_root_are_valid_python():
@@ -327,6 +326,40 @@ def test_rebuild_bodies_with_graphify_root_are_valid_python():
     that crashes the moment git fires it (#1173)."""
     for body in (_REBUILD_BODY_COMMIT, _REBUILD_BODY_CHECKOUT):
         ast.parse(body)
+
+
+@pytest.mark.parametrize("body", [_REBUILD_BODY_COMMIT, _REBUILD_BODY_CHECKOUT])
+def test_rebuild_bodies_resolve_portable_marker_from_unrelated_cwd(
+    body, tmp_path, monkeypatch
+):
+    import graphify.watch as watch
+
+    source_root = tmp_path / "project" / "Sources"
+    source_root.mkdir(parents=True)
+    output = tmp_path / "canonical" / "graphify-out"
+    output.mkdir(parents=True)
+    relative = os.path.relpath(source_root, output).replace(os.sep, "/")
+    (output / ".graphify_root").write_text(
+        f"marker-relative:{relative}", encoding="utf-8"
+    )
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    captured: list[Path] = []
+
+    monkeypatch.chdir(unrelated)
+    monkeypatch.setenv("GRAPHIFY_OUT", str(output))
+    monkeypatch.setenv("GRAPHIFY_REBUILD_TIMEOUT", "0")
+    monkeypatch.setenv("GRAPHIFY_CHANGED", str(source_root / "app.py"))
+    monkeypatch.setattr(watch, "_apply_resource_limits", lambda: None)
+    monkeypatch.setattr(
+        watch,
+        "_rebuild_code",
+        lambda root, **kwargs: captured.append(Path(root)) or True,
+    )
+
+    exec(body, {})
+
+    assert [path.resolve() for path in captured] == [source_root.resolve()]
 
 
 def test_detached_launch_targets_graphify_python():

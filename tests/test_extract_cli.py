@@ -346,10 +346,13 @@ def test_extract_persists_portable_scan_root_marker(monkeypatch, tmp_path):
 
     plain_marker = plain / "graphify-out" / ".graphify_root"
     external_marker = external_root / "graphify-out" / ".graphify_root"
-    assert plain_marker.read_text(encoding="utf-8") == "."
-    assert external_marker.read_text(encoding="utf-8") == os.path.relpath(
-        external_source.resolve(), external_root.resolve()
-    ).replace(os.sep, "/")
+    assert plain_marker.read_text(encoding="utf-8") == "marker-relative:.."
+    assert external_marker.read_text(encoding="utf-8") == (
+        "marker-relative:"
+        + os.path.relpath(external_source.resolve(), external_marker.parent.resolve()).replace(
+            os.sep, "/"
+        )
+    )
 
 
 def test_extract_out_respects_process_bound_graphify_out(tmp_path):
@@ -377,9 +380,11 @@ def test_extract_out_respects_process_bound_graphify_out(tmp_path):
     assert nodes == ["a", "a_alpha", "b", "b_beta"]
     assert ("a", "b", "imports_from") in edges
     assert ("a", "b_beta", "imports") in edges
-    assert (custom_out / ".graphify_root").read_text(encoding="utf-8") == os.path.relpath(
-        corpus.resolve(), external_root.resolve()
-    ).replace(os.sep, "/")
+    marker = custom_out / ".graphify_root"
+    assert marker.read_text(encoding="utf-8") == (
+        "marker-relative:"
+        + os.path.relpath(corpus.resolve(), marker.parent.resolve()).replace(os.sep, "/")
+    )
     assert (custom_out / "cache" / "stat-index.json").exists()
     assert not (external_root / "graphify-out").exists()
     assert not (corpus / "graphify-out").exists()

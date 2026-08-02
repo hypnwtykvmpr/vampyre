@@ -98,6 +98,41 @@ def test_extract_no_cluster_incremental_noop_preserves_existing_graph(tmp_path):
     assert after_text == before_text
 
 
+def test_bare_update_resolves_portable_marker_from_unrelated_cwd(tmp_path):
+    source_root = tmp_path / "project" / "Sources"
+    source_root.mkdir(parents=True)
+    (source_root / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    output = tmp_path / "canonical" / "graphify-out"
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    env = {k: v for k, v in os.environ.items() if k not in _LLM_ENV_KEYS}
+    env["GRAPHIFY_OUT"] = str(output)
+
+    initial = subprocess.run(
+        [PYTHON, "-m", "graphify", "extract", str(source_root), "--no-cluster"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert initial.returncode == 0, initial.stderr
+    marker = output / ".graphify_root"
+    relative = os.path.relpath(source_root, marker.parent).replace(os.sep, "/")
+    marker.write_text(f"marker-relative:{relative}", encoding="utf-8")
+
+    updated = subprocess.run(
+        [PYTHON, "-m", "graphify", "update", "--no-cluster"],
+        cwd=unrelated,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert updated.returncode == 0, updated.stderr
+    graph = json.loads((output / "graph.json").read_text(encoding="utf-8"))
+    assert any(node.get("label") == "run()" for node in graph.get("nodes", []))
+
+
 def _edges(graph_json: Path) -> list[dict]:
     g = json.loads(graph_json.read_text())
     return g.get("links", g.get("edges", []))
