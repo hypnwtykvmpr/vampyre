@@ -338,6 +338,7 @@ def test_adaptive_retry_returns_directly_when_not_truncated(tmp_path):
 
     assert calls == [4], f"expected 1 call of 4 files, got {calls}"
     assert len(result["nodes"]) == 4
+    assert result["complete"] is True
 
 
 def test_adaptive_retry_splits_when_finish_reason_length(tmp_path):
@@ -364,6 +365,7 @@ def test_adaptive_retry_splits_when_finish_reason_length(tmp_path):
     assert calls == [4, 2, 2], f"expected [4, 2, 2], got {calls}"
     assert len(result["nodes"]) == 4
     assert result["finish_reason"] == "stop"
+    assert result["complete"] is True
 
 
 def test_adaptive_retry_recurses_for_persistent_truncation(tmp_path):
@@ -391,6 +393,7 @@ def test_adaptive_retry_recurses_for_persistent_truncation(tmp_path):
     # Total calls: 1 + 2 + 4 = 7
     assert sorted(calls) == [2, 2, 2, 2, 4, 4, 8]
     assert len(result["nodes"]) == 8
+    assert result["complete"] is True
 
 
 def test_adaptive_retry_caps_at_max_depth(tmp_path, capsys):
@@ -409,7 +412,7 @@ def test_adaptive_retry_caps_at_max_depth(tmp_path, capsys):
         return _stub_with_finish(len(chunk), finish_reason="length")
 
     with patch("graphify.llm.extract_files_direct", side_effect=always_truncate):
-        _extract_with_adaptive_retry(
+        result = _extract_with_adaptive_retry(
             files, backend="kimi", api_key=None, model=None, root=tmp_path, max_depth=2
         )
 
@@ -417,6 +420,7 @@ def test_adaptive_retry_caps_at_max_depth(tmp_path, capsys):
     assert len(calls) <= 7, f"recursion not bounded — {len(calls)} calls"
     err = capsys.readouterr().err
     assert "still truncated" in err
+    assert result["complete"] is False
 
 
 def test_adaptive_retry_single_file_truncation_does_not_recurse(tmp_path, capsys):
@@ -434,13 +438,14 @@ def test_adaptive_retry_single_file_truncation_does_not_recurse(tmp_path, capsys
         return _stub_with_finish(len(chunk), finish_reason="length")
 
     with patch("graphify.llm.extract_files_direct", side_effect=stub):
-        _extract_with_adaptive_retry(
+        result = _extract_with_adaptive_retry(
             [f], backend="kimi", api_key=None, model=None, root=tmp_path, max_depth=3
         )
 
     assert calls == [1], f"single-file chunk recursed; calls = {calls}"
     err = capsys.readouterr().err
     assert "single-file chunk" in err and "truncated" in err
+    assert result["complete"] is False
 
 
 def test_corpus_parallel_uses_adaptive_retry(tmp_path):
@@ -477,3 +482,32 @@ def test_corpus_parallel_uses_adaptive_retry(tmp_path):
     assert len(chunk_done_args) == 1
     assert chunk_done_args[0] == (0, 1, 4)
     assert len(result["nodes"]) == 4
+    assert result["incomplete_chunks"] == 0
+
+
+def test_corpus_parallel_counts_incomplete_chunks(tmp_path):
+    from graphify.llm import extract_corpus_parallel
+
+    source = tmp_path / "huge.md"
+    source.write_text("content", encoding="utf-8")
+
+    with patch(
+        "graphify.llm._extract_with_adaptive_retry",
+        return_value={
+            "nodes": [{"id": "partial"}],
+            "edges": [],
+            "hyperedges": [],
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "finish_reason": "length",
+            "complete": False,
+        },
+    ):
+        result = extract_corpus_parallel(
+            [source],
+            backend="kimi",
+            token_budget=None,
+            max_concurrency=1,
+        )
+
+    assert result["incomplete_chunks"] == 1

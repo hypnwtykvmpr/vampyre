@@ -52,6 +52,14 @@ def test_cache_roundtrip(tmp_file, cache_root):
     assert loaded == result
 
 
+def test_cache_miss_is_read_only(tmp_file, tmp_path):
+    storage_root = tmp_path / "external-output"
+
+    assert load_cached(tmp_file, root=storage_root, source_root=tmp_path) is None
+
+    assert not (storage_root / "graphify-out").exists()
+
+
 def test_cache_storage_root_is_independent_from_source_root(tmp_path):
     source_root = tmp_path / "source"
     source_root.mkdir()

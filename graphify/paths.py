@@ -20,6 +20,8 @@ import os
 import re
 from pathlib import Path, PurePosixPath
 
+from graphify.persistence import atomic_write_text
+
 GRAPHIFY_OUT = os.environ.get("GRAPHIFY_OUT", "graphify-out")
 
 # Directory segments that, when they appear as a whole path component, mark the
@@ -231,7 +233,7 @@ def write_scan_root_marker(marker_path: Path, scan_root: Path) -> None:
         # Windows cross-drive paths cannot be relative; an absolute marker is
         # still unambiguous and preserves existing cross-drive behavior.
         value = root.as_posix()
-    marker.write_text(value, encoding="utf-8")
+    atomic_write_text(marker, value)
 
 
 def resolve_scan_root_marker(

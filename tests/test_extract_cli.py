@@ -86,6 +86,233 @@ def test_extract_exits_nonzero_when_all_semantic_chunks_fail(monkeypatch, tmp_pa
     )
 
 
+@pytest.mark.parametrize("failure_mode", ["reported", "raised"])
+def test_extract_ast_failure_exits_before_writing_state(
+    monkeypatch, tmp_path, capsys, failure_mode
+):
+    corpus = _code_only_corpus(tmp_path / "corpus")
+    out_dir = tmp_path / "out"
+
+    def failed_extract(paths, **kwargs):
+        if failure_mode == "raised":
+            raise RuntimeError("parser process crashed")
+        return {
+            "nodes": [],
+            "edges": [],
+            "failed_files": [str(paths[0])],
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+
+    monkeypatch.setattr("graphify.extract.extract", failed_extract)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        [
+            "graphify",
+            "extract",
+            str(corpus),
+            "--out",
+            str(out_dir),
+            "--no-cluster",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        mainmod.main()
+
+    assert exc_info.value.code == 1
+    assert "AST extraction failed" in capsys.readouterr().err
+    output = out_dir / "graphify-out"
+    assert not (output / "graph.json").exists()
+    assert not (output / "manifest.json").exists()
+    assert not (output / ".graphify_root").exists()
+
+
+def test_extract_refuses_ast_result_when_source_changes_during_extraction(
+    monkeypatch, tmp_path, capsys
+):
+    corpus = _code_only_corpus(tmp_path / "corpus")
+    source = corpus / "auth.py"
+    out_root = tmp_path / "out"
+
+    def unstable_extract(paths, **kwargs):
+        source.write_text("def changed_after_detection():\n    return 2\n", encoding="utf-8")
+        return {
+            "nodes": [
+                {
+                    "id": "stale",
+                    "label": "stale",
+                    "file_type": "code",
+                    "source_file": str(paths[0]),
+                }
+            ],
+            "edges": [],
+            "failed_files": [],
+            "_deferred_cache_entries": [],
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+
+    import importlib
+
+    extract_module = importlib.import_module("graphify.extract")
+    monkeypatch.setattr(extract_module, "extract", unstable_extract)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "extract", str(corpus), "--out", str(out_root), "--no-cluster"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        mainmod.main()
+
+    assert exc_info.value.code == 1
+    assert "source files changed during extraction" in capsys.readouterr().err
+    output = out_root / "graphify-out"
+    assert not (output / "graph.json").exists()
+    assert not (output / "manifest.json").exists()
+    assert not (output / ".graphify_root").exists()
+
+
+def test_extract_refuses_semantic_result_when_source_changes_during_extraction(
+    monkeypatch, tmp_path, capsys
+):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    source = corpus / "notes.md"
+    source.write_text("# Before\n", encoding="utf-8")
+    out_root = tmp_path / "out"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake-key")
+
+    def unstable_semantic(paths, **kwargs):
+        source.write_text("# After\n", encoding="utf-8")
+        result = {
+            "nodes": [
+                {
+                    "id": "notes",
+                    "label": "Notes",
+                    "file_type": "document",
+                    "source_file": str(paths[0]),
+                }
+            ],
+            "edges": [],
+            "hyperedges": [],
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "failed_chunks": 0,
+            "incomplete_chunks": 0,
+        }
+        kwargs["on_chunk_done"](0, 1, result)
+        return result
+
+    monkeypatch.setattr("graphify.llm.extract_corpus_parallel", unstable_semantic)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        [
+            "graphify",
+            "extract",
+            str(corpus),
+            "--backend",
+            "claude",
+            "--out",
+            str(out_root),
+            "--no-cluster",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        mainmod.main()
+
+    assert exc_info.value.code == 1
+    assert "source files changed during extraction" in capsys.readouterr().err
+    output = out_root / "graphify-out"
+    assert not (output / "graph.json").exists()
+    assert not (output / "manifest.json").exists()
+    assert not (output / ".graphify_root").exists()
+
+
+@pytest.mark.parametrize("no_cluster", [True, False])
+def test_extract_manifest_failure_rolls_back_all_published_state(
+    monkeypatch, tmp_path, capsys, no_cluster
+):
+    corpus = _code_only_corpus(tmp_path / "corpus")
+    output = corpus / "graphify-out"
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "extract", str(corpus), "--no-cluster"],
+    )
+    with pytest.raises(SystemExit) as seed_exit:
+        mainmod.main()
+    assert seed_exit.value.code == 0
+
+    (output / ".graphify_semantic_marker").write_text("{}", encoding="utf-8")
+    source = corpus / "auth.py"
+    source.write_text(source.read_text(encoding="utf-8") + "\ndef added():\n    return 1\n")
+    tree_before = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+
+    def fail_manifest(*args, **kwargs):
+        raise OSError("simulated manifest publication failure")
+
+    import importlib
+
+    detect_module = importlib.import_module("graphify.detect")
+    monkeypatch.setattr(detect_module, "save_manifest", fail_manifest)
+    argv = ["graphify", "extract", str(corpus)]
+    if no_cluster:
+        argv.append("--no-cluster")
+    monkeypatch.setattr(mainmod.sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as exc_info:
+        mainmod.main()
+
+    assert exc_info.value.code == 1
+    assert "simulated manifest publication failure" in capsys.readouterr().err
+    tree_after = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+    assert tree_after == tree_before
+
+
+def test_extract_corrupt_existing_profile_is_refused_without_mutation(
+    monkeypatch, tmp_path, capsys
+):
+    corpus = _code_only_corpus(tmp_path / "corpus")
+    output = corpus / "graphify-out"
+    output.mkdir()
+    graph = output / "graph.json"
+    original = b"{not-json"
+    graph.write_bytes(original)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "extract", str(corpus), "--no-cluster"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        mainmod.main()
+
+    assert exc_info.value.code == 1
+    assert "could not inspect existing graph.json profile" in capsys.readouterr().err
+    assert graph.read_bytes() == original
+    assert not (output / "manifest.json").exists()
+    assert not (output / ".graphify_root").exists()
+    assert list((output / "cache").rglob("*.json")) == []
+
+
 def test_extract_succeeds_when_at_least_one_chunk_completes(monkeypatch, tmp_path):
     """Sanity counter-test: a successful chunk run keeps exit 0. Confirms the
     new guard only fires on the all-failed path, not on every extract."""
@@ -124,6 +351,56 @@ def test_extract_succeeds_when_at_least_one_chunk_completes(monkeypatch, tmp_pat
     assert (out_dir / "graphify-out" / "graph.json").exists(), (
         "graph.json must be written on the happy path"
     )
+
+
+@pytest.mark.parametrize(
+    ("failed_chunks", "incomplete_chunks", "expected"),
+    [(1, 0, "failed"), (0, 1, "incomplete")],
+)
+def test_extract_refuses_partial_semantic_result_before_writing_state(
+    monkeypatch,
+    tmp_path,
+    capsys,
+    failed_chunks,
+    incomplete_chunks,
+    expected,
+):
+    corpus = _make_corpus(tmp_path)
+    out_dir = tmp_path / "out"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake-key")
+
+    def partial_result(paths, **kwargs):
+        on_chunk = kwargs.get("on_chunk_done")
+        if on_chunk:
+            on_chunk(0, 2, {"nodes": [{"id": "partial"}], "edges": []})
+        return {
+            "nodes": [{"id": "partial"}],
+            "edges": [],
+            "hyperedges": [],
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "failed_chunks": failed_chunks,
+            "incomplete_chunks": incomplete_chunks,
+        }
+
+    monkeypatch.setattr("graphify.llm.extract_corpus_parallel", partial_result)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "extract", str(corpus), "--backend", "claude", "--out", str(out_dir)],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        mainmod.main()
+
+    assert exc_info.value.code == 1
+    assert expected in capsys.readouterr().err
+    output = out_dir / "graphify-out"
+    assert not (output / "graph.json").exists()
+    assert not (output / "manifest.json").exists()
+    assert not (output / ".graphify_root").exists()
+    assert list((output / "cache" / "semantic").glob("*.json")) == []
 
 
 def _code_only_corpus(tmp_path):
@@ -216,6 +493,207 @@ def test_update_remap_routes_to_full_extract_and_stamps_ast(tmp_path):
     assert all(e.get("_origin") == "ast" for e in links), (
         "every edge must be stamped _origin='ast' after a remap re-extraction"
     )
+
+
+def test_update_remap_forwards_semantic_reproducibility_options(monkeypatch, tmp_path):
+    corpus = _code_only_corpus(tmp_path / "corpus")
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "extract", str(corpus), "--no-cluster", "--multigraph"],
+    )
+    with pytest.raises(SystemExit) as seed_exit:
+        mainmod.main()
+    assert seed_exit.value.code == 0
+
+    captured: list[list[str]] = []
+    monkeypatch.setattr(mainmod, "_cmd_extract", lambda: captured.append(list(mainmod.sys.argv)))
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        [
+            "graphify",
+            "update",
+            str(corpus),
+            "--remap",
+            "--backend",
+            "claude",
+            "--model=test-model",
+            "--mode",
+            "deep",
+            "--max-workers",
+            "3",
+            "--token-budget=4096",
+            "--max-concurrency",
+            "2",
+            "--api-timeout=30",
+            "--resolution",
+            "1.5",
+            "--exclude-hubs=0.2",
+            "--exclude",
+            "vendor",
+            "--google-workspace",
+            "--dedup-llm",
+            "--cargo",
+            "--timing",
+        ],
+    )
+
+    mainmod.main()
+
+    assert len(captured) == 1
+    forwarded = captured[0]
+    for option in (
+        "--backend",
+        "claude",
+        "--model=test-model",
+        "--mode",
+        "deep",
+        "--max-workers",
+        "3",
+        "--token-budget=4096",
+        "--max-concurrency",
+        "2",
+        "--api-timeout=30",
+        "--resolution",
+        "1.5",
+        "--exclude-hubs=0.2",
+        "--exclude",
+        "vendor",
+        "--google-workspace",
+        "--dedup-llm",
+        "--cargo",
+        "--timing",
+    ):
+        assert option in forwarded
+
+
+def test_update_rejects_remap_only_options_without_remap(monkeypatch, tmp_path, capsys):
+    corpus = _code_only_corpus(tmp_path / "corpus")
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "extract", str(corpus), "--no-cluster"],
+    )
+    with pytest.raises(SystemExit) as seed_exit:
+        mainmod.main()
+    assert seed_exit.value.code == 0
+
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "update", str(corpus), "--backend", "claude"],
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        mainmod.main()
+
+    assert exc_info.value.code == 2
+    assert "requires --remap" in capsys.readouterr().err
+
+
+def test_update_repair_state_restores_validated_marker_without_reextracting(
+    monkeypatch, tmp_path, capsys
+):
+    corpus = _code_only_corpus(tmp_path / "corpus")
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "extract", str(corpus), "--no-cluster", "--multigraph"],
+    )
+    with pytest.raises(SystemExit) as seed_exit:
+        mainmod.main()
+    assert seed_exit.value.code == 0
+
+    output = corpus / "graphify-out"
+    marker = output / ".graphify_root"
+    marker.unlink()
+    graph_before = (output / "graph.json").read_bytes()
+    manifest_before = (output / "manifest.json").read_bytes()
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "update", str(corpus), "--repair-state"],
+    )
+
+    mainmod.main()
+
+    assert marker.exists()
+    assert (output / "graph.json").read_bytes() == graph_before
+    assert (output / "manifest.json").read_bytes() == manifest_before
+    assert "repaired scan-root marker" in capsys.readouterr().out
+
+
+def test_update_repair_state_rejects_force(monkeypatch, tmp_path, capsys):
+    corpus = _code_only_corpus(tmp_path / "corpus")
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "update", str(corpus), "--repair-state", "--force"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        mainmod.main()
+
+    assert exc_info.value.code == 2
+    assert "repair-only" in capsys.readouterr().err
+
+
+def test_extract_rejects_unknown_options(monkeypatch, tmp_path, capsys):
+    corpus = _code_only_corpus(tmp_path / "corpus")
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "extract", str(corpus), "--definitely-not-real"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        mainmod.main()
+
+    assert exc_info.value.code == 2
+    assert "unknown extract option" in capsys.readouterr().err
+    assert not (corpus / "graphify-out").exists()
+
+
+def test_check_update_cli_routes_external_output(monkeypatch, tmp_path, capsys):
+    corpus = _code_only_corpus(tmp_path / "corpus")
+    out_root = tmp_path / "canonical"
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        [
+            "graphify",
+            "extract",
+            str(corpus),
+            "--out",
+            str(out_root),
+            "--no-cluster",
+        ],
+    )
+    with pytest.raises(SystemExit) as seed_exit:
+        mainmod.main()
+    assert seed_exit.value.code == 0
+
+    output = out_root / "graphify-out"
+    (output / "needs_update").write_text("pending", encoding="utf-8")
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "check-update", str(corpus), "--out", str(out_root)],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        mainmod.main()
+
+    assert exc_info.value.code == 0
+    message = capsys.readouterr().out
+    assert "Pending non-code changes" in message
+    assert f"--out {out_root.resolve()}" in message
 
 
 def test_extract_out_keeps_project_root_clean(monkeypatch, tmp_path):
@@ -481,6 +959,145 @@ def test_extract_without_key_still_errors_when_docs_present(monkeypatch, tmp_pat
     assert "no LLM API key found" in err
     assert "code-only corpus needs no key" in err
     assert not (out_dir / "graphify-out" / "graph.json").exists()
+
+
+def test_extract_warm_semantic_cache_does_not_require_backend_credentials(monkeypatch, tmp_path):
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    corpus = _make_corpus(corpus_root)
+    out_dir = tmp_path / "out"
+    calls = 0
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake-key")
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+
+    def semantic_extract(paths, **kwargs):
+        nonlocal calls
+        calls += 1
+        on_chunk = kwargs.get("on_chunk_done")
+        result = {
+            "nodes": [
+                {
+                    "id": "notes",
+                    "label": "Notes",
+                    "file_type": "document",
+                    "source_file": str(paths[0]),
+                }
+            ],
+            "edges": [],
+            "hyperedges": [],
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "failed_chunks": 0,
+            "incomplete_chunks": 0,
+        }
+        if on_chunk:
+            on_chunk(0, 1, result)
+        return result
+
+    monkeypatch.setattr("graphify.llm.extract_corpus_parallel", semantic_extract)
+    first_argv = [
+        "graphify",
+        "extract",
+        str(corpus),
+        "--backend",
+        "claude",
+        "--out",
+        str(out_dir),
+        "--no-cluster",
+    ]
+    monkeypatch.setattr(mainmod.sys, "argv", first_argv)
+    with pytest.raises(SystemExit) as first_exit:
+        mainmod.main()
+    assert first_exit.value.code == 0
+    assert calls == 1
+
+    output = out_dir / "graphify-out"
+    (output / "manifest.json").unlink()
+    _clear_backend_keys(monkeypatch)
+    monkeypatch.setattr("graphify.llm.detect_backend", lambda: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "extract", str(corpus), "--out", str(out_dir), "--no-cluster"],
+    )
+
+    with pytest.raises(SystemExit) as second_exit:
+        mainmod.main()
+
+    assert second_exit.value.code == 0
+    assert calls == 1, "a warm semantic cache must not call or require an LLM backend"
+
+
+@pytest.mark.parametrize("new_event_during_extract", [False, True])
+def test_extract_acknowledges_only_the_semantic_signal_generation_it_started_with(
+    monkeypatch,
+    tmp_path,
+    new_event_during_extract,
+):
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    corpus = _make_corpus(corpus_root)
+    out_root = tmp_path / "out"
+    output = out_root / "graphify-out"
+    output.mkdir(parents=True)
+    signal = output / "needs_update"
+    signal.write_text("pending-before-extract", encoding="utf-8")
+    original = signal.read_bytes()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake-key")
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+
+    def semantic_extract(paths, **kwargs):
+        if new_event_during_extract:
+            from graphify.watch import _notify_only
+
+            _notify_only(corpus, output_dir=output)
+        result = {
+            "nodes": [
+                {
+                    "id": "notes",
+                    "label": "Notes",
+                    "file_type": "document",
+                    "source_file": str(paths[0]),
+                }
+            ],
+            "edges": [],
+            "hyperedges": [],
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "failed_chunks": 0,
+            "incomplete_chunks": 0,
+        }
+        on_chunk = kwargs.get("on_chunk_done")
+        if on_chunk:
+            on_chunk(0, 1, result)
+        return result
+
+    monkeypatch.setattr("graphify.llm.extract_corpus_parallel", semantic_extract)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        [
+            "graphify",
+            "extract",
+            str(corpus),
+            "--backend",
+            "claude",
+            "--out",
+            str(out_root),
+            "--no-cluster",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        mainmod.main()
+    assert exc_info.value.code == 0
+
+    if new_event_during_extract:
+        assert signal.exists()
+        assert signal.read_bytes() != original
+    else:
+        assert not signal.exists()
 
 
 def test_extract_timing_flag_emits_stage_timings(monkeypatch, tmp_path, capsys):
@@ -948,6 +1565,12 @@ def test_extract_no_cluster_refuses_to_zero_populated_graph(monkeypatch, tmp_pat
     assert seeded_n == 3, "seed graph.json must start populated with 3 nodes"
     assert before.get("multigraph") is False, "seed graph.json must be simple"
     assert not (out / "manifest.json").exists(), "no manifest → non-incremental run"
+    (out / ".graphify_semantic_marker").write_text("{}", encoding="utf-8")
+    tree_before = {
+        path.relative_to(out).as_posix(): path.read_bytes()
+        for path in out.rglob("*")
+        if path.is_file()
+    }
 
     # Force the AST extraction to abort so the merged extraction yields 0 nodes.
     # This mirrors the real trigger (a parser/extractor blowing up): the extract
@@ -955,12 +1578,18 @@ def test_extract_no_cluster_refuses_to_zero_populated_graph(monkeypatch, tmp_pat
     # corpus has no semantic pass, so ``merged`` collapses to 0 nodes. The extract
     # handler imports ``extract`` from graphify.extract at call time, so patching
     # the source symbol is picked up.
-    def _ast_boom(paths, **kwargs):
-        raise RuntimeError("simulated AST extractor failure (parser crash)")
+    def _empty_ast_result(paths, **kwargs):
+        return {
+            "nodes": [],
+            "edges": [],
+            "failed_files": [],
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
 
     import graphify.extract as _extract_mod
 
-    monkeypatch.setattr(_extract_mod, "extract", _ast_boom)
+    monkeypatch.setattr(_extract_mod, "extract", _empty_ast_result)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake-key")  # code-only: LLM never called
     monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
     monkeypatch.setattr(
@@ -990,6 +1619,12 @@ def test_extract_no_cluster_refuses_to_zero_populated_graph(monkeypatch, tmp_pat
     assert len(after.get("nodes", [])) == seeded_n, (
         "the populated graph.json must NOT be overwritten with a 0-node graph"
     )
+    tree_after = {
+        path.relative_to(out).as_posix(): path.read_bytes()
+        for path in out.rglob("*")
+        if path.is_file()
+    }
+    assert tree_after == tree_before, "a refused extraction must not mutate any output state"
 
 
 def test_extract_no_cluster_incremental_zero_merge_exits_nonzero_and_preserves_graph(
@@ -1071,6 +1706,12 @@ def test_extract_no_cluster_incremental_zero_merge_exits_nonzero_and_preserves_g
     assert seeded_n == 3, "seed graph.json must start populated with 3 nodes"
     assert before.get("multigraph") is False, "seed graph.json must be simple"
     assert (out / "manifest.json").exists(), "manifest → incremental run"
+    (out / ".graphify_semantic_marker").write_text("{}", encoding="utf-8")
+    tree_before = {
+        path.relative_to(out).as_posix(): path.read_bytes()
+        for path in out.rglob("*")
+        if path.is_file()
+    }
 
     # Force the incremental merge to yield a 0-node graph (aborted / pruned-to-empty
     # extraction). The no-cluster incremental branch imports build_merge from
@@ -1109,3 +1750,9 @@ def test_extract_no_cluster_incremental_zero_merge_exits_nonzero_and_preserves_g
         "the populated graph.json must NOT be overwritten with a 0-node graph"
     )
     assert after == before, "graph.json must be byte-for-byte unchanged after the refused write"
+    tree_after = {
+        path.relative_to(out).as_posix(): path.read_bytes()
+        for path in out.rglob("*")
+        if path.is_file()
+    }
+    assert tree_after == tree_before, "a refused extraction must not mutate any output state"

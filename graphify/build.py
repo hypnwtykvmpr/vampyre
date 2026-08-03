@@ -357,6 +357,16 @@ def _semantic_id_remap(nodes: list, root: str | None) -> dict:
         if not new_stem:
             continue
         norm_nid = _normalize_id(nid)
+        label = str(node.get("label") or "")
+        if node.get("source_location") in (None, "", "L1") and label in {
+            rel.name,
+            rel.as_posix(),
+        }:
+            if norm_nid != new_stem:
+                remap[nid] = new_stem
+            continue
+        if norm_nid == new_stem or norm_nid.startswith(new_stem + "_"):
+            continue
         new_id: str | None = None
         for old_stem in _old_file_stems(rel):
             if old_stem == new_stem:
@@ -417,6 +427,61 @@ def graph_has_legacy_ids(nodes: list, root: str | Path | None = None, sample: in
         if checked >= sample:
             break
     return False
+
+
+def _repair_hyperedge_file_node_aliases_from_records(nodes: list, hyperedges: list) -> list:
+    """Resolve legacy semantic file-node members from serialized node records."""
+    aliases: dict[str, Hashable | None] = {}
+    valid_ids: set[Hashable] = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = node.get("id")
+        if is_hashable(node_id):
+            valid_ids.add(node_id)
+        if not isinstance(node_id, str) or node.get("_origin") != "ast":
+            continue
+        if node.get("source_location") != "L1":
+            continue
+        source_file = node.get("source_file")
+        if not isinstance(source_file, str) or not source_file:
+            continue
+        rel = Path(source_file)
+        if rel.is_absolute() or not rel.name:
+            continue
+        label = str(node.get("label") or "")
+        if label not in {rel.name, rel.as_posix()}:
+            continue
+        path_alias = make_id(rel.as_posix())
+        for alias in (path_alias, make_id(path_alias, "node")):
+            normalized = _normalize_id(alias)
+            prior = aliases.get(normalized)
+            if prior is None and normalized not in aliases:
+                aliases[normalized] = node_id
+            elif prior != node_id:
+                aliases[normalized] = None
+
+    repaired: list = []
+    for hyperedge in hyperedges:
+        if not isinstance(hyperedge, dict) or not isinstance(hyperedge.get("nodes"), list):
+            repaired.append(hyperedge)
+            continue
+        item = dict(hyperedge)
+        members = []
+        for member in hyperedge["nodes"]:
+            replacement = None
+            if isinstance(member, str) and member not in valid_ids:
+                replacement = aliases.get(_normalize_id(member))
+            members.append(replacement if replacement is not None else member)
+        item["nodes"] = members
+        repaired.append(item)
+    return repaired
+
+
+def _repair_hyperedge_file_node_aliases(G: nx.Graph, hyperedges: list) -> list:
+    """Resolve legacy semantic file-node members to unique canonical AST nodes."""
+    nodes = [dict(attrs, id=node_id) for node_id, attrs in G.nodes(data=True)]
+    return _repair_hyperedge_file_node_aliases_from_records(nodes, hyperedges)
 
 
 def build_from_json(
@@ -569,11 +634,10 @@ def build_from_json(
     # populates source_location, so those ghosts survived. Extended fix: use
     # _origin=="ast" as the canonical signal. AST nodes always win; any non-AST
     # node sharing (basename, label) with an AST node is a ghost.
-    _loc_nodes: dict[tuple[str, str], str] = {}  # (basename, label) -> canonical node id
+    _loc_nodes: dict[tuple[str, str], str] = {}  # (basename, label) -> canonical AST node id
     _loc_collisions: set[tuple[str, str]] = set()  # keys shared by 2+ AST nodes
-    _noloc_nodes: dict[tuple[str, str], str] = {}  # (basename, label) -> ghost node id
 
-    # Pass 1: collect canonical nodes — AST-origin nodes take precedence over LLM nodes.
+    # Pass 1: collect canonical AST nodes.
     # When 2+ AST nodes share a key (same-named symbols in same-named files across
     # directories, e.g. render in two index.ts), the key is ambiguous: merging a
     # ghost would pick an arbitrary winner via set-iteration order (#1257). Track
@@ -587,18 +651,15 @@ def build_from_json(
         if not label or not basename:
             continue
         is_ast = attrs.get("_origin") == "ast"
-        if attrs.get("source_location") or is_ast:
-            key = (basename, label)
-            if is_ast:
-                # Two AST nodes on the same key is an ambiguous collision.
-                if key in _loc_nodes and G.nodes[_loc_nodes[key]].get("_origin") == "ast":
-                    _loc_collisions.add(key)
-                # AST-origin nodes always overwrite a prior non-AST entry.
-                _loc_nodes[key] = nid
-            elif key not in _loc_nodes:
-                _loc_nodes[key] = nid
+        if not is_ast:
+            continue
+        key = (basename, label)
+        if key in _loc_nodes:
+            _loc_collisions.add(key)
+        _loc_nodes[key] = nid
 
-    # Pass 2: find ghosts — non-AST nodes that have an AST canonical twin.
+    # Pass 2: map every semantic ghost to its single unambiguous AST twin.
+    _ghost_remap: dict[str, str] = {}  # ghost_id -> canonical_id
     for nid in node_set:
         attrs = G.nodes[nid]
         if attrs.get("_origin") == "ast":
@@ -611,18 +672,17 @@ def build_from_json(
         key = (basename, label)
         if key in _loc_collisions:
             continue  # ambiguous key: no safe canonical winner, leave ghost intact
-        if key in _loc_nodes and _loc_nodes[key] != nid:
-            _noloc_nodes[key] = nid
-    # For every ghost that has an AST counterpart, record a remap.
-    _ghost_remap: dict[str, str] = {}  # ghost_id -> canonical_id
-    for key, sem_id in _noloc_nodes.items():
         ast_id = _loc_nodes.get(key)
-        if ast_id is not None:
-            _ghost_remap[sem_id] = ast_id
+        if ast_id is not None and ast_id != nid:
+            _ghost_remap[nid] = ast_id
     # Remove ghost nodes from the graph; edges will be re-pointed via norm_to_id.
     for ghost_id in _ghost_remap:
         G.remove_node(ghost_id)
         node_set.discard(ghost_id)
+    if _ghost_remap:
+        for he in extraction.get("hyperedges", []) or []:
+            if isinstance(he, dict) and isinstance(he.get("nodes"), list):
+                he["nodes"] = [_ghost_remap.get(node_id, node_id) for node_id in he["nodes"]]
 
     # Normalized ID map: lets edges survive when the LLM generates IDs with
     # slightly different casing or punctuation than the AST extractor.
@@ -895,7 +955,7 @@ def build_from_json(
                         key = _make_collision_key(base_key, attrs, salt=salt)
                 used_keys.add(key)
                 G.add_edge(src, tgt, key=key, **attrs)
-    hyperedges = extraction.get("hyperedges", [])
+    hyperedges = _repair_hyperedge_file_node_aliases(G, extraction.get("hyperedges", []))
     if hyperedges:
         # Relativize hyperedge source_file the same way nodes and edges are
         # (above), so to_json — which has no root and writes G.graph["hyperedges"]
@@ -1260,7 +1320,7 @@ def build_merge(
         if carried:
             from graphify.export import attach_hyperedges
 
-            attach_hyperedges(G, carried)
+            attach_hyperedges(G, _repair_hyperedge_file_node_aliases(G, carried))
 
     # Prune nodes and edges from deleted source files
     if prune_sources:

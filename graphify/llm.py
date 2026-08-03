@@ -1699,6 +1699,7 @@ def _extract_with_adaptive_retry(
             "output_tokens": left.get("output_tokens", 0) + right.get("output_tokens", 0),
             "model": model,
             "finish_reason": "stop",
+            "complete": bool(left.get("complete", True) and right.get("complete", True)),
         }
 
     def _split_lone_slice() -> "tuple[FileSlice, FileSlice] | None":
@@ -1737,6 +1738,7 @@ def _extract_with_adaptive_retry(
                 "output_tokens": 0,
                 "model": model,
                 "finish_reason": "stop",
+                "complete": False,
             }
         if _depth >= max_depth:
             print(
@@ -1752,6 +1754,7 @@ def _extract_with_adaptive_retry(
                 "output_tokens": 0,
                 "model": model,
                 "finish_reason": "stop",
+                "complete": False,
             }
         print(
             f"[graphify] chunk of {len(chunk)} exceeded context at depth "
@@ -1773,9 +1776,11 @@ def _extract_with_adaptive_retry(
             "output_tokens": left.get("output_tokens", 0) + right.get("output_tokens", 0),
             "model": model,
             "finish_reason": "stop",
+            "complete": bool(left.get("complete", True) and right.get("complete", True)),
         }
 
     if result.get("finish_reason") != "length":
+        result["complete"] = bool(result.get("complete", True))
         return result
 
     if len(chunk) <= 1:
@@ -1792,7 +1797,7 @@ def _extract_with_adaptive_retry(
             f"max_completion_tokens — partial result kept",
             file=sys.stderr,
         )
-        return result
+        return {**result, "complete": False}
 
     if _depth >= max_depth:
         print(
@@ -1800,7 +1805,7 @@ def _extract_with_adaptive_retry(
             f"depth {_depth} (max {max_depth}) — partial result kept",
             file=sys.stderr,
         )
-        return result
+        return {**result, "complete": False}
 
     print(
         f"[graphify] chunk of {len(chunk)} truncated at depth {_depth}, "
@@ -1827,6 +1832,7 @@ def _extract_with_adaptive_retry(
         # truncation warning; the merged result is no longer truncated as a
         # logical unit.
         "finish_reason": "stop",
+        "complete": bool(left.get("complete", True) and right.get("complete", True)),
     }
 
 
@@ -1902,6 +1908,7 @@ def extract_corpus_parallel(
         "input_tokens": 0,
         "output_tokens": 0,
         "failed_chunks": 0,  # count of chunks that raised — loud failure on chunk errors
+        "incomplete_chunks": 0,
     }
     total = len(chunks)
 
@@ -1947,6 +1954,8 @@ def extract_corpus_parallel(
                 merged["failed_chunks"] += 1
                 continue
             assert result is not None
+            if not result.get("complete", True):
+                merged["incomplete_chunks"] += 1
             _merge_into(merged, result)
             if callable(on_chunk_done):
                 on_chunk_done(idx, total, result)
@@ -1963,6 +1972,8 @@ def extract_corpus_parallel(
                     merged["failed_chunks"] += 1
                     continue
                 assert result is not None
+                if not result.get("complete", True):
+                    merged["incomplete_chunks"] += 1
                 _merge_into(merged, result)
                 if callable(on_chunk_done):
                     on_chunk_done(idx, total, result)
@@ -1974,6 +1985,12 @@ def extract_corpus_parallel(
         print(
             f"[graphify] WARNING: {merged['failed_chunks']}/{total} semantic chunk(s) failed"
             " — see errors above. Partial results returned.",
+            file=sys.stderr,
+        )
+    if merged["incomplete_chunks"] > 0:
+        print(
+            f"[graphify] WARNING: {merged['incomplete_chunks']}/{total} semantic chunk(s) "
+            "returned incomplete output after retry limits. Partial results returned.",
             file=sys.stderr,
         )
     return merged

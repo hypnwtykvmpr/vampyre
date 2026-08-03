@@ -21,6 +21,7 @@ from graphify.build import edge_data, edge_datas
 from graphify.edge_identity import make_stable_key
 from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
 from graphify.installation import uv_tool_install_command
+from graphify.persistence import FileStateTransaction, atomic_write_text
 from graphify.projections import (
     DEFAULT_RELATIONSHIP_CAP,
     format_relationship_envelope,
@@ -40,7 +41,11 @@ _BACKUP_ARTIFACTS = [
 ]
 
 
-def backup_if_protected(out_dir: Path) -> "Path | None":
+def backup_if_protected(
+    out_dir: Path,
+    *,
+    transaction: Any | None = None,
+) -> "Path | None":
     """Snapshot graph artifacts to a dated subfolder before an overwrite.
 
     Triggers when graph.json exists AND either:
@@ -48,8 +53,8 @@ def backup_if_protected(out_dir: Path) -> "Path | None":
     - .graphify_labels.json contains at least one non-default community label
       (graph has been curated by a human or skill).
 
-    Returns the backup folder path, or None if no backup was taken.
-    Never raises — backup failure prints a warning but never blocks the write.
+    Returns the backup folder path, or None if no backup was taken. A protected
+    overwrite is refused when its backup cannot be completed.
     Set GRAPHIFY_NO_BACKUP=1 to disable.
     """
     if os.environ.get("GRAPHIFY_NO_BACKUP"):
@@ -80,6 +85,11 @@ def backup_if_protected(out_dir: Path) -> "Path | None":
     today = date.today().isoformat()
     backup_dir = out / today
     graph_src = out / "graph.json"
+    backup_transaction = transaction or FileStateTransaction()
+    owns_transaction = transaction is None
+    backup_transaction.capture_directory(backup_dir)
+    for name in _BACKUP_ARTIFACTS:
+        backup_transaction.capture(backup_dir / name)
 
     # Skip re-copying if today's backup already has identical graph.json content.
     # If content differs (graph changed since the last backup today), overwrite
@@ -96,20 +106,17 @@ def backup_if_protected(out_dir: Path) -> "Path | None":
         for name in _BACKUP_ARTIFACTS:
             src = out / name
             if src.exists():
-                try:
-                    shutil.copy2(src, backup_dir / name)
-                    copied += 1
-                except Exception as exc:
-                    print(f"[graphify] warning: could not back up {src}: {exc}", file=sys.stderr)
+                shutil.copy2(src, backup_dir / name)
+                copied += 1
         if copied:
             print(f"[graphify] backed up {reason} graph ({copied} files) -> {backup_dir.name}/")
+        if owns_transaction:
+            backup_transaction.commit()
         return backup_dir
     except Exception as exc:
-        print(
-            f"[graphify] warning: backup failed ({exc}) - continuing with overwrite",
-            file=sys.stderr,
-        )
-        return None
+        if owns_transaction:
+            backup_transaction.rollback()
+        raise OSError(f"protected graph backup failed: {exc}") from exc
 
 
 def _obsidian_tag(name: str) -> str:
@@ -658,8 +665,7 @@ def to_json(
     commit = built_at_commit if built_at_commit is not None else _git_head()
     if commit:
         data["built_at_commit"] = commit
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    atomic_write_text(Path(output_path), json.dumps(data, indent=2))
     return True
 
 
@@ -1487,8 +1493,9 @@ def to_obsidian(
     # own notes while still refusing to touch the user's. Warn (once, aggregated)
     # about anything skipped to avoid clobbering a pre-existing file.
     try:
-        _manifest_path.write_text(
-            json.dumps({"files": sorted(set(_written))}, indent=2), encoding="utf-8"
+        atomic_write_text(
+            _manifest_path,
+            json.dumps({"files": sorted(set(_written))}, indent=2),
         )
     except OSError:
         pass

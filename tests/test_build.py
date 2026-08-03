@@ -376,6 +376,64 @@ def test_ghost_merge_skipped_on_basename_collision():
     assert not G.has_edge("caller", "b_render")
 
 
+def test_semantic_only_same_label_nodes_are_not_ghost_merged():
+    ext = {
+        "nodes": [
+            {
+                "id": "record_one_status",
+                "label": "status",
+                "file_type": "document",
+                "source_file": "records.json",
+                "source_location": "L2",
+            },
+            {
+                "id": "record_two_status",
+                "label": "status",
+                "file_type": "document",
+                "source_file": "records.json",
+                "source_location": "L8",
+            },
+        ],
+        "edges": [],
+    }
+
+    graph = build_from_json(ext)
+
+    assert set(graph.nodes) == {"record_one_status", "record_two_status"}
+
+
+def test_all_semantic_ghosts_merge_into_the_single_ast_node():
+    ext = {
+        "nodes": [
+            {
+                "id": "ast_render",
+                "label": "render",
+                "file_type": "code",
+                "source_file": "src/app.py",
+                "source_location": "L2",
+                "_origin": "ast",
+            },
+            {
+                "id": "semantic_render_one",
+                "label": "render",
+                "file_type": "code",
+                "source_file": "src/app.py",
+            },
+            {
+                "id": "semantic_render_two",
+                "label": "render",
+                "file_type": "code",
+                "source_file": "src/app.py",
+            },
+        ],
+        "edges": [],
+    }
+
+    graph = build_from_json(ext)
+
+    assert set(graph.nodes) == {"ast_render"}
+
+
 def test_build_merge_preserves_call_edge_direction(tmp_path):
     """Regression for #760.
 
@@ -443,6 +501,34 @@ def test_build_merge_preserves_call_edge_direction(tmp_path):
         f"calls edge target flipped after build_merge round-trip: "
         f"expected {truth_tgt} (b), got {reloaded_calls[0]['target']}"
     )
+
+
+def test_build_merge_repairs_carried_file_node_hyperedge_alias(tmp_path):
+    from graphify.export import to_json
+
+    graph = nx.MultiDiGraph()
+    graph.add_node(
+        "src_app",
+        label="app.py",
+        file_type="code",
+        source_file="src/app.py",
+        source_location="L1",
+        _origin="ast",
+    )
+    graph.graph["hyperedges"] = [
+        {
+            "id": "app_group",
+            "label": "App group",
+            "nodes": ["src_app_py_node"],
+            "source_file": "docs/design.md",
+        }
+    ]
+    graph_path = tmp_path / "graph.json"
+    assert to_json(graph, {}, str(graph_path), force=True)
+
+    rebuilt = build_merge([], graph_path, dedup=False)
+
+    assert rebuilt.graph["hyperedges"][0]["nodes"] == ["src_app"]
 
 
 def test_build_from_json_preserves_first_direction_on_bidirectional_pair(tmp_path):
@@ -1007,3 +1093,33 @@ def test_semantic_rekey_relative_vs_absolute_source_file():
     # absolute path with no resolvable root → skipped, not remapped to an abs-path id
     ab = [{"id": "api_readme", "source_file": "/abs/docs/v1/api/README.md", "type": "document"}]
     assert _semantic_id_remap(ab, None) == {}
+
+
+def test_semantic_rekey_is_idempotent_for_canonical_full_path_id():
+    from graphify.build import _semantic_id_remap
+
+    canonical = [
+        {
+            "id": "trunk_trunk_yaml",
+            "source_file": ".trunk/trunk.yaml",
+            "type": "document",
+        }
+    ]
+
+    assert _semantic_id_remap(canonical, None) == {}
+
+
+def test_semantic_rekey_repairs_compounded_file_node_id():
+    from graphify.build import _semantic_id_remap
+
+    compounded = [
+        {
+            "id": "trunk_trunk_trunk_trunk_yaml",
+            "label": ".trunk/trunk.yaml",
+            "source_file": ".trunk/trunk.yaml",
+            "source_location": None,
+            "type": "document",
+        }
+    ]
+
+    assert _semantic_id_remap(compounded, None) == {"trunk_trunk_trunk_trunk_yaml": "trunk_trunk"}

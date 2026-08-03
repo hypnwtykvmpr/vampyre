@@ -780,6 +780,51 @@ def test_backup_global_graph_none_when_absent(tmp_path):
         assert backup_global_graph() is None
 
 
+def test_global_add_rolls_back_graph_backup_and_manifest_on_late_failure(tmp_path, monkeypatch):
+    from datetime import date
+
+    import graphify.global_graph as global_module
+
+    global_dir = tmp_path / ".graphify"
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    _graph_to_json(_make_graph([{"id": "a", "label": "A"}]), first)
+    _graph_to_json(_make_graph([{"id": "b", "label": "B"}]), second)
+
+    with _patch_global(global_dir):
+        global_module.global_add(first, "repoA")
+        graph_before = (global_dir / "global-graph.json").read_bytes()
+        manifest_before = (global_dir / "global-manifest.json").read_bytes()
+
+        def fail_manifest(_manifest):
+            raise OSError("simulated global manifest failure")
+
+        monkeypatch.setattr(global_module, "_save_manifest", fail_manifest)
+        with pytest.raises(OSError, match="simulated global manifest failure"):
+            global_module.global_add(second, "repoB")
+
+        assert (global_dir / "global-graph.json").read_bytes() == graph_before
+        assert (global_dir / "global-manifest.json").read_bytes() == manifest_before
+        assert not (global_dir / f"global-graph.{date.today().isoformat()}.bak").exists()
+
+
+def test_corrupt_global_manifest_is_preserved_and_refused(tmp_path):
+    import graphify.global_graph as global_module
+
+    global_dir = tmp_path / ".graphify"
+    global_dir.mkdir()
+    manifest = global_dir / "global-manifest.json"
+    original = b"{not-json"
+    manifest.write_bytes(original)
+
+    with _patch_global(global_dir):
+        with pytest.raises(global_module.GlobalGraphRecoveryError, match="is corrupt"):
+            global_module.global_list()
+
+    assert manifest.read_bytes() == original
+    assert list(global_dir.glob("global-manifest.json.corrupt.*")) == []
+
+
 # ── merge-driver / merge-graphs class normalization (PR 8) ─────────────────────
 #
 # Both commands run in-process through ``graphify.__main__.main`` with argv

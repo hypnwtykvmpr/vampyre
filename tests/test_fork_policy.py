@@ -32,7 +32,7 @@ def _tracked_guidance_files() -> list[Path]:
 
 def test_tracked_guidance_uses_uv_and_installs_the_fork() -> None:
     forbidden_install = re.compile(
-        r"\b(?:p" + r"ip3?\s+install|python[^\n]*-m\s+p" + r"ip\b|p" + r"ipx\b)",
+        r"\b(?:p" + r"ip3?\s+(?:install|uninstall)|python[^\n]*-m\s+p" + r"ip\b|p" + r"ipx\b)",
         re.IGNORECASE,
     )
     ambiguous_uv = re.compile(

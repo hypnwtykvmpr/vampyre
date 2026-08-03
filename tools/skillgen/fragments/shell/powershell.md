@@ -33,8 +33,6 @@ if (-not $GRAPHIFY_PYTHON) { throw "graphify's uv tool interpreter could not be 
 
 # Save interpreter path — all subsequent steps read this
 $GRAPHIFY_PYTHON | Out-File -FilePath graphify-out\.graphify_python -Encoding utf8 -NoNewline
-# Save scan root so `graphify update` (no args) knows where to look next time
-(Resolve-Path INPUT_PATH).Path | Out-File -FilePath graphify-out\.graphify_root -Encoding utf8 -NoNewline
 ```
 
 If the import succeeds, print nothing and move straight to Step 2.

@@ -641,12 +641,14 @@ graphify --version                                    # print installed version
 graphify watch ./src
 graphify watch ./src --out ./canonical       # watch sources while keeping all state under canonical/graphify-out/
 graphify check-update ./src
+graphify check-update ./src --out ./canonical  # check an externally stored graph
 graphify update ./src
 graphify update ./src --no-cluster  # skip reclustering, write raw AST graph only
 graphify update ./src --force       # overwrite even if new graph has fewer nodes
 graphify update ./src --out ./canonical      # update a graph stored outside the source tree
 graphify update --out ./canonical            # recover the scan root from that graph's marker
 graphify update ./src --out ./canonical --remap  # full re-extraction; preserve output and graph profile
+graphify update ./src --out ./canonical --repair-state  # validate legacy state and restore only a missing marker
 graphify cluster-only ./my-project
 graphify cluster-only ./my-project --graph path/to/graph.json  # custom graph location
 graphify cluster-only ./my-project --max-concurrency 16 --batch-size 200  # parallel community labeling (large graphs)
@@ -660,6 +662,8 @@ graphify label ./my-project --backend=openai --model gpt-4o   # force a specific
 ```
 
 `update` and `watch` operate only on existing, explicitly profiled graph state. They never initialize a second graph or guess a missing scan root; run `graphify extract <path>` with `--multigraph`, `--directed`, or `--simple` first. When extraction used `--out`, pass the same output root or run from that output root so the saved scan-root marker selects the original sources.
+
+`update --repair-state` restores only a missing scan-root marker. It first requires a readable, explicitly profiled graph and a manifest whose live content hashes agree with the requested source root; it does not infer a graph class, replace a conflicting marker, or recreate missing graph state.
 
 > **Community names:** inside an agent (Claude Code, Gemini CLI) the agent names communities itself. When you run the bare CLI, `cluster-only` auto-names them with the configured backend (built-in or custom OpenAI-compatible provider) — pass `--no-label` to keep `Community N`, or run `graphify label` to (re)generate names on demand.
 

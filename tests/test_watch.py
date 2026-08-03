@@ -18,7 +18,7 @@ def test_notify_only_creates_flag(tmp_path):
     _notify_only(tmp_path)
     flag = tmp_path / "graphify-out" / "needs_update"
     assert flag.exists()
-    assert flag.read_text() == "1"
+    assert flag.read_text().strip()
 
 
 def test_notify_only_creates_flag_dir(tmp_path):
@@ -30,9 +30,10 @@ def test_notify_only_creates_flag_dir(tmp_path):
 
 def test_notify_only_idempotent(tmp_path):
     _notify_only(tmp_path)
-    _notify_only(tmp_path)
     flag = tmp_path / "graphify-out" / "needs_update"
-    assert flag.read_text() == "1"
+    first = flag.read_bytes()
+    _notify_only(tmp_path)
+    assert flag.read_bytes() != first
 
 
 # --- _WATCHED_EXTENSIONS ---
@@ -84,7 +85,26 @@ def test_check_update_with_flag_returns_true_and_prints(tmp_path, capsys):
     result = check_update(tmp_path)
     assert result is True
     out = capsys.readouterr().out
-    assert "graphify --update" in out
+    assert "graphify update" in out
+    assert "--remap" in out
+
+
+def test_check_update_external_output_prints_routed_remap_command(tmp_path, capsys):
+    from graphify.watch import check_update
+
+    source = tmp_path / "Sources"
+    source.mkdir()
+    output_root = tmp_path / "canonical"
+    output = output_root / "graphify-out"
+    output.mkdir(parents=True)
+    (output / "needs_update").write_text("pending", encoding="utf-8")
+
+    assert check_update(source, output_dir=output) is True
+
+    message = capsys.readouterr().out
+    assert str(source) in message
+    assert f"--out {output_root}" in message
+    assert "--remap" in message
 
 
 def test_check_update_does_not_clear_flag(tmp_path):
@@ -462,9 +482,13 @@ def test_watch_handler_honors_graphifyignore(tmp_path, monkeypatch):
     (watch_root / "node_modules").mkdir()
     (watch_root / "build").mkdir()
 
-    rebuild_calls: list[Path] = []
+    rebuild_calls: list[tuple[Path, dict]] = []
     notify_calls: list[Path] = []
-    monkeypatch.setattr(watch_mod, "_rebuild_code", lambda p, **kw: rebuild_calls.append(p) or True)
+    monkeypatch.setattr(
+        watch_mod,
+        "_rebuild_code",
+        lambda p, **kw: rebuild_calls.append((p, kw)) or True,
+    )
     monkeypatch.setattr(watch_mod, "_notify_only", lambda p: notify_calls.append(p))
 
     # Run watch() in a thread with a short debounce so we can verify the
@@ -491,6 +515,9 @@ def test_watch_handler_honors_graphifyignore(tmp_path, monkeypatch):
     while time.monotonic() < deadline and not rebuild_calls:
         time.sleep(0.1)
     assert rebuild_calls, "non-ignored .py write should have triggered _rebuild_code"
+    changed_paths = rebuild_calls[0][1].get("changed_paths")
+    assert changed_paths is not None
+    assert {Path(path).name for path in changed_paths} == {"app.py"}
 
 
 @pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
@@ -770,8 +797,7 @@ def test_rebuild_code_accepts_repo_relative_changed_path_for_subdir_root(tmp_pat
 
 
 def test_queue_and_drain_pending_round_trip(tmp_path):
-    """_queue_pending writes one path per line; _drain_pending reads + unlinks
-    and returns the same set of paths."""
+    """Queued path records round-trip and the claimed batch is removed."""
     from graphify.watch import _queue_pending, _drain_pending, _PENDING_FILENAME
 
     out = tmp_path / "graphify-out"
@@ -780,18 +806,25 @@ def test_queue_and_drain_pending_round_trip(tmp_path):
 
     pending_file = out / _PENDING_FILENAME
     assert pending_file.exists()
-    # Each path written on its own line.
-    assert pending_file.read_text(encoding="utf-8").splitlines() == [
-        "a.py",
-        "sub/b.py",
-        "c.md",
-    ]
+    records = [json.loads(line) for line in pending_file.read_text(encoding="utf-8").splitlines()]
+    assert records == [{"path": "a.py"}, {"path": "sub/b.py"}, {"path": "c.md"}]
 
     drained = _drain_pending(out)
     assert drained == paths
     # Drain unlinks so subsequent callers see an empty queue.
     assert not pending_file.exists()
     assert _drain_pending(out) == []
+
+
+def test_queue_and_drain_pending_round_trips_newline_in_path(tmp_path):
+    from graphify.watch import _drain_pending, _queue_pending
+
+    out = tmp_path / "graphify-out"
+    unusual = Path("src/line\nbreak.py")
+
+    _queue_pending(out, [unusual])
+
+    assert _drain_pending(out) == [unusual]
 
 
 def test_drain_pending_dedupes_and_skips_blank_lines(tmp_path):
@@ -824,7 +857,12 @@ def test_rebuild_code_queues_on_lock_contention(tmp_path, monkeypatch, capsys):
     """#1059: when the rebuild lock is held, an incremental hook must queue
     its changed_paths to .pending_changes and print 'queued' instead of
     silently dropping the change set."""
-    from graphify.watch import _rebuild_code, _rebuild_lock, _PENDING_FILENAME
+    from graphify.watch import (
+        _PENDING_FILENAME,
+        _pending_paths,
+        _rebuild_code,
+        _rebuild_lock,
+    )
 
     out = tmp_path / "graphify-out"
     out.mkdir()
@@ -851,7 +889,10 @@ def test_rebuild_code_queues_on_lock_contention(tmp_path, monkeypatch, capsys):
         # eventual lock-holder can drain them.
         pending = out / _PENDING_FILENAME
         assert pending.exists()
-        assert pending.read_text(encoding="utf-8").splitlines() == ["a.py", "b.py"]
+        assert _pending_paths([pending.read_text(encoding="utf-8")]) == [
+            Path("a.py"),
+            Path("b.py"),
+        ]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="fcntl-only (POSIX)")
@@ -930,6 +971,62 @@ def test_rebuild_code_drains_late_arrivals(tmp_path, monkeypatch):
     assert inner_calls[1] == ["late.py"]
     # And the queue is now empty (no further late drains).
     assert not (out / watch_mod._PENDING_FILENAME).exists()
+
+
+def test_rebuild_code_keeps_claimed_changes_after_failed_rebuild(tmp_path, monkeypatch):
+    """A failed rebuild must leave its claimed paths durable for the next run."""
+    from graphify import watch as watch_mod
+    from graphify.watch import _rebuild_code as orig_rebuild
+
+    out = tmp_path / "graphify-out"
+    out.mkdir()
+    calls: list[list[str]] = []
+    outcomes = iter((False, True))
+
+    def fake_inner(watch_path, **kwargs):
+        if kwargs.get("acquire_lock") is False:
+            calls.append([p.as_posix() for p in (kwargs.get("changed_paths") or [])])
+            return next(outcomes)
+        return True
+
+    monkeypatch.setattr(watch_mod, "_rebuild_code", fake_inner)
+
+    assert orig_rebuild(tmp_path, changed_paths=[Path("lost.py")]) is False
+    durable = [
+        path for path in out.glob(".pending_changes*") if path.name != ".pending_changes.guard"
+    ]
+    assert durable, "failed rebuild discarded its pending change set"
+
+    assert orig_rebuild(tmp_path, changed_paths=[]) is True
+    assert calls == [["lost.py"], ["lost.py"]]
+    assert list(out.glob(".pending_changes.inflight.*")) == []
+    assert not (out / watch_mod._PENDING_FILENAME).exists()
+
+
+def test_rebuild_code_recovers_unacknowledged_claim_after_restart(tmp_path, monkeypatch):
+    """A claimed batch remains recoverable when a process dies before acknowledgment."""
+    from graphify import watch as watch_mod
+    from graphify.watch import _rebuild_code as orig_rebuild
+
+    out = tmp_path / "graphify-out"
+    out.mkdir()
+    watch_mod._queue_pending(out, [Path("crash.py")])
+    claimed, claim_files = watch_mod._claim_pending(out)
+    assert claimed == [Path("crash.py")]
+    assert claim_files and all(path.exists() for path in claim_files)
+
+    calls: list[list[str]] = []
+
+    def successful_inner(watch_path, **kwargs):
+        if kwargs.get("acquire_lock") is False:
+            calls.append([p.as_posix() for p in (kwargs.get("changed_paths") or [])])
+        return True
+
+    monkeypatch.setattr(watch_mod, "_rebuild_code", successful_inner)
+
+    assert orig_rebuild(tmp_path, changed_paths=[]) is True
+    assert calls == [["crash.py"]]
+    assert all(not path.exists() for path in claim_files)
 
 
 def test_rebuild_code_full_corpus_skips_pending_queue(tmp_path, monkeypatch):
@@ -1700,6 +1797,174 @@ def test_watch_full_rebuild_preserves_semantic_edge(tmp_path):
     )
 
 
+@pytest.mark.parametrize("no_cluster", [True, False])
+def test_watch_manifest_failure_rolls_back_graph_state(tmp_path, monkeypatch, no_cluster):
+    import importlib
+
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    source = corpus / "app.py"
+    source.write_text("def before():\n    return 1\n", encoding="utf-8")
+    assert _rebuild_code(
+        corpus,
+        no_cluster=no_cluster,
+        no_viz=True,
+        acquire_lock=False,
+    )
+    output = corpus / "graphify-out"
+    (output / ".graphify_semantic_marker").write_text("{}", encoding="utf-8")
+    source.write_text("def after():\n    return 2\n", encoding="utf-8")
+    tree_before = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+
+    detect_module = importlib.import_module("graphify.detect")
+
+    def fail_manifest(*args, **kwargs):
+        raise OSError("simulated watch manifest failure")
+
+    monkeypatch.setattr(detect_module, "save_manifest", fail_manifest)
+
+    assert (
+        _rebuild_code(
+            corpus,
+            no_cluster=no_cluster,
+            no_viz=True,
+            acquire_lock=False,
+        )
+        is False
+    )
+
+    tree_after = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+    assert tree_after == tree_before
+
+
+def test_watch_incremental_manifest_does_not_advance_unrebuilt_source(tmp_path, monkeypatch):
+    import importlib
+
+    from graphify.detect import detect_incremental
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    first = corpus / "first.py"
+    second = corpus / "second.py"
+    first.write_text("def first():\n    return 1\n", encoding="utf-8")
+    second.write_text("def second():\n    return 2\n", encoding="utf-8")
+    assert _rebuild_code(corpus, no_cluster=True, acquire_lock=False)
+
+    first.write_text("def first():\n    return 10\n", encoding="utf-8")
+    extract_module = importlib.import_module("graphify.extract")
+    real_extract = extract_module.extract
+
+    def extract_while_other_source_changes(paths, **kwargs):
+        result = real_extract(paths, **kwargs)
+        second.write_text("def second():\n    return 20\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(extract_module, "extract", extract_while_other_source_changes)
+
+    assert _rebuild_code(
+        corpus,
+        changed_paths=[first],
+        no_cluster=True,
+        acquire_lock=False,
+    )
+
+    incremental = detect_incremental(
+        corpus,
+        manifest_path=str(corpus / "graphify-out" / "manifest.json"),
+        kind="ast",
+    )
+    changed = {Path(path).name for path in incremental["new_files"]["code"]}
+    assert "second.py" in changed
+    assert "first.py" not in changed
+
+
+@pytest.mark.parametrize("no_cluster", [True, False])
+def test_watch_refuses_manifest_for_source_changed_after_extraction(
+    tmp_path, monkeypatch, no_cluster
+):
+    import importlib
+
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    source = corpus / "app.py"
+    source.write_text("def before():\n    return 1\n", encoding="utf-8")
+    assert _rebuild_code(
+        corpus,
+        no_cluster=no_cluster,
+        no_viz=True,
+        acquire_lock=False,
+    )
+
+    output = corpus / "graphify-out"
+    source.write_text("def after():\n    return 2\n", encoding="utf-8")
+    tree_before = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+
+    extract_module = importlib.import_module("graphify.extract")
+    real_extract = extract_module.extract
+
+    def extract_then_mutate(paths, **kwargs):
+        result = real_extract(paths, **kwargs)
+        source.write_text("def changed_after_parse():\n    return 3\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(extract_module, "extract", extract_then_mutate)
+
+    assert (
+        _rebuild_code(
+            corpus,
+            changed_paths=[source],
+            no_cluster=no_cluster,
+            no_viz=True,
+            acquire_lock=False,
+        )
+        is False
+    )
+
+    tree_after = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+    assert tree_after == tree_before
+
+
+def test_watch_corrupt_existing_graph_is_refused_without_mutation(tmp_path):
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "app.py").write_text("def app():\n    return 1\n", encoding="utf-8")
+    output = corpus / "graphify-out"
+    output.mkdir()
+    graph = output / "graph.json"
+    original = b"{not-json"
+    graph.write_bytes(original)
+
+    assert _rebuild_code(corpus, no_cluster=True, acquire_lock=False) is False
+
+    assert graph.read_bytes() == original
+    assert not (output / "manifest.json").exists()
+    assert not (output / ".graphify_root").exists()
+    assert list((output / "cache").rglob("*.json")) == []
+
+
 def test_watch_full_rebuild_prunes_stale_semantic_sources_and_hyperedges(tmp_path):
     """A full AST rebuild keeps valid semantic data but removes records whose
     local source disappeared and hyperedges that no longer have two members."""
@@ -1796,6 +2061,55 @@ def test_watch_full_rebuild_prunes_stale_semantic_sources_and_hyperedges(tmp_pat
     assert any(edge.get("source") == "semantic_live" for edge in rebuilt_links)
     assert not any(edge.get("source") == "semantic_stale" for edge in rebuilt_links)
     assert [edge.get("id") for edge in rebuilt["hyperedges"]] == ["live_group"]
+
+
+def test_watch_repairs_carried_hyperedge_alias_before_restoring_metadata(tmp_path):
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "app.py").write_text(
+        "def helper():\n    return 1\n\ndef run():\n    return helper()\n",
+        encoding="utf-8",
+    )
+    docs = corpus / "docs"
+    docs.mkdir()
+    (docs / "design.md").write_text("# Design\n", encoding="utf-8")
+
+    assert _rebuild_code(corpus, no_viz=True, acquire_lock=False)
+    graph_path = corpus / "graphify-out" / "graph.json"
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
+    file_node = next(
+        node["id"]
+        for node in data["nodes"]
+        if node.get("label") == "app.py" and node.get("source_location") == "L1"
+    )
+    run_node = next(
+        node["id"] for node in data["nodes"] if node.get("label", "").startswith("run(")
+    )
+    stale = {
+        "id": "app_group",
+        "label": "App group",
+        "nodes": ["app_py_node", run_node],
+        "source_file": "docs/design.md",
+    }
+    data["hyperedges"] = [stale]
+    data.setdefault("graph", {})["hyperedges"] = [dict(stale)]
+    data["graph"]["custom_meta"] = "kept"
+    graph_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    assert _rebuild_code(corpus, no_viz=True, acquire_lock=False)
+    rebuilt = json.loads(graph_path.read_text(encoding="utf-8"))
+
+    assert rebuilt["hyperedges"] == [
+        {
+            "id": "app_group",
+            "label": "App group",
+            "nodes": [file_node, run_node],
+            "source_file": "docs/design.md",
+        }
+    ]
+    assert rebuilt["graph"]["custom_meta"] == "kept"
 
 
 # --- RISK 3: no-cluster compare must not flap on a legacy edges-keyed graph.json ---
@@ -1919,13 +2233,16 @@ def test_watch_no_cluster_delete_all_preserves_graph(tmp_path, monkeypatch):
         nodes_before = len(before.get("nodes", []))
         assert nodes_before > 0
         before_bytes = graph_path.read_bytes()
+        marker = graph_path.parent / ".graphify_root"
+        marker.write_text(str(repo), encoding="utf-8")
+        marker_before = marker.read_bytes()
 
         # Delete a.py (declared deletion -> had_explicit_deletions=True). Keep
         # b.py on disk so detect() still returns code files, but make extraction
         # abort to empty so the merged candidate has 0 nodes.
         (repo / "a.py").unlink()
 
-        def aborted_extract(_targets, cache_root=None):
+        def aborted_extract(_targets, **_kwargs):
             return {
                 "nodes": [],
                 "edges": [],
@@ -1952,6 +2269,7 @@ def test_watch_no_cluster_delete_all_preserves_graph(tmp_path, monkeypatch):
         "populated graph.json must be preserved when a failed extraction yields 0 nodes"
     )
     assert after_bytes == before_bytes, "graph.json must be byte-for-byte untouched"
+    assert marker.read_bytes() == marker_before, "refused rebuild must not rewrite marker state"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
@@ -1982,10 +2300,13 @@ def test_watch_clustered_delete_all_preserves_graph(tmp_path, monkeypatch):
         nodes_before = len(before.get("nodes", []))
         assert nodes_before > 0
         before_bytes = graph_path.read_bytes()
+        marker = graph_path.parent / ".graphify_root"
+        marker.write_text(str(repo), encoding="utf-8")
+        marker_before = marker.read_bytes()
 
         (repo / "a.py").unlink()
 
-        def aborted_extract(_targets, cache_root=None):
+        def aborted_extract(_targets, **_kwargs):
             return {
                 "nodes": [],
                 "edges": [],
@@ -2015,6 +2336,90 @@ def test_watch_clustered_delete_all_preserves_graph(tmp_path, monkeypatch):
     assert after_bytes == before_bytes, (
         "graph.json must be byte-for-byte untouched (clustered path)"
     )
+    assert marker.read_bytes() == marker_before, "refused rebuild must not rewrite marker state"
+
+
+@pytest.mark.parametrize("no_cluster", [False, True])
+def test_ast_only_rebuild_does_not_acknowledge_semantic_pending_flag(tmp_path, no_cluster):
+    """Only a successful semantic extraction may clear ``needs_update``."""
+    from graphify.watch import _rebuild_code
+
+    repo = tmp_path / "corpus"
+    repo.mkdir()
+    (repo / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    assert _rebuild_code(
+        repo,
+        no_cluster=no_cluster,
+        no_viz=True,
+        acquire_lock=False,
+    )
+    flag = repo / "graphify-out" / "needs_update"
+    flag.write_text("pending-semantic-work", encoding="utf-8")
+
+    assert _rebuild_code(
+        repo,
+        no_cluster=no_cluster,
+        no_viz=True,
+        acquire_lock=False,
+    )
+
+    assert flag.read_text(encoding="utf-8") == "pending-semantic-work"
+
+
+def test_ast_file_failure_refuses_watch_rebuild_without_state_mutation(tmp_path, monkeypatch):
+    from graphify import extract as extract_mod
+    from graphify.watch import _rebuild_code
+
+    repo = tmp_path / "corpus"
+    repo.mkdir()
+    source = repo / "app.py"
+    source.write_text("def run():\n    return 1\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        extract_mod,
+        "extract",
+        lambda paths, **kwargs: {
+            "nodes": [],
+            "edges": [],
+            "failed_files": [str(paths[0])],
+            "input_tokens": 0,
+            "output_tokens": 0,
+        },
+    )
+
+    assert (
+        _rebuild_code(
+            repo,
+            no_cluster=True,
+            no_viz=True,
+            acquire_lock=False,
+        )
+        is False
+    )
+    output = repo / "graphify-out"
+    assert not (output / "graph.json").exists()
+    assert not (output / "manifest.json").exists()
+    assert not (output / ".graphify_root").exists()
+
+
+def test_full_rebuild_snapshots_every_manifest_source(tmp_path):
+    from graphify.watch import _rebuild_code
+
+    repo = tmp_path / "corpus"
+    repo.mkdir()
+    (repo / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    document = repo / "notes.txt"
+    document.write_text("semantic-only source\n", encoding="utf-8")
+
+    assert _rebuild_code(
+        repo,
+        no_cluster=True,
+        no_viz=True,
+        acquire_lock=False,
+    )
+
+    manifest = json.loads((repo / "graphify-out" / "manifest.json").read_text(encoding="utf-8"))
+    assert set(manifest) == {"app.py", "notes.txt"}
 
 
 def test_update_cli_passes_no_viz_to_rebuild(tmp_path, monkeypatch):

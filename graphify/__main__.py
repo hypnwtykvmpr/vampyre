@@ -126,7 +126,11 @@ def _enforce_graph_size_cap_or_exit(gp: Path) -> None:
         sys.exit(1)
 
 
-def _backup_merge_target(target: Path) -> "Path | None":
+def _backup_merge_target(
+    target: Path,
+    *,
+    transaction=None,
+) -> "Path | None":
     """Snapshot an existing merge target to a dated ``.bak`` sibling before overwrite.
 
     Mirrors :func:`graphify.global_graph.backup_global_graph`'s dated-snapshot
@@ -141,8 +145,8 @@ def _backup_merge_target(target: Path) -> "Path | None":
     target refreshes the same-day snapshot in place (one backup per day, always
     the latest pre-overwrite state). Returns the backup path, or None when there
     is nothing to back up (target absent) or backups are disabled via
-    ``GRAPHIFY_NO_BACKUP``. Never raises: a backup failure prints a warning and
-    returns None so it can never block the write it protects.
+    ``GRAPHIFY_NO_BACKUP``. A protected overwrite is refused when its backup
+    cannot be completed.
     """
     import hashlib
     from datetime import date
@@ -154,6 +158,12 @@ def _backup_merge_target(target: Path) -> "Path | None":
 
     today = date.today().isoformat()
     backup_path = target.with_name(f"{target.stem}.{today}.bak")
+    from graphify.persistence import FileStateTransaction
+
+    backup_transaction = transaction or FileStateTransaction([backup_path])
+    owns_transaction = transaction is None
+    if transaction is not None:
+        transaction.capture(backup_path)
     try:
         if backup_path.exists():
             src_hash = hashlib.sha256(target.read_bytes()).hexdigest()
@@ -161,13 +171,13 @@ def _backup_merge_target(target: Path) -> "Path | None":
             if src_hash == bak_hash:
                 return backup_path  # identical content, nothing to do
         shutil.copy2(target, backup_path)
+        if owns_transaction:
+            backup_transaction.commit()
         return backup_path
     except Exception as exc:
-        print(
-            f"[graphify merge] warning: backup failed ({exc}) — continuing with overwrite",
-            file=sys.stderr,
-        )
-        return None
+        if owns_transaction:
+            backup_transaction.rollback()
+        raise OSError(f"merge target backup failed: {exc}") from exc
 
 
 def _check_skill_version(skill_dst: Path) -> None:
@@ -2136,7 +2146,7 @@ def uninstall_all(project_dir: Path | None = None, purge: bool = False) -> None:
         else:
             print(f"\n  {_GRAPHIFY_OUT}/  ->  not found (nothing to purge)")
 
-    print("\nDone. Run 'pip uninstall graphifyy' to remove the package itself.")
+    print("\nDone. Run 'uv tool uninstall graphifyy' to remove the package itself.")
 
 
 def claude_uninstall(project_dir: Path | None = None, *, project: bool = False) -> None:
@@ -2547,7 +2557,9 @@ def _cmd_extract() -> None:
             cli_timing = True
             i += 1
         else:
-            i += 1
+            kind = "option" if a.startswith("-") else "argument"
+            print(f"error: unknown extract {kind}: {a}", file=sys.stderr)
+            sys.exit(2)
 
     if not has_path and cli_postgres_dsn is None:
         print("error: must specify a path to scan or a --postgres DSN", file=sys.stderr)
@@ -2578,15 +2590,25 @@ def _cmd_extract() -> None:
     graphify_out = out_root / _GRAPHIFY_OUT
     graphify_out.mkdir(parents=True, exist_ok=True)
 
+    from graphify.persistence import acknowledge_pending_signal, capture_pending_signal
+
+    semantic_signal_path = graphify_out / "needs_update"
+    semantic_signal_generation = capture_pending_signal(semantic_signal_path)
+
+    def _acknowledge_semantic_signal() -> None:
+        acknowledge_pending_signal(semantic_signal_path, semantic_signal_generation)
+
     def _write_scan_root_marker() -> None:
         _persist_scan_root_marker(graphify_out / ".graphify_root", target)
 
     stages = _StageTimer(cli_timing)
 
     from graphify.detect import (
+        changed_source_files as _changed_source_files,
         detect as _detect,
         detect_incremental as _detect_incremental,
         save_manifest as _save_manifest,
+        snapshot_source_hashes as _snapshot_source_hashes,
     )
 
     manifest_path = graphify_out / "manifest.json"
@@ -2636,6 +2658,37 @@ def _cmd_extract() -> None:
         deleted_files = []
         unchanged_total = 0
 
+    source_paths = [path for paths in files_by_type.values() for path in paths]
+    try:
+        source_snapshot = _snapshot_source_hashes(source_paths)
+    except OSError as exc:
+        print(f"[graphify extract] error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if incremental_mode:
+        confirmation = _detect_incremental(
+            target,
+            manifest_path=str(manifest_path),
+            google_workspace=google_workspace or None,
+            extra_excludes=cli_excludes or None,
+        )
+
+        def _changed_membership(result: dict) -> tuple:
+            changed = tuple(
+                (kind, tuple(sorted(paths)))
+                for kind, paths in sorted(result.get("new_files", {}).items())
+            )
+            deleted = tuple(sorted(result.get("deleted_files", [])))
+            return changed, deleted
+
+        if _changed_membership(confirmation) != _changed_membership(detection):
+            print(
+                "[graphify extract] error: source files changed during incremental "
+                "detection; retry after the source tree is stable.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     semantic_files = doc_files + paper_files + image_files
     if incremental_mode:
         print(
@@ -2651,6 +2704,27 @@ def _cmd_extract() -> None:
         )
     stages.mark("detect")
 
+    # Resolve semantic cache hits before deciding whether an LLM backend is
+    # required. A fully warm corpus has no remote work and must remain usable
+    # without credentials; only cache misses (or LLM dedup) require a backend.
+    from graphify.cache import (
+        check_semantic_cache as _check_semantic_cache,
+        prune_semantic_cache as _prune_semantic_cache,
+        save_semantic_cache as _save_semantic_cache,
+    )
+
+    sem_paths_str = [str(path) for path in semantic_files]
+    cached_nodes: list[dict] = []
+    cached_edges: list[dict] = []
+    cached_hyperedges: list[dict] = []
+    uncached_paths: list[str] = []
+    if sem_paths_str:
+        cached_nodes, cached_edges, cached_hyperedges, uncached_paths = _check_semantic_cache(
+            sem_paths_str,
+            root=out_root,
+            source_root=target,
+        )
+
     # Resolve the LLM backend only now that we know whether the corpus
     # needs one. A code-only corpus is pure local AST and must not require
     # an API key; the key is enforced below only when there's LLM work.
@@ -2663,7 +2737,7 @@ def _cmd_extract() -> None:
         _get_backend_api_key,
     )
 
-    needs_llm = bool(semantic_files) or dedup_llm
+    needs_llm = bool(uncached_paths) or dedup_llm
     if backend is None and needs_llm:
         backend = _detect_backend()
     if backend is not None and backend not in _BACKENDS:
@@ -2675,9 +2749,9 @@ def _cmd_extract() -> None:
     if needs_llm:
         if backend is None:
             reasons = []
-            if semantic_files:
+            if uncached_paths:
                 reasons.append(
-                    f"{len(semantic_files)} doc/paper/image file(s) need semantic extraction"
+                    f"{len(uncached_paths)} doc/paper/image file(s) need semantic extraction"
                 )
             if dedup_llm:
                 reasons.append("--dedup-llm was passed")
@@ -2748,7 +2822,11 @@ def _cmd_extract() -> None:
         # Anchor the cache at the output root, not the scanned project:
         # with --out, a <target>/graphify-out/cache/ would leak a
         # graphify-out/ dir into a project that asked for external output.
-        ast_kwargs: dict = {"cache_root": out_root, "source_root": target}
+        ast_kwargs: dict = {
+            "cache_root": out_root,
+            "source_root": target,
+            "defer_cache_writes": True,
+        }
         if cli_max_workers is not None:
             ast_kwargs["max_workers"] = cli_max_workers
         print(f"[graphify extract] AST extraction on {len(code_files)} code files...")
@@ -2756,16 +2834,22 @@ def _cmd_extract() -> None:
             ast_result = _ast_extract(code_files, **ast_kwargs)
         except Exception as exc:
             print(f"[graphify extract] AST extraction failed: {exc}", file=sys.stderr)
-            ast_result = {"nodes": [], "edges": [], "input_tokens": 0, "output_tokens": 0}
+            sys.exit(1)
+        failed_files = list(ast_result.get("failed_files", []))
+        if failed_files:
+            preview = ", ".join(failed_files[:3])
+            if len(failed_files) > 3:
+                preview += f", and {len(failed_files) - 3} more"
+            print(
+                f"[graphify extract] AST extraction failed for "
+                f"{len(failed_files)} file(s): {preview}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     stages.mark("AST extract")
 
-    # Semantic extraction on docs/papers/images. Check cache first.
-    from graphify.cache import (
-        check_semantic_cache as _check_semantic_cache,
-        prune_semantic_cache as _prune_semantic_cache,
-        save_semantic_cache as _save_semantic_cache,
-    )
-
+    # Semantic extraction on docs/papers/images. Cache classification happened
+    # before backend resolution so a fully warm run does not require credentials.
     sem_result: dict = {
         "nodes": [],
         "edges": [],
@@ -2775,11 +2859,8 @@ def _cmd_extract() -> None:
     }
     sem_cache_hits = 0
     sem_cache_misses = 0
+    fresh_semantic_result: dict | None = None
     if semantic_files:
-        sem_paths_str = [str(p) for p in semantic_files]
-        cached_nodes, cached_edges, cached_hyperedges, uncached_paths = _check_semantic_cache(
-            sem_paths_str, root=out_root, source_root=target
-        )
         sem_cache_hits = len(semantic_files) - len(uncached_paths)
         sem_cache_misses = len(uncached_paths)
         sem_result["nodes"].extend(cached_nodes)
@@ -2843,6 +2924,22 @@ def _cmd_extract() -> None:
                     "output_tokens": 0,
                 }
 
+            failed_chunks = int(fresh.get("failed_chunks", 0) or 0)
+            incomplete_chunks = int(fresh.get("incomplete_chunks", 0) or 0)
+            if failed_chunks or incomplete_chunks:
+                details: list[str] = []
+                if failed_chunks:
+                    details.append(f"{failed_chunks} failed")
+                if incomplete_chunks:
+                    details.append(f"{incomplete_chunks} incomplete")
+                print(
+                    "[graphify extract] error: semantic extraction returned "
+                    + " and ".join(details)
+                    + " chunk(s); refusing to publish a partial graph.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
             # on_chunk_done only fires after a chunk succeeds. If fresh
             # semantic extraction was requested and no chunks completed,
             # fail instead of writing an AST-only graph with exit 0.
@@ -2855,54 +2952,62 @@ def _cmd_extract() -> None:
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            try:
-                _save_semantic_cache(
-                    fresh.get("nodes", []),
-                    fresh.get("edges", []),
-                    fresh.get("hyperedges", []),
-                    root=out_root,
-                    source_root=target,
-                )
-            except Exception as exc:
-                print(
-                    f"[graphify extract] warning: could not write semantic cache: {exc}",
-                    file=sys.stderr,
-                )
+            fresh_semantic_result = fresh
             sem_result["nodes"].extend(fresh.get("nodes", []))
             sem_result["edges"].extend(fresh.get("edges", []))
             sem_result["hyperedges"].extend(fresh.get("hyperedges", []))
             sem_result["input_tokens"] += fresh.get("input_tokens", 0)
             sem_result["output_tokens"] += fresh.get("output_tokens", 0)
 
-    # Prune orphaned semantic cache entries. The semantic cache is
-    # content-hash-keyed and unversioned, so it is never swept by the AST
-    # version-cleanup: every content change or file deletion leaves a
-    # permanent orphan that accumulates unbounded (#1527). Sweep it against
-    # the FULL live document set (``files_by_type`` — present in both the
-    # incremental and full branches), NOT the incremental ``semantic_files``
-    # changed-subset, which would delete every unchanged doc's valid entry.
-    # Best-effort: a prune failure must never break extraction.
-    try:
-        from graphify.cache import file_hash as _file_hash
+    caches_committed = False
 
-        _live_hashes: set[str] = set()
-        for _kind in ("document", "paper", "image"):
-            for _fp in files_by_type.get(_kind, []):
-                _abs = Path(_fp)
-                if not _abs.is_absolute():
-                    _abs = target / _abs
-                if not _abs.is_file():
-                    continue  # deleted/missing — leave out so its entry is pruned
-                try:
-                    _live_hashes.add(_file_hash(_abs, target, cache_root=out_root))
-                except OSError:
-                    pass
-        _prune_semantic_cache(out_root, _live_hashes)
-    except Exception as exc:
-        print(
-            f"[graphify extract] warning: could not prune semantic cache: {exc}",
-            file=sys.stderr,
-        )
+    def _commit_extraction_caches() -> None:
+        """Publish cache updates only after canonical graph state succeeds."""
+        nonlocal caches_committed
+        if caches_committed:
+            return
+        caches_committed = True
+        try:
+            from graphify.cache import file_hash as _file_hash, save_cached as _save_cached
+
+            for entry in ast_result.get("_deferred_cache_entries", []):
+                _save_cached(
+                    Path(entry["path"]),
+                    entry["result"],
+                    out_root,
+                    source_root=target,
+                )
+            if fresh_semantic_result is not None:
+                _save_semantic_cache(
+                    fresh_semantic_result.get("nodes", []),
+                    fresh_semantic_result.get("edges", []),
+                    fresh_semantic_result.get("hyperedges", []),
+                    root=out_root,
+                    source_root=target,
+                )
+
+            # Semantic entries are content-addressed but unversioned. Prune
+            # only after publication succeeds so a refused extraction leaves
+            # the previous cache tree untouched.
+            live_hashes: set[str] = set()
+            for kind in ("document", "paper", "image"):
+                for source in files_by_type.get(kind, []):
+                    source_path = Path(source)
+                    if not source_path.is_absolute():
+                        source_path = target / source_path
+                    if not source_path.is_file():
+                        continue
+                    try:
+                        live_hashes.add(_file_hash(source_path, target, cache_root=out_root))
+                    except OSError:
+                        pass
+            _prune_semantic_cache(out_root, live_hashes)
+        except Exception as exc:
+            print(
+                f"[graphify extract] warning: could not update extraction cache: {exc}",
+                file=sys.stderr,
+            )
+
     stages.mark("semantic extract")
 
     pg_result: dict = {"nodes": [], "edges": []}
@@ -2934,6 +3039,18 @@ def _cmd_extract() -> None:
             f"[graphify extract] Cargo: {len(cargo_result['nodes'])} nodes, "
             f"{len(cargo_result['edges'])} edges"
         )
+
+    changed_sources = _changed_source_files(source_snapshot)
+    if changed_sources:
+        preview = ", ".join(changed_sources[:3])
+        if len(changed_sources) > 3:
+            preview += f", and {len(changed_sources) - 3} more"
+        print(
+            "[graphify extract] error: source files changed during extraction; "
+            f"refusing to publish mixed-generation state: {preview}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Stamp semantic provenance on every semantic-pipeline edge. Fresh
     # chunks arrive already stamped (extract_corpus_parallel routes each
@@ -2968,6 +3085,19 @@ def _cmd_extract() -> None:
     graph_json_path = graphify_out / "graph.json"
     analysis_path = graphify_out / ".graphify_analysis.json"
 
+    from graphify.persistence import FileStateTransaction
+
+    def _new_state_transaction() -> FileStateTransaction:
+        return FileStateTransaction(
+            [
+                graph_json_path,
+                analysis_path,
+                manifest_path,
+                graphify_out / ".graphify_root",
+                graphify_out / ".graphify_semantic_marker",
+            ]
+        )
+
     # Build a manifest-safe files dict: only stamp semantic_hash for files
     # that actually produced output (cache hit or fresh extraction). Files
     # whose chunk failed have no source_file entry in sem_result — leaving
@@ -2994,10 +3124,10 @@ def _cmd_extract() -> None:
             _existing_graph_type = _detect_graph_type(_existing_data)
         except Exception as exc:
             print(
-                f"[graphify extract] warning: could not inspect existing graph.json "
-                f"profile ({exc}); treating as simple.",
+                f"[graphify extract] error: could not inspect existing graph.json profile: {exc}",
                 file=sys.stderr,
             )
+            sys.exit(1)
     if directed_flag:
         resolved_graph_type = "digraph"
     elif multigraph_flag is True:
@@ -3063,16 +3193,26 @@ def _cmd_extract() -> None:
                 "[graphify extract] no incremental changes detected "
                 "(--no-cluster); outputs left untouched."
             )
+            state_transaction = _new_state_transaction()
             try:
                 _save_manifest(
-                    _manifest_files, manifest_path=str(manifest_path), kind="both", root=target
+                    _manifest_files,
+                    manifest_path=str(manifest_path),
+                    kind="both",
+                    root=target,
+                    expected_hashes=source_snapshot,
                 )
+                _write_scan_root_marker()
             except Exception as exc:
+                state_transaction.rollback()
                 print(
-                    f"[graphify extract] warning: could not write manifest: {exc}",
+                    f"[graphify extract] error: could not write manifest: {exc}",
                     file=sys.stderr,
                 )
-            _write_scan_root_marker()
+                sys.exit(1)
+            state_transaction.commit()
+            _commit_extraction_caches()
+            _acknowledge_semantic_signal()
             stages.total()
             sys.exit(0)
 
@@ -3090,7 +3230,6 @@ def _cmd_extract() -> None:
                 _e["source_file"] = (
                     _node_sf.get(_e.get("source")) or _node_sf.get(_e.get("target")) or ""
                 )
-        _backup(graphify_out)
         if incremental_mode:
             # Incremental no-cluster scans are still deltas. If no files
             # changed, ``merged`` is empty; writing it directly would erase
@@ -3110,6 +3249,7 @@ def _cmd_extract() -> None:
                 root=target,
                 multigraph=multigraph_flag,
             )
+            state_transaction = _new_state_transaction()
             # RISK 4 — Guard 1 signaling: to_json's empty-merge floor returns
             # False (and PRESERVES the populated graph.json) when the merged
             # graph has 0 nodes over a populated file. force=True bypasses the
@@ -3118,7 +3258,19 @@ def _cmd_extract() -> None:
             # refusal: do NOT fall through to the success line. A 0-node merge
             # over a populated graph is an aborted extraction, so signal it
             # (exit 1) instead of falsely reporting "wrote ... 0 nodes".
-            if not _nc_to_json(_nc_graph, {}, str(graph_json_path), force=True):
+            try:
+                if _nc_graph.number_of_nodes() > 0:
+                    _backup(graphify_out, transaction=state_transaction)
+                json_written = _nc_to_json(_nc_graph, {}, str(graph_json_path), force=True)
+            except Exception as exc:
+                state_transaction.rollback()
+                print(
+                    f"[graphify extract] error: could not publish graph.json: {exc}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            if not json_written:
+                state_transaction.rollback()
                 print(
                     "[graphify extract] extraction aborted: the merge produced an "
                     "empty (0-node) graph; the previous graph.json was preserved.",
@@ -3138,6 +3290,7 @@ def _cmd_extract() -> None:
             from graphify.export import to_json as _nc_to_json
 
             _nc_graph = _build_from_json(merged, multigraph=True, root=target)
+            state_transaction = _new_state_transaction()
             # RISK 4 — Guard 1 signaling (multigraph sibling): identical to the
             # incremental site above. A non-incremental run can still see a
             # populated graph.json on disk (graph.json present, manifest.json
@@ -3146,7 +3299,19 @@ def _cmd_extract() -> None:
             # "wrote ... 0 nodes" success line. Under force=True the only False
             # return is the 0-node floor, so a legitimate non-zero multigraph
             # build (True) is completely unaffected.
-            if not _nc_to_json(_nc_graph, {}, str(graph_json_path), force=True):
+            try:
+                if _nc_graph.number_of_nodes() > 0:
+                    _backup(graphify_out, transaction=state_transaction)
+                json_written = _nc_to_json(_nc_graph, {}, str(graph_json_path), force=True)
+            except Exception as exc:
+                state_transaction.rollback()
+                print(
+                    f"[graphify extract] error: could not publish graph.json: {exc}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            if not json_written:
+                state_transaction.rollback()
                 print(
                     "[graphify extract] extraction aborted: the merge produced an "
                     "empty (0-node) graph; the previous graph.json was preserved.",
@@ -3192,7 +3357,19 @@ def _cmd_extract() -> None:
 
             graph_meta[GRAPHIFY_PROFILE_KEY] = {"graph_type": resolved_graph_type}
             merged["graph"] = graph_meta
-            graph_json_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+            state_transaction = _new_state_transaction()
+            from graphify.persistence import atomic_write_text as _atomic_write_text
+
+            try:
+                _backup(graphify_out, transaction=state_transaction)
+                _atomic_write_text(graph_json_path, json.dumps(merged, indent=2))
+            except Exception as exc:
+                state_transaction.rollback()
+                print(
+                    f"[graphify extract] error: could not publish graph.json: {exc}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             n_nodes = len(merged["nodes"])
             n_edges = len(merged["edges"])
         stages.mark("write")
@@ -3211,11 +3388,20 @@ def _cmd_extract() -> None:
             )
         try:
             _save_manifest(
-                _manifest_files, manifest_path=str(manifest_path), kind="both", root=target
+                _manifest_files,
+                manifest_path=str(manifest_path),
+                kind="both",
+                root=target,
+                expected_hashes=source_snapshot,
             )
+            _write_scan_root_marker()
         except Exception as exc:
-            print(f"[graphify extract] warning: could not write manifest: {exc}", file=sys.stderr)
-        _write_scan_root_marker()
+            state_transaction.rollback()
+            print(f"[graphify extract] error: could not write manifest: {exc}", file=sys.stderr)
+            sys.exit(1)
+        state_transaction.commit()
+        _commit_extraction_caches()
+        _acknowledge_semantic_signal()
         if global_merge:
             from graphify.global_graph import global_add as _global_add
 
@@ -3231,9 +3417,10 @@ def _cmd_extract() -> None:
                     )
             except Exception as exc:
                 print(
-                    f"[graphify global] warning: failed to merge into global graph: {exc}",
+                    f"[graphify global] error: failed to merge into global graph: {exc}",
                     file=sys.stderr,
                 )
+                sys.exit(1)
         stages.total()
         sys.exit(0)
 
@@ -3290,23 +3477,53 @@ def _cmd_extract() -> None:
     cohesion = _score_all(G, communities)
     try:
         gods = _god_nodes(G)
-    except Exception:
-        gods = []
-    try:
         surprises = _surprising(G, communities)
-    except Exception:
-        surprises = []
+    except Exception as exc:
+        print(f"[graphify extract] analysis failed: {exc}", file=sys.stderr)
+        sys.exit(1)
     stages.mark("analyze")
 
     from graphify.export import backup_if_protected as _backup
+    from graphify.persistence import atomic_write_text as _atomic_write_text
 
-    _backup(graphify_out)
-    _to_json(G, communities, str(graph_json_path), force=True)
-    stages.mark("export")
-    if merged.get("output_tokens", 0) > 0:
-        (graphify_out / ".graphify_semantic_marker").write_text(
-            json.dumps({"output_tokens": merged["output_tokens"]}), encoding="utf-8"
+    analysis = {
+        "communities": {str(k): v for k, v in communities.items()},
+        "cohesion": {str(k): v for k, v in cohesion.items()},
+        "gods": gods,
+        "surprises": surprises,
+        "tokens": {
+            "input": merged["input_tokens"],
+            "output": merged["output_tokens"],
+        },
+    }
+    state_transaction = _new_state_transaction()
+    try:
+        _backup(graphify_out, transaction=state_transaction)
+        if not _to_json(G, communities, str(graph_json_path), force=True):
+            raise OSError("graph.json exporter refused the clustered graph")
+        if merged.get("output_tokens", 0) > 0:
+            _atomic_write_text(
+                graphify_out / ".graphify_semantic_marker",
+                json.dumps({"output_tokens": merged["output_tokens"]}),
+            )
+        _atomic_write_text(analysis_path, json.dumps(analysis, indent=2))
+        _save_manifest(
+            _manifest_files,
+            manifest_path=str(manifest_path),
+            kind="both",
+            root=target,
+            expected_hashes=source_snapshot,
         )
+        _write_scan_root_marker()
+    except Exception as exc:
+        state_transaction.rollback()
+        print(f"[graphify extract] error: could not publish graph state: {exc}", file=sys.stderr)
+        sys.exit(1)
+    state_transaction.commit()
+    stages.mark("export")
+    _commit_extraction_caches()
+    _acknowledge_semantic_signal()
+
     if global_merge:
         from graphify.global_graph import global_add as _global_add
 
@@ -3322,25 +3539,10 @@ def _cmd_extract() -> None:
                 )
         except Exception as exc:
             print(
-                f"[graphify global] warning: failed to merge into global graph: {exc}",
+                f"[graphify global] error: failed to merge into global graph: {exc}",
                 file=sys.stderr,
             )
-    analysis = {
-        "communities": {str(k): v for k, v in communities.items()},
-        "cohesion": {str(k): v for k, v in cohesion.items()},
-        "gods": gods,
-        "surprises": surprises,
-        "tokens": {
-            "input": merged["input_tokens"],
-            "output": merged["output_tokens"],
-        },
-    }
-    analysis_path.write_text(json.dumps(analysis, indent=2), encoding="utf-8")
-    try:
-        _save_manifest(_manifest_files, manifest_path=str(manifest_path), kind="both", root=target)
-    except Exception as exc:
-        print(f"[graphify extract] warning: could not write manifest: {exc}", file=sys.stderr)
-    _write_scan_root_marker()
+            sys.exit(1)
 
     cost = _estimate_cost(backend or "", merged["input_tokens"], merged["output_tokens"])
     print(
@@ -3609,6 +3811,9 @@ def main() -> None:
             "    --remap                 run a full extraction while preserving output and profile"
         )
         print(
+            "    --repair-state          validate legacy graph+manifest state and restore only a missing scan-root marker"
+        )
+        print(
             "  cluster-only <path>     rerun clustering on an existing graph.json and regenerate report"
         )
         print(
@@ -3679,9 +3884,8 @@ def main() -> None:
         )
         print("    --half-life-days N      signal weight halves every N days (default 30)")
         print("    --min-corroboration N   distinct useful results to prefer a node (default 2)")
-        print(
-            "  check-update <path>     check needs_update flag and notify if semantic re-extraction is pending (cron-safe)"
-        )
+        print("  check-update [<path>]   check needs_update flag for an existing graph (cron-safe)")
+        print("    --out DIR               use the graph state at <DIR>/graphify-out/")
         print("  tree                    emit a D3 v7 collapsible-tree HTML for graph.json")
         print("    --graph PATH            path to graph.json (default graphify-out/graph.json)")
         print("    --output HTML           output path (default graphify-out/GRAPH_TREE.html)")
@@ -5082,11 +5286,9 @@ def main() -> None:
             built_at_commit=_commit,
             learning=_llfr(out / "graph.json"),
         )
-        (out / "GRAPH_REPORT.md").write_text(report, encoding="utf-8")
-        stages.mark("report")
         from graphify.export import backup_if_protected as _backup
+        from graphify.persistence import FileStateTransaction, atomic_write_text
 
-        _backup(out)
         analysis = {
             "communities": {str(k): v for k, v in communities.items()},
             "cohesion": {str(k): v for k, v in cohesion.items()},
@@ -5094,21 +5296,51 @@ def main() -> None:
             "surprises": surprises,
             "questions": questions,
         }
-        (out / ".graphify_analysis.json").write_text(
-            json.dumps(analysis, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        to_json(G, communities, str(out / "graph.json"), community_labels=labels)
-        labels_path.write_text(
-            json.dumps({str(k): v for k, v in labels.items()}, ensure_ascii=False), encoding="utf-8"
-        )
         # Membership signatures beside the labels so a later cluster-only can detect
         # which communities changed and avoid reusing a stale label (see reuse above).
         from graphify.cluster import community_member_sigs as _cms
 
-        (labels_path.parent / (labels_path.name + ".sig")).write_text(
-            json.dumps({str(k): v for k, v in _cms(communities).items()}), encoding="utf-8"
+        report_path = out / "GRAPH_REPORT.md"
+        analysis_path = out / ".graphify_analysis.json"
+        output_graph_path = out / "graph.json"
+        signatures_path = labels_path.parent / (labels_path.name + ".sig")
+        state_transaction = FileStateTransaction(
+            [
+                report_path,
+                analysis_path,
+                output_graph_path,
+                labels_path,
+                signatures_path,
+            ]
         )
+        try:
+            _backup(out, transaction=state_transaction)
+            atomic_write_text(report_path, report)
+            atomic_write_text(
+                analysis_path,
+                json.dumps(analysis, indent=2, ensure_ascii=False),
+            )
+            if not to_json(
+                G,
+                communities,
+                str(output_graph_path),
+                community_labels=labels,
+            ):
+                raise OSError("graph.json exporter refused the clustered graph")
+            atomic_write_text(
+                labels_path,
+                json.dumps({str(k): v for k, v in labels.items()}, ensure_ascii=False),
+            )
+            atomic_write_text(
+                signatures_path,
+                json.dumps({str(k): v for k, v in _cms(communities).items()}),
+            )
+        except Exception as exc:
+            state_transaction.rollback()
+            print(f"error: cluster-only could not publish graph state: {exc}", file=sys.stderr)
+            sys.exit(1)
+        state_transaction.commit()
+        stages.mark("report")
 
         # Mirror watch.py pattern: gate to_html so core outputs (graph.json +
         # GRAPH_REPORT.md) always land. Honor --no-viz explicitly; otherwise
@@ -5152,9 +5384,31 @@ def main() -> None:
 
     elif cmd == "update":
         force = os.environ.get("GRAPHIFY_FORCE", "").lower() in ("1", "true", "yes")
+        force_requested = False
         no_cluster = False
         no_viz = False
         remap = False
+        repair_state = False
+        remap_passthrough: list[str] = []
+        remap_value_options = {
+            "--backend",
+            "--model",
+            "--mode",
+            "--max-workers",
+            "--token-budget",
+            "--max-concurrency",
+            "--api-timeout",
+            "--resolution",
+            "--exclude-hubs",
+            "--exclude",
+            "--postgres",
+        }
+        remap_flag_options = {
+            "--google-workspace",
+            "--dedup-llm",
+            "--cargo",
+            "--timing",
+        }
         args = sys.argv[2:]
         watch_arg: str | None = None
         output_root: Path | None = None
@@ -5163,6 +5417,7 @@ def main() -> None:
             a = args[i_arg]
             if a == "--force":
                 force = True
+                force_requested = True
                 i_arg += 1
                 continue
             if a == "--no-cluster":
@@ -5175,6 +5430,10 @@ def main() -> None:
                 continue
             if a in ("--remap", "--rebuild"):
                 remap = True
+                i_arg += 1
+                continue
+            if a == "--repair-state":
+                repair_state = True
                 i_arg += 1
                 continue
             if a == "--out":
@@ -5192,6 +5451,24 @@ def main() -> None:
                 output_root = Path(raw_output)
                 i_arg += 1
                 continue
+            if a in remap_value_options:
+                if i_arg + 1 >= len(args):
+                    print(f"error: {a} requires a value", file=sys.stderr)
+                    sys.exit(2)
+                remap_passthrough.extend([a, args[i_arg + 1]])
+                i_arg += 2
+                continue
+            if any(a.startswith(option + "=") for option in remap_value_options):
+                if not a.split("=", 1)[1]:
+                    print(f"error: {a.split('=', 1)[0]} requires a value", file=sys.stderr)
+                    sys.exit(2)
+                remap_passthrough.append(a)
+                i_arg += 1
+                continue
+            if a in remap_flag_options:
+                remap_passthrough.append(a)
+                i_arg += 1
+                continue
             if a.startswith("-"):
                 print(f"error: unknown update option: {a}", file=sys.stderr)
                 sys.exit(2)
@@ -5200,6 +5477,37 @@ def main() -> None:
                 sys.exit(2)
             watch_arg = a
             i_arg += 1
+
+        if remap_passthrough and not remap:
+            print(
+                f"error: {remap_passthrough[0]} requires --remap because ordinary "
+                "update is AST-only",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+        if repair_state:
+            if force_requested or remap or remap_passthrough or no_cluster or no_viz:
+                print(
+                    "error: --repair-state is repair-only and cannot be combined with rebuild options",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            if watch_arg is None:
+                print("error: --repair-state requires an explicit scan path", file=sys.stderr)
+                sys.exit(2)
+            from graphify.update_state import UpdateStateError, repair_update_state
+
+            try:
+                repaired = repair_update_state(Path(watch_arg), output_root=output_root)
+            except UpdateStateError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(1)
+            print(
+                f"[graphify] repaired scan-root marker for {repaired.graph_type} graph at "
+                f"{repaired.output_dir}"
+            )
+            return
 
         from graphify.update_state import UpdateStateError, resolve_update_context
 
@@ -5223,8 +5531,8 @@ def main() -> None:
             # command handling. Without --remap, `update` stays AST-only (no LLM)
             # and still re-stamps AST edges via extract()'s edge stamp; semantic
             # edges are preserved by the watch eviction until a --remap re-runs the
-            # LLM pass. If no LLM backend key is set, the extract pipeline degrades
-            # to AST-only (and still re-stamps AST edges) rather than failing.
+            # LLM pass. Uncached semantic files require a configured backend;
+            # refusing without one prevents an AST-only partial remap.
             if no_viz:
                 # `extract` always renders graph.html and has no --no-viz option;
                 # surface that the flag is not honored here rather than dropping it
@@ -5253,6 +5561,7 @@ def main() -> None:
             )
             if no_cluster:
                 remap_argv.append("--no-cluster")
+            remap_argv.extend(remap_passthrough)
             # Restore the global sys.argv after the in-process re-dispatch so a
             # caller that invokes main() in-process (the test suite, a future
             # `sys.exit(main())` wrapper, or an atexit handler) never observes the
@@ -5316,12 +5625,48 @@ def main() -> None:
         # tool calls. Graph guidance reaches the agent via AGENTS.md / skill instead.
         sys.exit(0)
     elif cmd == "check-update":
-        if len(sys.argv) < 3:
-            print("Usage: graphify check-update <path>", file=sys.stderr)
-            sys.exit(1)
+        args = sys.argv[2:]
+        watch_arg: str | None = None
+        output_root: Path | None = None
+        i_arg = 0
+        while i_arg < len(args):
+            arg = args[i_arg]
+            if arg == "--out":
+                if i_arg + 1 >= len(args):
+                    print("error: --out requires a directory", file=sys.stderr)
+                    sys.exit(2)
+                output_root = Path(args[i_arg + 1])
+                i_arg += 2
+                continue
+            if arg.startswith("--out="):
+                value = arg.split("=", 1)[1]
+                if not value:
+                    print("error: --out requires a directory", file=sys.stderr)
+                    sys.exit(2)
+                output_root = Path(value)
+                i_arg += 1
+                continue
+            if arg.startswith("-"):
+                print(f"error: unknown check-update option: {arg}", file=sys.stderr)
+                sys.exit(2)
+            if watch_arg is not None:
+                print("error: check-update accepts at most one path argument", file=sys.stderr)
+                sys.exit(2)
+            watch_arg = arg
+            i_arg += 1
+
+        from graphify.update_state import UpdateStateError, resolve_update_context
         from graphify.watch import check_update
 
-        check_update(Path(sys.argv[2]).resolve())
+        try:
+            context = resolve_update_context(
+                Path(watch_arg) if watch_arg is not None else None,
+                output_root=output_root,
+            )
+        except UpdateStateError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        check_update(context.scan_root, output_dir=context.output_dir)
         sys.exit(0)
     elif cmd == "tree":
         # Emit a D3 v7 collapsible-tree HTML view of graph.json:
@@ -5526,9 +5871,19 @@ def main() -> None:
         # block a merge that drops nodes via dedup); ``communities={}`` because a
         # merged graph is not (re)clustered here.
         from graphify.export import to_json as _to_json
+        from graphify.persistence import FileStateTransaction
 
-        _backup_merge_target(Path(_current_path))
-        _to_json(merged_graph, {}, _current_path, force=True)
+        merge_target = Path(_current_path)
+        state_transaction = FileStateTransaction([merge_target])
+        try:
+            _backup_merge_target(merge_target, transaction=state_transaction)
+            if not _to_json(merged_graph, {}, _current_path, force=True):
+                raise OSError("graph exporter refused the merged graph")
+        except Exception as exc:
+            state_transaction.rollback()
+            print(f"[graphify merge-driver] error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        state_transaction.commit()
         sys.exit(0)
 
     elif cmd == "merge-graphs":
@@ -5632,10 +5987,19 @@ def main() -> None:
         # round-trips on reload. ``force=True``: merge-graphs deliberately
         # (re)writes the merged output; ``communities={}``: not clustered here.
         from graphify.export import to_json as _to_json
+        from graphify.persistence import FileStateTransaction
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        _backup_merge_target(out_path)
-        _to_json(merged_graph, {}, str(out_path), force=True)
+        state_transaction = FileStateTransaction([out_path])
+        try:
+            _backup_merge_target(out_path, transaction=state_transaction)
+            if not _to_json(merged_graph, {}, str(out_path), force=True):
+                raise OSError("graph exporter refused the merged graph")
+        except Exception as exc:
+            state_transaction.rollback()
+            print(f"[graphify merge-graphs] error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        state_transaction.commit()
         print(
             f"Merged {len(loaded_graphs)} graphs -> {merged_graph.number_of_nodes()} nodes, "
             f"{merged_graph.number_of_edges()} edges ({target_type})"

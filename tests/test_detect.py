@@ -1,5 +1,8 @@
 import unicodedata
 from pathlib import Path
+
+import pytest
+
 from graphify.detect import (
     classify_file,
     count_words,
@@ -1469,6 +1472,47 @@ def test_save_manifest_without_root_keeps_absolute_keys(tmp_path):
     assert list(raw)[0] == str(f.resolve()), (
         f"without root, keys must remain absolute; got {list(raw)}"
     )
+
+
+def test_save_manifest_preserves_existing_manifest_when_replace_fails(tmp_path, monkeypatch):
+    from graphify import persistence
+
+    source = tmp_path / "source.py"
+    source.write_text("pass\n", encoding="utf-8")
+    manifest = tmp_path / "graphify-out" / "manifest.json"
+    manifest.parent.mkdir()
+    original = b'{"stable": {"mtime": 1}}'
+    manifest.write_bytes(original)
+
+    def fail_replace(_source, _destination) -> None:
+        raise OSError("simulated manifest replace failure")
+
+    monkeypatch.setattr(persistence.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="simulated manifest replace failure"):
+        save_manifest({"code": [str(source)]}, str(manifest), root=tmp_path)
+
+    assert manifest.read_bytes() == original
+
+
+def test_save_manifest_rejects_a_source_generation_mismatch(tmp_path):
+    from graphify.detect import snapshot_source_hashes
+
+    source = tmp_path / "module.py"
+    source.write_text("before\n", encoding="utf-8")
+    snapshot = snapshot_source_hashes([str(source)])
+    source.write_text("after\n", encoding="utf-8")
+    manifest = tmp_path / "manifest.json"
+
+    with pytest.raises(RuntimeError, match="source files changed after extraction"):
+        save_manifest(
+            {"code": [str(source)]},
+            str(manifest),
+            root=tmp_path,
+            expected_hashes=snapshot,
+        )
+
+    assert not manifest.exists()
 
 
 def test_load_manifest_absolutizes_relative_keys(tmp_path):

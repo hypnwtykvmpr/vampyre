@@ -17,6 +17,7 @@ from graphify.google_workspace import (
 )
 from graphify.installation import uv_tool_install_command
 from graphify.paths import GRAPHIFY_OUT, GRAPHIFY_OUT_NAME, out_path
+from graphify.persistence import atomic_write_text
 
 
 class FileType(str, Enum):
@@ -1327,6 +1328,29 @@ def _stat_and_hash(path_str: str) -> tuple[str, float, str] | None:
         return None
 
 
+def snapshot_source_hashes(files: list[str]) -> dict[str, str]:
+    """Capture one exact content generation for a set of source files."""
+    unique_files = list(dict.fromkeys(files))
+    with ThreadPoolExecutor() as pool:
+        raw = list(pool.map(_stat_and_hash, unique_files))
+    captured = {item[0]: item[2] for item in raw if item is not None and item[2]}
+    missing = [path for path in unique_files if path not in captured]
+    if missing:
+        preview = ", ".join(missing[:3])
+        if len(missing) > 3:
+            preview += f", and {len(missing) - 3} more"
+        raise OSError(f"could not snapshot source file(s): {preview}")
+    return captured
+
+
+def changed_source_files(snapshot: dict[str, str]) -> list[str]:
+    """Return source paths whose bytes no longer match ``snapshot``."""
+    with ThreadPoolExecutor() as pool:
+        raw = list(pool.map(_stat_and_hash, snapshot))
+    current = {item[0]: item[2] for item in raw if item is not None and item[2]}
+    return [path for path, digest in snapshot.items() if current.get(path) != digest]
+
+
 def _to_relative_for_storage(key: str, root: Path) -> str:
     """Return ``key`` as a forward-slash relative path from ``root``.
 
@@ -1400,6 +1424,7 @@ def save_manifest(
     *,
     kind: str = "both",
     root: Path | None = None,
+    expected_hashes: dict[str, str] | None = None,
 ) -> None:
     """Save current file mtimes + content hashes for change detection.
 
@@ -1447,6 +1472,21 @@ def save_manifest(
         raw = pool.map(_stat_and_hash, all_files)
     hashed: dict[str, tuple[float, str]] = {r[0]: (r[1], r[2]) for r in raw if r is not None}
 
+    if expected_hashes is not None:
+        changed = [
+            path
+            for path in all_files
+            if path not in hashed or hashed[path][1] != expected_hashes.get(path)
+        ]
+        if changed:
+            preview = ", ".join(changed[:3])
+            if len(changed) > 3:
+                preview += f", and {len(changed) - 3} more"
+            raise RuntimeError(
+                "source files changed after extraction; refusing to publish "
+                f"a mismatched manifest: {preview}"
+            )
+
     for f in all_files:
         if f not in hashed:
             continue  # file deleted between detect() and manifest write
@@ -1471,8 +1511,7 @@ def save_manifest(
         # their absolute form so the manifest round-trips on the saving
         # machine even when not every entry can be portably encoded.
         manifest = {_to_relative_for_storage(k, root): v for k, v in manifest.items()}
-    Path(manifest_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(manifest_path).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    atomic_write_text(Path(manifest_path), json.dumps(manifest, indent=2))
 
 
 def detect_incremental(

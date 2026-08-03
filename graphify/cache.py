@@ -159,7 +159,13 @@ def _normalize_path(path: Path) -> Path:
     return Path(os.path.normcase(s))
 
 
-def file_hash(path: Path, root: Path = Path("."), *, cache_root: Path | None = None) -> str:
+def file_hash(
+    path: Path,
+    root: Path = Path("."),
+    *,
+    cache_root: Path | None = None,
+    record_stat: bool = True,
+) -> str:
     """SHA256 of file contents + path relative to root.
 
     Uses a stat-based fastpath (size + mtime_ns) to skip full reads when the
@@ -202,7 +208,7 @@ def file_hash(path: Path, root: Path = Path("."), *, cache_root: Path | None = N
         h.update(p.resolve().as_posix().lower().encode())
     digest = h.hexdigest()
 
-    if st is not None:
+    if st is not None and record_stat:
         _stat_index[abs_key] = {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "hash": digest}
         _stat_index_dirty = True
 
@@ -273,6 +279,15 @@ def _absolutize_source_files_in(payload: dict, root: Path) -> None:
                 continue
 
 
+def _cache_dir_path(root: Path, kind: str) -> Path:
+    _out = Path(_GRAPHIFY_OUT)
+    base = _out if _out.is_absolute() else Path(root).resolve() / _out
+    directory = base / "cache" / kind
+    if kind == "ast":
+        directory = directory / f"v{_EXTRACTOR_VERSION}"
+    return directory
+
+
 def cache_dir(root: Path = Path("."), kind: str = "ast") -> Path:
     """Returns the cache directory for ``kind`` - creates it if needed.
 
@@ -284,11 +299,8 @@ def cache_dir(root: Path = Path("."), kind: str = "ast") -> Path:
     contents. Semantic entries live unversioned in graphify-out/cache/semantic/
     (re-extraction costs LLM calls).
     """
-    _out = Path(_GRAPHIFY_OUT)
-    base = _out if _out.is_absolute() else Path(root).resolve() / _out
-    d = base / "cache" / kind
+    d = _cache_dir_path(root, kind)
     if kind == "ast":
-        d = d / f"v{_EXTRACTOR_VERSION}"
         _cleanup_stale_ast_entries(d.parent, d)
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -315,10 +327,10 @@ def load_cached(
     """
     identity_root = source_root or root
     try:
-        h = file_hash(path, identity_root, cache_root=root)
+        h = file_hash(path, identity_root, cache_root=root, record_stat=False)
     except OSError:
         return None
-    entry = cache_dir(root, kind) / f"{h}.json"
+    entry = _cache_dir_path(root, kind) / f"{h}.json"
     if entry.exists():
         try:
             result = json.loads(entry.read_text(encoding="utf-8"))

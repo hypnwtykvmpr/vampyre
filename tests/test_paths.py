@@ -166,3 +166,25 @@ def test_resolve_scan_root_marker_rejects_malformed_values(tmp_path: Path, recor
     marker.write_text(recorded, encoding="utf-8")
 
     assert resolve_scan_root_marker(marker) is None
+
+
+def test_write_scan_root_marker_preserves_existing_marker_when_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from graphify import persistence
+
+    source_root = tmp_path / "project"
+    source_root.mkdir()
+    marker = tmp_path / "graphify-out" / ".graphify_root"
+    marker.parent.mkdir()
+    marker.write_bytes(b"marker-relative:stable")
+
+    def fail_replace(_source, _destination) -> None:
+        raise OSError("simulated marker replace failure")
+
+    monkeypatch.setattr(persistence.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="simulated marker replace failure"):
+        write_scan_root_marker(marker, source_root)
+
+    assert marker.read_bytes() == b"marker-relative:stable"

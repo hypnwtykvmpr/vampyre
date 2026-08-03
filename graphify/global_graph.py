@@ -10,6 +10,7 @@ import networkx as nx
 from networkx.readwrite import json_graph as _jg
 
 from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
+from graphify.persistence import FileStateTransaction, atomic_write_text
 from graphify.projections import normalize_to_multidigraph
 
 _GLOBAL_DIR = Path.home() / ".graphify"
@@ -211,7 +212,7 @@ def refuse_pre_profile_upgrade(
     )
 
 
-def backup_global_graph() -> Path | None:
+def backup_global_graph(*, transaction: FileStateTransaction | None = None) -> Path | None:
     """Snapshot the existing global-graph.json to a dated ``.bak`` before overwrite.
 
     Mirrors :func:`graphify.export.backup_if_protected`'s dated-snapshot pattern,
@@ -223,8 +224,7 @@ def backup_global_graph() -> Path | None:
 
     Returns the backup path, or None when there is nothing to back up (no
     existing global graph) or backup is disabled via ``GRAPHIFY_NO_BACKUP``.
-    Never raises — a backup failure prints a warning and returns None so it can
-    never block the write it protects.
+    A protected overwrite is refused when its backup cannot be completed.
     """
     import os
 
@@ -235,6 +235,10 @@ def backup_global_graph() -> Path | None:
 
     today = date.today().isoformat()
     backup_path = _GLOBAL_GRAPH.with_name(f"{_GLOBAL_GRAPH.stem}.{today}.bak")
+    backup_transaction = transaction or FileStateTransaction([backup_path])
+    owns_transaction = transaction is None
+    if transaction is not None:
+        transaction.capture(backup_path)
     try:
         if backup_path.exists():
             src_hash = hashlib.sha256(_GLOBAL_GRAPH.read_bytes()).hexdigest()
@@ -243,13 +247,13 @@ def backup_global_graph() -> Path | None:
                 return backup_path  # identical content, nothing to do
         _GLOBAL_DIR.mkdir(parents=True, exist_ok=True)
         shutil.copy2(_GLOBAL_GRAPH, backup_path)
+        if owns_transaction:
+            backup_transaction.commit()
         return backup_path
     except Exception as exc:
-        print(
-            f"[graphify global] warning: backup failed ({exc}) — continuing with overwrite",
-            file=sys.stderr,
-        )
-        return None
+        if owns_transaction:
+            backup_transaction.rollback()
+        raise OSError(f"global graph backup failed: {exc}") from exc
 
 
 def _load_manifest() -> dict:
@@ -257,32 +261,16 @@ def _load_manifest() -> dict:
         try:
             return json.loads(_GLOBAL_MANIFEST.read_text(encoding="utf-8"))
         except Exception as exc:
-            # Don't silently wipe the user's manifest on a parse error: that
-            # deletes every tracked repo. Back the bad file up and surface the
-            # error so the user can recover or report it.
-            backup = _GLOBAL_MANIFEST.with_suffix(
-                _GLOBAL_MANIFEST.suffix + f".corrupt.{int(datetime.now(timezone.utc).timestamp())}"
-            )
-            try:
-                _GLOBAL_MANIFEST.rename(backup)
-                print(
-                    f"[graphify global] manifest at {_GLOBAL_MANIFEST} failed to parse ({exc}); "
-                    f"moved to {backup} and starting fresh. Restore from the backup if this was "
-                    f"unexpected.",
-                    file=sys.stderr,
-                )
-            except Exception as rename_exc:
-                print(
-                    f"[graphify global] manifest at {_GLOBAL_MANIFEST} failed to parse ({exc}) "
-                    f"and could not be backed up ({rename_exc}). Starting fresh.",
-                    file=sys.stderr,
-                )
+            raise GlobalGraphRecoveryError(
+                f"global manifest at {_GLOBAL_MANIFEST} is corrupt; refusing to "
+                f"modify global state. The original file was preserved: {exc}"
+            ) from exc
     return {"version": 1, "repos": {}}
 
 
 def _save_manifest(manifest: dict) -> None:
     _GLOBAL_DIR.mkdir(parents=True, exist_ok=True)
-    _GLOBAL_MANIFEST.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    atomic_write_text(_GLOBAL_MANIFEST, json.dumps(manifest, indent=2))
 
 
 def _read_global_graph_data() -> dict | None:
@@ -348,7 +336,7 @@ def _save_global_graph(G: nx.Graph) -> None:
         data["graph"] = graph_meta
     if GRAPHIFY_PROFILE_KEY not in graph_meta:
         graph_meta[GRAPHIFY_PROFILE_KEY] = dict(G.graph[GRAPHIFY_PROFILE_KEY])
-    _GLOBAL_GRAPH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    atomic_write_text(_GLOBAL_GRAPH, json.dumps(data, indent=2))
 
 
 def _file_hash(path: Path) -> str:
@@ -468,11 +456,6 @@ def global_add(source_path: Path, repo_tag: str) -> dict:
 
     added = prefixed.number_of_nodes() - len(remap)
 
-    # Back up the existing global graph before the irreversible overwrite. Cheap
-    # and idempotent within a day; no-op when there is nothing to back up.
-    backup_global_graph()
-    _save_global_graph(G)
-
     manifest["repos"][repo_tag] = {
         "added_at": datetime.now(timezone.utc).isoformat(),
         "source_path": str(source_path.resolve()),
@@ -481,7 +464,15 @@ def global_add(source_path: Path, repo_tag: str) -> dict:
         "source_hash": src_hash,
         "graph_type": target_type,
     }
-    _save_manifest(manifest)
+    state_transaction = FileStateTransaction([_GLOBAL_GRAPH, _GLOBAL_MANIFEST])
+    try:
+        backup_global_graph(transaction=state_transaction)
+        _save_global_graph(G)
+        _save_manifest(manifest)
+    except Exception:
+        state_transaction.rollback()
+        raise
+    state_transaction.commit()
 
     return {"repo_tag": repo_tag, "nodes_added": added, "nodes_removed": removed, "skipped": False}
 
@@ -496,11 +487,16 @@ def global_remove(repo_tag: str) -> int:
 
     G = _load_global_graph()
     removed = prune_repo_from_graph(G, repo_tag)
-    backup_global_graph()
-    _save_global_graph(G)
-
     del manifest["repos"][repo_tag]
-    _save_manifest(manifest)
+    state_transaction = FileStateTransaction([_GLOBAL_GRAPH, _GLOBAL_MANIFEST])
+    try:
+        backup_global_graph(transaction=state_transaction)
+        _save_global_graph(G)
+        _save_manifest(manifest)
+    except Exception:
+        state_transaction.rollback()
+        raise
+    state_transaction.commit()
     return removed
 
 

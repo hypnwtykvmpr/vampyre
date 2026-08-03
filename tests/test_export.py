@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 import networkx as nx
+import pytest
 
 from graphify.build import build_from_json
 from graphify.cluster import cluster
@@ -48,6 +49,25 @@ def test_to_json_nodes_have_community():
         data = json.loads(out.read_text())
         for node in data["nodes"]:
             assert "community" in node
+
+
+def test_to_json_preserves_existing_graph_when_replace_fails(tmp_path, monkeypatch):
+    from graphify import persistence
+
+    graph = make_graph()
+    output = tmp_path / "graph.json"
+    original = b'{"nodes": [], "links": []}'
+    output.write_bytes(original)
+
+    def fail_replace(_source, _destination) -> None:
+        raise OSError("simulated graph replace failure")
+
+    monkeypatch.setattr(persistence.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="simulated graph replace failure"):
+        to_json(graph, cluster(graph), str(output))
+
+    assert output.read_bytes() == original
 
 
 def test_to_cypher_creates_file():
@@ -465,6 +485,28 @@ def test_to_obsidian_rerun_updates_own_notes_but_not_user_files():
         assert (out / "UserNote.md").read_text().strip() == "mine"  # user's untouched
 
 
+def test_to_obsidian_ownership_manifest_is_atomically_replaced(monkeypatch, tmp_path):
+    """A failed legacy-style direct write must not corrupt the ownership record."""
+    G, communities = _two_node_graph()
+    out = tmp_path / "obsidian"
+    to_obsidian(G, communities, str(out), community_labels={0: "Backend"})
+    manifest = out / ".graphify_obsidian_manifest.json"
+
+    original_write_text = Path.write_text
+
+    def corrupt_direct_manifest_write(path, text, *args, **kwargs):
+        if path == manifest:
+            original_write_text(path, "{", encoding="utf-8")
+            raise OSError("simulated interrupted direct write")
+        return original_write_text(path, text, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", corrupt_direct_manifest_write)
+    to_obsidian(G, communities, str(out), community_labels={0: "Backend2"})
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert "Database.md" in payload["files"]
+
+
 # ── Case-only-distinct labels must not collide on case-insensitive filesystems ──
 
 
@@ -674,3 +716,22 @@ def test_backup_env_disable(tmp_path, monkeypatch):
     (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
     (tmp_path / ".graphify_semantic_marker").write_text("{}")
     assert backup_if_protected(tmp_path) is None
+
+
+def test_backup_failure_is_fail_closed_and_removes_partial_backup(tmp_path, monkeypatch):
+    from datetime import date
+
+    from graphify import export
+
+    (tmp_path / "graph.json").write_text('{"nodes":[]}', encoding="utf-8")
+    (tmp_path / ".graphify_semantic_marker").write_text("{}", encoding="utf-8")
+
+    def fail_copy(*args, **kwargs):
+        raise OSError("simulated backup failure")
+
+    monkeypatch.setattr(export.shutil, "copy2", fail_copy)
+
+    with pytest.raises(OSError, match="protected graph backup failed"):
+        export.backup_if_protected(tmp_path)
+
+    assert not (tmp_path / date.today().isoformat()).exists()

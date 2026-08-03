@@ -287,6 +287,7 @@ def test_adaptive_retry_gives_up_on_single_file_overflow(tmp_path):
     assert result["nodes"] == []
     assert result["edges"] == []
     assert result["finish_reason"] == "stop"
+    assert result["complete"] is False
 
 
 def test_adaptive_retry_re_raises_unrelated_errors(tmp_path):

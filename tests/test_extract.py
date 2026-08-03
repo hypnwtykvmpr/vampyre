@@ -72,6 +72,42 @@ def test_extract_merges_multiple_files():
     assert result["input_tokens"] == 0
 
 
+def test_extract_rejects_and_does_not_cache_a_source_changed_mid_parse(tmp_path, monkeypatch):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source = source_root / "module.py"
+    source.write_text("def before():\n    return 1\n", encoding="utf-8")
+    cache_root = tmp_path / "cache-root"
+
+    def unstable_parse(extractor, path, root):
+        path.write_text("def after():\n    return 2\n", encoding="utf-8")
+        return {
+            "nodes": [
+                {
+                    "id": "stale",
+                    "label": "stale",
+                    "file_type": "code",
+                    "source_file": str(path),
+                }
+            ],
+            "edges": [],
+        }
+
+    monkeypatch.setattr(extract_module, "_safe_extract_with_xaml_root", unstable_parse)
+
+    result = extract(
+        [source],
+        cache_root=cache_root,
+        source_root=source_root,
+        parallel=False,
+    )
+
+    assert result["failed_files"] == [str(source)]
+    assert result["nodes"] == []
+    cache_files = list((cache_root / "graphify-out" / "cache" / "ast").rglob("*.json"))
+    assert cache_files == []
+
+
 def test_extract_disambiguates_duplicate_symbol_ids_by_source_path(tmp_path):
     first = tmp_path / "apps/api/Program.cs"
     second = tmp_path / "tools/api/Program.cs"
@@ -1455,11 +1491,31 @@ def test_extract_json_extends_resolved():
     assert extends_edges[0].get("context") == "import"
 
 
-def test_extract_json_large_file_skipped(tmp_path):
+def test_extract_json_large_unclassified_file_reports_error(tmp_path):
     big = tmp_path / "big.json"
-    # Write a JSON file just over 1 MiB
     big.write_bytes(b'{"x": "' + b"a" * (1_048_576) + b'"}')
     result = extract_json(big)
+
+    assert "error" in result
+    assert result["nodes"] == []
+
+
+def test_extract_json_large_graph_data_file_skipped(tmp_path):
+    big = tmp_path / "snapshot.graph.json"
+    big.write_bytes(b'{"nodes": [' + b"{}," * 524_289 + b"{}]}")
+    result = extract_json(big)
+
+    assert "error" not in result
+    assert result["nodes"] == []
+    assert result["edges"] == []
+    assert result["skipped"] == "graph data json exceeds structural index limit"
+
+
+def test_extract_json_large_known_config_reports_error(tmp_path):
+    big = tmp_path / "package.json"
+    big.write_bytes(b'{"dependencies": {"x": "' + b"a" * (1_048_576) + b'"}}')
+    result = extract_json(big)
+
     assert "error" in result
     assert result["nodes"] == []
 
@@ -2052,6 +2108,39 @@ def test_extract_parallel_worker_warning_handles_sparse_file_indexes(tmp_path, m
     err = capsys.readouterr().err
     assert "late.py" in err
     assert "simulated worker failure" in err
+    assert per_file[3] == {
+        "nodes": [],
+        "edges": [],
+        "error": "RuntimeError: simulated worker failure",
+    }
+
+
+def test_extract_reports_per_file_extractor_failures(tmp_path, monkeypatch):
+    from graphify import extract as extract_mod
+
+    source = tmp_path / "broken.py"
+    source.write_text("x = 1\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        extract_mod,
+        "_get_extractor",
+        lambda _path: (
+            lambda _source: {
+                "nodes": [],
+                "edges": [],
+                "error": "parser unavailable",
+            }
+        ),
+    )
+
+    result = extract_mod.extract(
+        [source],
+        cache_root=tmp_path / "cache",
+        source_root=tmp_path,
+        parallel=False,
+    )
+
+    assert result["failed_files"] == [str(source)]
 
 
 def test_extract_parallel_worker_separates_source_and_cache_roots(tmp_path, monkeypatch):

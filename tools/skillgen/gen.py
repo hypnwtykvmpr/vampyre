@@ -302,6 +302,19 @@ def render(platform: Platform) -> list[RenderedArtifact]:
     """
     if platform.bucket == "monolith":
         body = _read_fragment(f"core/{platform.monolith}.md")
+        safe_update = _read_fragment("references/shared/monolith-update.md").rstrip()
+        pattern = (
+            r"## For --update \(incremental re-extraction\)\n.*?"
+            r"\n---\n\n## For --cluster-only"
+        )
+        body, replacements = re.subn(
+            pattern,
+            safe_update + "\n\n---\n\n## For --cluster-only",
+            body,
+            flags=re.DOTALL,
+        )
+        if replacements != 1:
+            raise ValueError(f"monolith '{platform.key}' must contain exactly one update section")
         return [RenderedArtifact(platform.skill_dst, body)]
 
     if platform.bucket != "split":

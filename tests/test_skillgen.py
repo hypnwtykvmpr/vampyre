@@ -270,16 +270,31 @@ def test_descriptions_are_unified():
 
 
 def test_windows_frontmatter_name_and_shell_and_extra():
-    """windows: graphify-windows name, powershell install, troubleshooting tail."""
+    """windows: graphify-windows uses one coherent Git Bash command dialect."""
     core, _ = _platform_artifacts("windows")
     assert core.startswith("---\nname: graphify-windows\n")
-    assert "```powershell" in core
-    assert "function Find-GraphifyPython" in core
+    assert "Claude Code on Windows runs skill commands in Git Bash" in core
+    assert "```powershell" not in core
+    assert "function Find-GraphifyPython" not in core
+    assert "cygpath" in core
     assert "## Troubleshooting" in core
     assert "### PowerShell 5.1: Vertical scrolling stops working" in core
+    assert "pip install" not in core
+    assert "pip uninstall" not in core
     # The troubleshooting section sits before Honesty Rules, single separator.
     assert "\n4. **Skip native Leiden**" in core
     assert core.index("## Troubleshooting") < core.index("## Honesty Rules")
+
+
+def test_generated_skills_quote_saved_interpreter_paths():
+    """Interpreter paths containing spaces must remain one command argument."""
+    platforms = gen.load_platforms()
+    for platform in platforms.values():
+        for artifact in gen.render(platform):
+            for line in artifact.content.splitlines():
+                stripped = line.lstrip()
+                if stripped.startswith("$(cat graphify-out/.graphify_python)"):
+                    raise AssertionError(f"{artifact.path}: unquoted interpreter in {line!r}")
 
 
 def test_codex_dispatch_is_agenttask_and_collects_in_memory():
@@ -479,11 +494,12 @@ def test_monoliths_carry_the_1392_runbook_fixes():
     for key in ("aider", "devin"):
         body = gen.render(platforms[key])[0].content
 
-        # #6/#7 directed propagation: no bare build_from_json call survives, and
-        # the IS_DIRECTED substitution instruction is present.
+        # Graph-class propagation: no bare build survives, and both graph-class
+        # substitutions are present.
         assert "directed=IS_DIRECTED" in body
+        assert "multigraph=IS_MULTIGRAPH" in body
         assert "build_from_json(extraction)" not in body
-        assert "Substitute it everywhere it appears" in body
+        assert "replace `IS_DIRECTED` and `IS_MULTIGRAPH` everywhere" in body
 
         # #10 content-only semantic scope: code is no longer flattened in.
         assert "for cat in ('document', 'paper', 'image')" in body
@@ -498,7 +514,10 @@ def test_monoliths_carry_the_1392_runbook_fixes():
         build_i = next(
             i
             for i, line in enumerate(lines)
-            if "G = build_from_json(extraction, directed=IS_DIRECTED)" in line
+            if (
+                "G = build_from_json(extraction, directed=IS_DIRECTED, "
+                "multigraph=IS_MULTIGRAPH)" in line
+            )
         )
         guard_i = next(
             i for i, line in enumerate(lines[build_i:], build_i) if "number_of_nodes() == 0" in line
@@ -506,16 +525,34 @@ def test_monoliths_carry_the_1392_runbook_fixes():
         report_i = next(
             i
             for i, line in enumerate(lines[build_i:], build_i)
-            if "GRAPH_REPORT.md').write_text(report)" in line
+            if "atomic_write_text(report_path, report)" in line
         )
         wrote_i = next(
             i
             for i, line in enumerate(lines[build_i:], build_i)
-            if line.strip().startswith("wrote = to_json(")
+            if line.strip().startswith("if not to_json(")
         )
         # guard fires right after the build, before the graph/report are written.
         assert build_i < guard_i < wrote_i < report_i, f"[{key}] Step 4 ordering not fixed"
-        assert "if not wrote:" in body
+        assert "if not to_json(" in body
+
+
+def test_generated_skills_use_strict_state_and_preserve_multigraph_updates():
+    platforms = gen.load_platforms()
+    for key, platform in platforms.items():
+        body = "\n".join(artifact.content for artifact in gen.render(platform))
+        assert "/graphify <path> --multigraph" in body, key
+        assert "resolve_update_context" in body, key
+        assert "multigraph=IS_MULTIGRAPH" in body, key
+        assert "expected_hashes=detect['_source_snapshot']" in body, key
+        assert "write_scan_root_marker" in body, key
+        assert "> graphify-out/.graphify_root" not in body, key
+        assert "Out-File -FilePath graphify-out\\.graphify_root" not in body, key
+
+    update_fragment = (
+        REPO_ROOT / "tools/skillgen/fragments/references/shared/update.md"
+    ).read_text(encoding="utf-8")
+    assert "save_manifest(" not in update_fragment
 
 
 def test_generated_runbooks_pass_root_to_save_manifest():
@@ -523,9 +560,10 @@ def test_generated_runbooks_pass_root_to_save_manifest():
 
     Without root=, save_manifest stores absolute path keys, so a clone or move
     breaks --update (every cached file misses and the whole corpus re-extracts).
-    The full-build (skill.md / monoliths) and the --update reference all relativize
-    the manifest to the scan root via root='INPUT_PATH'. This guards the actual
-    shipped artifacts; --check keeps them in sync with the fragments.
+    The full-build runbooks relativize the manifest to the scan root via
+    root='INPUT_PATH'. Incremental references deliberately do not save a
+    manifest before canonical graph publication. This guards the actual shipped
+    artifacts; --check keeps them in sync with the fragments.
     """
     targets = [
         REPO_ROOT / "graphify" / "skill.md",
@@ -541,7 +579,7 @@ def test_generated_runbooks_pass_root_to_save_manifest():
                 assert "root=" in ln, (
                     f"{path.relative_to(REPO_ROOT)}: save_manifest without root= (#1417): {ln.strip()!r}"
                 )
-    assert checked >= 4, f"expected save_manifest calls across the runbooks, found {checked}"
+    assert checked == 3, f"expected one full-build save per shipped core, found {checked}"
 
 
 def test_devin_keeps_its_multi_field_frontmatter():

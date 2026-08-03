@@ -17,6 +17,12 @@ from graphify.detect import (
     _load_graphifyignore,
 )
 from graphify.installation import uv_tool_install_command
+from graphify.persistence import (
+    FileStateTransaction,
+    atomic_write_text,
+    locked_file,
+    write_pending_signal,
+)
 
 # Single source of truth in graphify.paths (#1423); re-exported as _GRAPHIFY_OUT.
 from graphify.paths import (
@@ -25,61 +31,100 @@ from graphify.paths import (
 )
 
 _PENDING_FILENAME = ".pending_changes"
+_PENDING_INFLIGHT_GLOB = ".pending_changes.inflight.*"
+_PENDING_GUARD_FILENAME = ".pending_changes.guard"
 _PENDING_DRAIN_MAX_PASSES = 20
 
 
 def _queue_pending(out_dir: Path, changed_paths: list[Path]) -> None:
-    """Append ``changed_paths`` to ``out_dir/.pending_changes`` (one per line).
+    """Append path-safe JSON records to ``out_dir/.pending_changes``.
 
     Used by a post-commit hook process that cannot acquire ``_rebuild_lock``
     so its change set is not silently dropped (#1059). The lock-holding
     process drains this file before and after its rebuild and merges the
     contents with its own change set.
 
-    Opened in append mode so concurrent writers do not clobber each other on
-    POSIX; each ``write()`` of a small payload is effectively atomic. A
-    trailing newline is always written so partial-line corruption stays
-    confined to the offending entry and is skipped on drain.
+    A trailing newline keeps a torn final record isolated. The queue guard
+    serializes appenders on every supported platform; JSON encoding preserves
+    legal path characters such as embedded newlines.
     """
     if not changed_paths:
         return
     out_dir.mkdir(parents=True, exist_ok=True)
     pending = out_dir / _PENDING_FILENAME
-    payload = "".join(f"{os.fspath(p)}\n" for p in changed_paths)
-    with open(pending, "a", encoding="utf-8") as fh:
-        fh.write(payload)
+    payload = "".join(
+        json.dumps({"path": os.fspath(path)}, ensure_ascii=False, separators=(",", ":")) + "\n"
+        for path in changed_paths
+    )
+    with locked_file(out_dir / _PENDING_GUARD_FILENAME) as acquired:
+        if not acquired:
+            raise RuntimeError("could not acquire pending-change queue lock")
+        with open(pending, "a", encoding="utf-8") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+
+
+def _pending_paths(raw_batches: list[str]) -> list[Path]:
+    seen: set[str] = set()
+    paths: list[Path] = []
+    for raw in raw_batches:
+        for line in raw.splitlines():
+            value = line.strip()
+            if not value:
+                continue
+            try:
+                decoded = json.loads(value)
+            except (TypeError, ValueError):
+                decoded = None
+            if isinstance(decoded, dict) and isinstance(decoded.get("path"), str):
+                value = decoded["path"]
+            if value in seen:
+                continue
+            seen.add(value)
+            paths.append(Path(value))
+    return paths
+
+
+def _claim_pending(out_dir: Path) -> tuple[list[Path], list[Path]]:
+    """Move queued changes into durable in-flight files without acknowledging them."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    guard = out_dir / _PENDING_GUARD_FILENAME
+    with locked_file(guard) as acquired:
+        if not acquired:
+            raise RuntimeError("could not acquire pending-change queue lock")
+        pending = out_dir / _PENDING_FILENAME
+        if pending.exists():
+            claim = out_dir / f"{_PENDING_FILENAME}.inflight.{os.getpid()}.{time.time_ns()}"
+            os.replace(pending, claim)
+        claim_files = sorted(out_dir.glob(_PENDING_INFLIGHT_GLOB))
+        raw_batches: list[str] = []
+        readable_claims: list[Path] = []
+        for path in claim_files:
+            try:
+                raw_batches.append(path.read_text(encoding="utf-8"))
+                readable_claims.append(path)
+            except OSError:
+                continue
+    return _pending_paths(raw_batches), readable_claims
+
+
+def _ack_pending(out_dir: Path, claim_files: list[Path]) -> None:
+    if not claim_files:
+        return
+    with locked_file(out_dir / _PENDING_GUARD_FILENAME) as acquired:
+        if not acquired:
+            raise RuntimeError("could not acquire pending-change queue lock")
+        for path in claim_files:
+            with contextlib.suppress(FileNotFoundError):
+                path.unlink()
 
 
 def _drain_pending(out_dir: Path) -> list[Path]:
-    """Read + unlink ``out_dir/.pending_changes`` and return deduplicated paths.
-
-    Returns an empty list if the file does not exist. Empty/whitespace lines
-    are silently skipped so a partial concurrent write that left only a
-    fragment cannot poison the merge.
-    """
-    pending = out_dir / _PENDING_FILENAME
-    if not pending.exists():
-        return []
-    try:
-        raw = pending.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    # Unlink BEFORE returning so a crash between read and process retains the
-    # data in the next caller's view via the lines we are about to return —
-    # i.e. losing the file after reading is fine, losing it before would be a
-    # bug. Use missing_ok to tolerate a racing drain on platforms where
-    # rename/unlink may interleave.
-    with contextlib.suppress(FileNotFoundError):
-        pending.unlink()
-    seen: set[str] = set()
-    out: list[Path] = []
-    for line in raw.splitlines():
-        s = line.strip()
-        if not s or s in seen:
-            continue
-        seen.add(s)
-        out.append(Path(s))
-    return out
+    """Compatibility helper that immediately acknowledges a claimed batch."""
+    paths, claims = _claim_pending(out_dir)
+    _ack_pending(out_dir, claims)
+    return paths
 
 
 def _merge_changed_paths(*sources: "list[Path] | None") -> list[Path]:
@@ -108,59 +153,29 @@ def _rebuild_lock(out_dir: Path, *, blocking: bool = False):
     """Per-repo advisory lock around a rebuild.
 
     Yields True if acquired, False if another rebuild is already running and
-    ``blocking`` is False. Uses fcntl.flock so the lock is released
-    automatically if the process is killed (no stale-lock cleanup needed).
+    ``blocking`` is False. The persistent guard uses the platform's native
+    advisory lock, which is released automatically if the process is killed.
 
     While the lock is held, ``.rebuild.lock`` contains the owning PID followed
     by a newline so external pollers (publish scripts, etc.) can read it.
     On successful release the file is unlinked so downstream tooling that
     waits for the lock to clear by polling for its absence unblocks promptly.
 
-    Falls back to a no-op yield(True) on platforms without fcntl (Windows).
+    Windows uses ``msvcrt.locking``; POSIX uses ``fcntl.flock``.
     """
-    try:
-        import fcntl
-    except ImportError:
-        yield True
-        return
-
     out_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = out_dir / ".rebuild.lock"
-    # "a+" creates the file if missing without truncating an existing holder's
-    # PID payload — important because another process may have already written
-    # its PID before we attempt the flock.
-    fh = open(lock_path, "a+", encoding="utf-8")
-    acquired = False
-    try:
-        flags = fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            fcntl.flock(fh.fileno(), flags)
-        except BlockingIOError:
+    status_path = out_dir / ".rebuild.lock"
+    guard_path = out_dir / ".rebuild.guard"
+    with locked_file(guard_path, blocking=blocking) as acquired:
+        if not acquired:
             yield False
             return
-        acquired = True
-        # Replace any prior owner's PID with ours so external readers see a
-        # single parseable line, not a digit-concatenation across rebuilds.
+        atomic_write_text(status_path, f"{os.getpid()}\n")
         try:
-            fh.seek(0)
-            fh.truncate()
-            fh.write(f"{os.getpid()}\n")
-            fh.flush()
-        except OSError:
-            pass
-        yield True
-    finally:
-        if acquired:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
-        fh.close()
-        # Signal "rebuild done" by removing the lock file. Only the holder
-        # unlinks; a non-acquiring caller leaves the existing lock in place.
-        if acquired:
+            yield True
+        finally:
             with contextlib.suppress(OSError):
-                lock_path.unlink()
+                status_path.unlink()
 
 
 def _apply_resource_limits() -> None:
@@ -744,15 +759,15 @@ def _rebuild_code(
                     f"{watch_path.resolve()} - changes queued."
                 )
                 return False
-            # Lock acquired. Drain anything queued by earlier contenders
-            # (including, importantly, the paths we just queued ourselves)
-            # and merge with our own change set so a single rebuild covers
-            # everything outstanding.
+            # Lock acquired. Claim anything queued by earlier contenders
+            # (including the paths we just queued ourselves), but acknowledge
+            # the claim only after the rebuild succeeds. A crash or refusal
+            # therefore leaves an in-flight batch for the next process.
+            pending, claim_files = _claim_pending(out)
             if changed_paths is not None:
-                merged = _merge_changed_paths(changed_paths, _drain_pending(out))
+                merged = _merge_changed_paths(changed_paths, pending)
             else:
                 # Full-corpus rebuild supersedes any queued incremental work.
-                _drain_pending(out)
                 merged = None
             ok = _rebuild_code(
                 watch_path,
@@ -766,29 +781,33 @@ def _rebuild_code(
                 no_viz=no_viz,
                 acquire_lock=False,
             )
+            if not ok:
+                return False
+            _ack_pending(out, claim_files)
             # Late-arrival drain: another hook may have queued work while we
             # were rebuilding. Loop up to _PENDING_DRAIN_MAX_PASSES times so a
             # storm of commits eventually quiesces without livelocking. A full
             # rebuild already saw everything, so skip this for changed_paths is None.
             if merged is not None:
                 for _ in range(_PENDING_DRAIN_MAX_PASSES):
-                    late = _drain_pending(out)
+                    late, late_claims = _claim_pending(out)
                     if not late:
                         break
-                    ok = (
-                        _rebuild_code(
-                            watch_path,
-                            output_dir=out,
-                            output_root=storage_root,
-                            graph_type=graph_type,
-                            changed_paths=late,
-                            follow_symlinks=follow_symlinks,
-                            force=force,
-                            no_cluster=no_cluster,
-                            acquire_lock=False,
-                        )
-                        and ok
+                    ok = _rebuild_code(
+                        watch_path,
+                        output_dir=out,
+                        output_root=storage_root,
+                        graph_type=graph_type,
+                        changed_paths=late,
+                        follow_symlinks=follow_symlinks,
+                        force=force,
+                        no_cluster=no_cluster,
+                        no_viz=no_viz,
+                        acquire_lock=False,
                     )
+                    if not ok:
+                        return False
+                    _ack_pending(out, late_claims)
             return ok
 
     watch_root = watch_path.resolve()
@@ -796,7 +815,7 @@ def _rebuild_code(
     report_root = _report_root_label(watch_path)
     try:
         from graphify.extract import extract, _get_extractor
-        from graphify.detect import detect
+        from graphify.detect import detect, snapshot_source_hashes
         from graphify.build import build_from_json, _norm_source_file as _nsf
         from graphify.cluster import cluster, remap_communities_to_previous, score_all
         from graphify.analyze import god_nodes, surprising_connections, suggest_questions
@@ -873,9 +892,31 @@ def _rebuild_code(
         else:
             extract_targets = code_files
 
+        if changed_paths is None:
+            manifest_files = detected["files"]
+        else:
+            rebuilt_paths = {path.resolve() for path in extract_targets}
+            manifest_files = {
+                kind: [path for path in paths if Path(path).resolve() in rebuilt_paths]
+                for kind, paths in detected["files"].items()
+            }
+
+        try:
+            source_snapshot = snapshot_source_hashes(
+                [path for paths in manifest_files.values() for path in paths]
+            )
+        except OSError as exc:
+            print(f"[graphify watch] Rebuild refused: {exc}", file=sys.stderr)
+            return False
+
         commit = _git_head()
         result = (
-            extract(extract_targets, cache_root=storage_root, source_root=project_root)
+            extract(
+                extract_targets,
+                cache_root=storage_root,
+                source_root=project_root,
+                defer_cache_writes=True,
+            )
             if extract_targets
             else {
                 "nodes": [],
@@ -885,6 +926,37 @@ def _rebuild_code(
                 "output_tokens": 0,
             }
         )
+        failed_files = list(result.get("failed_files", []))
+        if failed_files:
+            preview = ", ".join(failed_files[:3])
+            if len(failed_files) > 3:
+                preview += f", and {len(failed_files) - 3} more"
+            print(
+                f"[graphify watch] Rebuild refused: AST extraction failed for "
+                f"{len(failed_files)} file(s): {preview}",
+                file=sys.stderr,
+            )
+            return False
+
+        deferred_cache_entries = result.pop("_deferred_cache_entries", [])
+        result.pop("failed_files", None)
+
+        cache_committed = False
+
+        def _commit_ast_cache() -> None:
+            nonlocal cache_committed
+            if cache_committed:
+                return
+            cache_committed = True
+            from graphify.cache import save_cached
+
+            for entry in deferred_cache_entries:
+                save_cached(
+                    Path(entry["path"]),
+                    entry["result"],
+                    storage_root,
+                    source_root=project_root,
+                )
 
         # Preserve semantic nodes/edges from a previous full run.
         # AST-only rebuild replaces nodes for changed files; everything else is kept.
@@ -904,7 +976,11 @@ def _rebuild_code(
                 existing_graph_data = existing
                 raw_graph_metadata = existing.get("graph")
                 if isinstance(raw_graph_metadata, dict):
-                    existing_graph_metadata = dict(raw_graph_metadata)
+                    existing_graph_metadata = {
+                        key: value
+                        for key, value in raw_graph_metadata.items()
+                        if key != "hyperedges"
+                    }
                 new_ast_ids = {n["id"] for n in result["nodes"]}
                 _relativize_source_files(existing, project_root)
                 evict_sources: set[str] = set(deleted_paths)
@@ -1038,8 +1114,14 @@ def _rebuild_code(
                     and e.get("target") in all_ids
                     and not _edge_evicted(e)
                 ]
+                from graphify.build import _repair_hyperedge_file_node_aliases_from_records
+
+                existing_hyperedges = _repair_hyperedge_file_node_aliases_from_records(
+                    result["nodes"] + preserved_nodes,
+                    existing.get("hyperedges", []),
+                )
                 preserved_hyperedges: list[dict] = []
-                for hyperedge in existing.get("hyperedges", []):
+                for hyperedge in existing_hyperedges:
                     if not isinstance(hyperedge, dict):
                         continue
                     sf = hyperedge.get("source_file")
@@ -1084,9 +1166,10 @@ def _rebuild_code(
                 }
             except Exception as exc:
                 print(
-                    f"[graphify] warning: could not preserve existing graph data: {exc}",
+                    f"[graphify] error: could not preserve existing graph data: {exc}",
                     file=sys.stderr,
                 )
+                return False
 
         resolved_graph_type = graph_type or _existing_graph_type(existing_graph_data)
 
@@ -1107,7 +1190,6 @@ def _rebuild_code(
         rebuilt_sources |= set(deleted_paths)
         result["edges"] = _dedupe_rebuilt_edge_records(result.get("edges", []))
         out.mkdir(exist_ok=True)
-        write_scan_root_marker(out / ".graphify_root", project_root)
 
         if no_cluster:
             # Normalise to "links" key so schema is consistent with the full clustered path.
@@ -1152,33 +1234,35 @@ def _rebuild_code(
                     )
                 except Exception:
                     same_graph = False
-            if not same_graph:
-                if not _check_shrink(
-                    force,
-                    existing_graph_data,
-                    candidate_graph_data,
-                    had_explicit_deletions=bool(deleted_paths),
-                    rebuilt_sources=rebuilt_sources,
-                ):
-                    return False
-                existing_graph.write_text(candidate_graph_text, encoding="utf-8")
+            with FileStateTransaction(
+                [existing_graph, out / "manifest.json", out / ".graphify_root"]
+            ) as state_transaction:
+                if not same_graph:
+                    if not _check_shrink(
+                        force,
+                        existing_graph_data,
+                        candidate_graph_data,
+                        had_explicit_deletions=bool(deleted_paths),
+                        rebuilt_sources=rebuilt_sources,
+                    ):
+                        return False
+                    from graphify.export import backup_if_protected as _backup
 
-            try:
+                    _backup(out, transaction=state_transaction)
+                    atomic_write_text(existing_graph, candidate_graph_text)
+
                 from graphify.detect import save_manifest
 
                 save_manifest(
-                    detected["files"],
+                    manifest_files,
                     manifest_path=str(out / "manifest.json"),
                     kind="ast",
                     root=project_root,
+                    expected_hashes=source_snapshot,
                 )
-            except Exception as exc:
-                print(f"[graphify] warning: could not save AST manifest: {exc}", file=sys.stderr)
-
-            # clear stale needs_update flag if present
-            flag = out / "needs_update"
-            if flag.exists():
-                flag.unlink()
+                write_scan_root_marker(out / ".graphify_root", project_root)
+                state_transaction.commit()
+            _commit_ast_cache()
 
             if same_graph:
                 print(
@@ -1230,22 +1314,21 @@ def _rebuild_code(
             except Exception:
                 same_topology = False
             if same_topology:
-                try:
+                with FileStateTransaction(
+                    [out / "manifest.json", out / ".graphify_root"]
+                ) as state_transaction:
                     from graphify.detect import save_manifest
 
                     save_manifest(
-                        detected["files"],
+                        manifest_files,
                         manifest_path=str(out / "manifest.json"),
                         kind="ast",
                         root=project_root,
+                        expected_hashes=source_snapshot,
                     )
-                except Exception as exc:
-                    print(
-                        f"[graphify] warning: could not save AST manifest: {exc}", file=sys.stderr
-                    )
-                flag = out / "needs_update"
-                if flag.exists():
-                    flag.unlink()
+                    write_scan_root_marker(out / ".graphify_root", project_root)
+                    state_transaction.commit()
+                _commit_ast_cache()
                 print(
                     "[graphify watch] No code-graph topology changes detected; outputs left untouched."
                 )
@@ -1330,39 +1413,50 @@ def _rebuild_code(
             old_report = report_path.read_text(encoding="utf-8")
             same_report = _report_for_compare(old_report) == _report_for_compare(report)
         no_change = same_graph and same_report
-        if no_change:
-            graph_tmp.unlink(missing_ok=True)
-            print(
-                "[graphify watch] No code-graph changes detected; graph.json/GRAPH_REPORT.md left untouched."
-            )
-        else:
-            if not _check_shrink(
-                force,
-                existing_graph_data,
-                candidate_graph_data,
-                tmp=graph_tmp,
-                had_explicit_deletions=bool(deleted_paths),
-                rebuilt_sources=rebuilt_sources,
-            ):
-                return False
-            from graphify.export import backup_if_protected as _backup
+        with FileStateTransaction(
+            [
+                existing_graph,
+                report_path,
+                labels_file,
+                out / "manifest.json",
+                out / ".graphify_root",
+            ]
+        ) as state_transaction:
+            if no_change:
+                graph_tmp.unlink(missing_ok=True)
+                print(
+                    "[graphify watch] No code-graph changes detected; "
+                    "graph.json/GRAPH_REPORT.md left untouched."
+                )
+            else:
+                if not _check_shrink(
+                    force,
+                    existing_graph_data,
+                    candidate_graph_data,
+                    tmp=graph_tmp,
+                    had_explicit_deletions=bool(deleted_paths),
+                    rebuilt_sources=rebuilt_sources,
+                ):
+                    return False
+                from graphify.export import backup_if_protected as _backup
 
-            _backup(out)
-            graph_tmp.replace(existing_graph)
-            report_path.write_text(report, encoding="utf-8")
-            labels_file.write_text(labels_json, encoding="utf-8")
+                _backup(out, transaction=state_transaction)
+                graph_tmp.replace(existing_graph)
+                atomic_write_text(report_path, report)
+                atomic_write_text(labels_file, labels_json)
 
-        try:
             from graphify.detect import save_manifest
 
             save_manifest(
-                detected["files"],
+                manifest_files,
                 manifest_path=str(out / "manifest.json"),
                 kind="ast",
                 root=project_root,
+                expected_hashes=source_snapshot,
             )
-        except Exception as exc:
-            print(f"[graphify] warning: could not save AST manifest: {exc}", file=sys.stderr)
+            write_scan_root_marker(out / ".graphify_root", project_root)
+            state_transaction.commit()
+        _commit_ast_cache()
 
         # to_html raises ValueError for graphs > MAX_NODES_FOR_VIZ (5000).
         # Wrap so core outputs (graph.json + GRAPH_REPORT.md) always land.
@@ -1400,11 +1494,6 @@ def _rebuild_code(
             except Exception as cf_err:
                 print(f"[graphify watch] callflow HTML update skipped: {cf_err}")
 
-        # clear stale needs_update flag if present
-        flag = out / "needs_update"
-        if flag.exists():
-            flag.unlink()
-
         if not no_change:
             print(
                 f"[graphify watch] Rebuilt: {G.number_of_nodes()} nodes, "
@@ -1419,6 +1508,8 @@ def _rebuild_code(
         return True
 
     except Exception as exc:
+        with contextlib.suppress(OSError):
+            (out / ".graph.tmp.json").unlink()
         print(f"[graphify watch] Rebuild failed: {exc}")
         return False
 
@@ -1436,7 +1527,10 @@ def check_update(watch_path: Path, *, output_dir: Path | None = None) -> bool:
     ) / "needs_update"
     if flag.exists():
         print(f"[graphify check-update] Pending non-code changes in {watch_path}.")
-        print("[graphify check-update] Run `/graphify --update` to apply semantic re-extraction.")
+        command = f"graphify update {Path(watch_path).resolve()} --remap"
+        if output_dir is not None:
+            command += f" --out {Path(output_dir).resolve().parent}"
+        print(f"[graphify check-update] Run `{command}` to apply semantic re-extraction.")
     return True
 
 
@@ -1445,8 +1539,7 @@ def _notify_only(watch_path: Path, *, output_dir: Path | None = None) -> None:
     flag = (
         Path(output_dir).resolve() if output_dir is not None else watch_path / _GRAPHIFY_OUT
     ) / "needs_update"
-    flag.parent.mkdir(parents=True, exist_ok=True)
-    flag.write_text("1", encoding="utf-8")
+    write_pending_signal(flag)
     print(f"\n[graphify watch] New or changed files detected in {watch_path}")
     print("[graphify watch] Non-code files changed - semantic re-extraction requires LLM.")
     print("[graphify watch] Run `/graphify --update` in Claude Code to update the graph.")
@@ -1551,6 +1644,7 @@ def watch(
                         output_dir=output_dir,
                         output_root=output_root,
                         graph_type=graph_type,
+                        changed_paths=batch,
                     )
                 if has_non_code:
                     _notify_only(watch_path, output_dir=output_dir)

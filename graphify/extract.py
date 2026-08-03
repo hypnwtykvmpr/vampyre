@@ -16671,6 +16671,13 @@ def extract_json(path: Path) -> dict:
         with path.open("rb") as _f:
             source = _f.read(_JSON_MAX_BYTES + 1)
         if len(source) > _JSON_MAX_BYTES:
+            name = path.name.casefold()
+            if name == "graph.json" or name.endswith(".graph.json"):
+                return {
+                    "nodes": [],
+                    "edges": [],
+                    "skipped": "graph data json exceeds structural index limit",
+                }
             return {"nodes": [], "edges": [], "error": "json file too large to index"}
         language = Language(tsjson.language())
         parser = Parser(language)
@@ -17872,6 +17879,26 @@ def _safe_extract_with_xaml_root(extractor, path: Path, root: Path) -> dict:
         _XAML_ACTIVE_EXTRACT_ROOT = previous_root
 
 
+def _extract_stable_source(extractor, path: Path, root: Path) -> dict:
+    """Reject a parse whose source bytes changed while it was running."""
+    try:
+        before = hashlib.sha256(path.read_bytes()).digest()
+    except OSError as exc:
+        return {"nodes": [], "edges": [], "error": f"source read failed: {exc}"}
+    result = _safe_extract_with_xaml_root(extractor, path, root)
+    try:
+        after = hashlib.sha256(path.read_bytes()).digest()
+    except OSError as exc:
+        return {"nodes": [], "edges": [], "error": f"source read failed: {exc}"}
+    if before != after:
+        return {
+            "nodes": [],
+            "edges": [],
+            "error": "source changed during extraction",
+        }
+    return result
+
+
 def _extract_single_file(args: tuple) -> tuple[int, dict]:
     """Worker function for parallel extraction. Runs in a subprocess.
 
@@ -17879,12 +17906,13 @@ def _extract_single_file(args: tuple) -> tuple[int, dict]:
     ProcessPoolExecutor.
 
     Args:
-        args: (index, path_str, cache_root_str, source_root_str) tuple
+        args: (index, path_str, cache_root_str, source_root_str,
+            defer_cache_writes) tuple
 
     Returns:
         (index, result_dict) so results can be placed back in order.
     """
-    idx, path_str, cache_root_str, source_root_str = args
+    idx, path_str, cache_root_str, source_root_str, defer_cache_writes = args
     path = Path(path_str)
     cache_root = Path(cache_root_str)
     source_root = Path(source_root_str)
@@ -17901,8 +17929,8 @@ def _extract_single_file(args: tuple) -> tuple[int, dict]:
     if extractor is None:
         return idx, {"nodes": [], "edges": []}
 
-    result = _safe_extract_with_xaml_root(extractor, path, source_root)
-    if not bypass_cache and "error" not in result:
+    result = _extract_stable_source(extractor, path, source_root)
+    if not defer_cache_writes and not bypass_cache and "error" not in result:
         save_cached(path, result, cache_root, source_root=source_root)
     return idx, result
 
@@ -17914,6 +17942,7 @@ def _extract_parallel(
     source_root: Path,
     max_workers: int | None,
     total_files: int,
+    defer_cache_writes: bool = False,
 ) -> bool:
     """Extract uncached files in parallel using ProcessPoolExecutor.
 
@@ -17952,7 +17981,10 @@ def _extract_parallel(
 
     cache_root_str = str(cache_root)
     source_root_str = str(source_root)
-    work_items = [(idx, str(path), cache_root_str, source_root_str) for idx, path in uncached_work]
+    work_items = [
+        (idx, str(path), cache_root_str, source_root_str, defer_cache_writes)
+        for idx, path in uncached_work
+    ]
 
     done_count = 0
     _PROGRESS_INTERVAL = 100
@@ -17967,6 +17999,12 @@ def _extract_parallel(
                     per_file[idx] = result
                 except Exception as exc:
                     pos = futures[future]
+                    idx = work_items[pos][0]
+                    per_file[idx] = {
+                        "nodes": [],
+                        "edges": [],
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
                     print(
                         f"  warning: worker failed for {work_items[pos][1]}: {exc}",
                         file=sys.stderr,
@@ -18019,6 +18057,7 @@ def _extract_sequential(
     cache_root: Path,
     source_root: Path,
     total_files: int,
+    defer_cache_writes: bool = False,
 ) -> None:
     """Extract uncached files sequentially (fallback for small batches)."""
     _PROGRESS_INTERVAL = 100
@@ -18037,8 +18076,8 @@ def _extract_sequential(
             per_file[idx] = {"nodes": [], "edges": []}
             continue
         bypass_cache = path.suffix in _JS_CACHE_BYPASS_SUFFIXES
-        result = _safe_extract_with_xaml_root(extractor, path, source_root)
-        if not bypass_cache and "error" not in result:
+        result = _extract_stable_source(extractor, path, source_root)
+        if not defer_cache_writes and not bypass_cache and "error" not in result:
             save_cached(path, result, cache_root, source_root=source_root)
         per_file[idx] = result
     if total_files >= _PROGRESS_INTERVAL:
@@ -18055,6 +18094,7 @@ def extract(
     source_root: Path | None = None,
     parallel: bool = True,
     max_workers: int | None = None,
+    defer_cache_writes: bool = False,
 ) -> dict:
     """Extract AST nodes and edges from a list of code files.
 
@@ -18075,6 +18115,9 @@ def extract(
             use ProcessPoolExecutor for multi-core extraction.
         max_workers: max subprocess count. Defaults to cpu_count (or the
             value of GRAPHIFY_MAX_WORKERS if set), bounded by len(uncached_work).
+        defer_cache_writes: return cacheable per-file results to the caller
+            instead of publishing them during extraction. This lets a CLI
+            transaction commit caches only after its graph state succeeds.
     """
     paths = [Path(p) for p in paths]
     _check_tree_sitter_version()
@@ -18128,7 +18171,7 @@ def extract(
     if uncached_work:
         ran_parallel = False
         if parallel and len(uncached_work) >= _PARALLEL_THRESHOLD:
-            ran_parallel = _extract_parallel(
+            parallel_args = (
                 uncached_work,
                 per_file,
                 effective_cache_root,
@@ -18136,20 +18179,45 @@ def extract(
                 max_workers,
                 total,
             )
+            ran_parallel = (
+                _extract_parallel(*parallel_args, defer_cache_writes=True)
+                if defer_cache_writes
+                else _extract_parallel(*parallel_args)
+            )
         if not ran_parallel:
-            _extract_sequential(
+            sequential_args = (
                 uncached_work,
                 per_file,
                 effective_cache_root,
                 root,
                 total,
             )
+            if defer_cache_writes:
+                _extract_sequential(*sequential_args, defer_cache_writes=True)
+            else:
+                _extract_sequential(*sequential_args)
 
-    # Fill any remaining None slots (shouldn't happen, but defensive) while
-    # producing a statically and dynamically complete result list.
+    # A missing slot means an extraction worker did not produce a result. Keep
+    # that visible as a failure instead of silently converting it into an empty
+    # successful file extraction.
     completed_per_file: list[dict] = [
-        result if result is not None else {"nodes": [], "edges": []} for result in per_file
+        result
+        if result is not None
+        else {"nodes": [], "edges": [], "error": "extractor returned no result"}
+        for result in per_file
     ]
+    failed_files = [
+        str(path) for path, result in zip(paths, completed_per_file) if result.get("error")
+    ]
+    deferred_cache_entries: list[dict] = []
+    if defer_cache_writes:
+        import copy as _copy
+
+        for idx, path in uncached_work:
+            result = completed_per_file[idx]
+            if path.suffix in _JS_CACHE_BYPASS_SUFFIXES or result.get("error"):
+                continue
+            deferred_cache_entries.append({"path": str(path), "result": _copy.deepcopy(result)})
 
     all_nodes: list[dict] = []
     all_edges: list[dict] = []
@@ -18602,6 +18670,8 @@ def extract(
     return {
         "nodes": all_nodes,
         "edges": all_edges,
+        "failed_files": failed_files,
+        "_deferred_cache_entries": deferred_cache_entries,
         "input_tokens": 0,
         "output_tokens": 0,
     }

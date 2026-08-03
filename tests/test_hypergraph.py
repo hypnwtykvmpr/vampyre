@@ -361,6 +361,42 @@ def test_build_rekeys_alias_keyed_hyperedge_members():
     assert he["nodes"] == ["pkg_mod_foo", "pkg_mod_bar"]
 
 
+def test_build_repoints_hyperedge_members_after_ghost_merge():
+    extraction = {
+        "nodes": [
+            {
+                "id": "src_app_render",
+                "label": "render",
+                "file_type": "code",
+                "source_file": "src/app.py",
+                "source_location": "L2",
+                "_origin": "ast",
+            },
+            {
+                "id": "semantic_render",
+                "label": "render",
+                "file_type": "code",
+                "source_file": "src/app.py",
+                "source_location": "L2",
+            },
+        ],
+        "edges": [],
+        "hyperedges": [
+            {
+                "id": "render_flow",
+                "label": "Render flow",
+                "nodes": ["semantic_render"],
+                "source_file": "src/app.py",
+            }
+        ],
+    }
+
+    graph = build_from_json(extraction)
+
+    assert set(graph.nodes) == {"src_app_render"}
+    assert graph.graph["hyperedges"][0]["nodes"] == ["src_app_render"]
+
+
 def test_build_warns_once_per_aliased_hyperedge(capsys):
     build_from_json(_alias_extraction())
     err = capsys.readouterr().err

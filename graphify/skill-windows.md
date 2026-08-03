@@ -18,6 +18,8 @@ Turn any folder of files into a navigable knowledge graph with community detecti
 /graphify <path> --mode deep                          # thorough extraction, richer INFERRED edges
 /graphify <path> --update                             # incremental - re-extract only new/changed files
 /graphify <path> --directed                            # build directed graph (preserves edge direction: source→target)
+/graphify <path> --multigraph                          # preserve distinct parallel relationships
+/graphify <path> --simple                              # explicitly select the historical simple graph
 /graphify <path> --whisper-model medium                # use a larger Whisper model for better transcription accuracy
 /graphify <path> --cluster-only                       # rerun clustering on existing graph
 /graphify <path> --no-viz                             # skip visualization, just report + JSON
@@ -62,57 +64,62 @@ Only when the path is one or more `https://github.com/...` URLs, or several loca
 
 ### Step 1 - Ensure graphify is installed
 
-```powershell
-# Detect Python in this fork's uv tool environment.
-New-Item -ItemType Directory -Force -Path graphify-out | Out-Null
-$GRAPHIFY_PYTHON = $null
+Claude Code on Windows runs skill commands in Git Bash. Run every command block in this skill in Git Bash, not PowerShell or `cmd.exe`.
 
-function Find-GraphifyPython {
-    # `uv tool dir` is authoritative and respects UV_TOOL_DIR automatically.
-    if (Get-Command uv -ErrorAction SilentlyContinue) {
-        $uvDir = (uv tool dir 2>$null).Trim()
-        if ($uvDir) {
-            $py = Join-Path $uvDir "graphifyy\Scripts\python.exe"
-            if (Test-Path $py) {
-                & $py -c "import graphify" 2>$null
-                if ($LASTEXITCODE -eq 0) { return $py }
-            }
-        }
-    }
-    return $null
+```bash
+# Resolve the exact Python interpreter owned by this fork's uv tool environment.
+if ! command -v uv >/dev/null 2>&1; then
+    echo "graphify requires uv; install uv first, then retry." >&2
+    exit 1
+fi
+
+find_graphify_python() {
+    local uv_dir candidate
+    uv_dir=$(uv tool dir 2>/dev/null) || return 1
+    if command -v cygpath >/dev/null 2>&1; then
+        uv_dir=$(cygpath -u "$uv_dir")
+    fi
+    candidate="$uv_dir/graphifyy/Scripts/python.exe"
+    if [ -f "$candidate" ] && "$candidate" -c "import graphify" 2>/dev/null; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+    return 1
 }
 
-# Try to find the installed fork first.
-$GRAPHIFY_PYTHON = Find-GraphifyPython
-
-# Not found — install then re-detect
-if (-not $GRAPHIFY_PYTHON) {
-    if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-        throw "graphify requires uv; install uv first, then retry."
-    }
+PYTHON=$(find_graphify_python || true)
+if [ -z "$PYTHON" ]; then
     uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
-    $GRAPHIFY_PYTHON = Find-GraphifyPython
-}
-if (-not $GRAPHIFY_PYTHON) { throw "graphify's uv tool interpreter could not be resolved." }
+    PYTHON=$(find_graphify_python || true)
+fi
+if [ -z "$PYTHON" ]; then
+    echo "graphify's uv tool interpreter could not be resolved." >&2
+    exit 1
+fi
 
-# Save interpreter path — all subsequent steps read this
-$GRAPHIFY_PYTHON | Out-File -FilePath graphify-out\.graphify_python -Encoding utf8 -NoNewline
-# Save scan root so `graphify update` (no args) knows where to look next time
-(Resolve-Path INPUT_PATH).Path | Out-File -FilePath graphify-out\.graphify_root -Encoding utf8 -NoNewline
+mkdir -p graphify-out
+"$PYTHON" -c "import sys; open('graphify-out/.graphify_python', 'w', encoding='utf-8').write(sys.executable)"
 ```
 
 If the import succeeds, print nothing and move straight to Step 2.
 
-**In every subsequent block, run Python through the saved interpreter — `& (Get-Content graphify-out\.graphify_python)` in place of a bare `python3` — so every step uses the interpreter that actually has graphify.**
+**In every subsequent bash block, invoke `"$(cat graphify-out/.graphify_python)"` so paths containing spaces remain one executable path.**
 
 ### Step 2 - Detect files
 
 ```bash
-$(cat graphify-out/.graphify_python) -c "
+"$(cat graphify-out/.graphify_python)" -c "
 import json
-from graphify.detect import detect
+from graphify.detect import detect, snapshot_source_hashes
+from graphify.persistence import capture_pending_signal
 from pathlib import Path
+signal = Path('graphify-out/needs_update')
+generation = capture_pending_signal(signal)
+Path('graphify-out/.graphify_signal_generation').write_bytes(generation or b'')
 result = detect(Path('INPUT_PATH'))
+result['_source_snapshot'] = snapshot_source_hashes([
+    path for paths in result.get('files', {}).values() for path in paths
+])
 print(json.dumps(result, ensure_ascii=False))
 " > graphify-out/.graphify_detect.json
 ```
@@ -170,7 +177,7 @@ Note: Parallelizing AST + semantic saves 5-15s on large corpora. AST is determin
 For any code files detected, run AST extraction in parallel with Part B subagents:
 
 ```bash
-$(cat graphify-out/.graphify_python) -c "
+"$(cat graphify-out/.graphify_python)" -c "
 import sys, json
 from graphify.extract import collect_files, extract
 from pathlib import Path
@@ -196,7 +203,7 @@ else:
 **Fast path:** If detection found zero docs, papers, and images (code-only corpus), skip Part B entirely and go straight to Part C. AST handles code - there is nothing for semantic subagents to do. **First write an empty semantic file** so Part C's merge has its input (it reads `.graphify_semantic.json` unconditionally; without this a code-only run hits `FileNotFoundError`):
 
 ```bash
-$(cat graphify-out/.graphify_python) -c "
+"$(cat graphify-out/.graphify_python)" -c "
 import json
 from pathlib import Path
 Path('graphify-out/.graphify_semantic.json').write_text(json.dumps({'nodes':[],'edges':[],'hyperedges':[],'input_tokens':0,'output_tokens':0}), encoding='utf-8')
@@ -216,7 +223,7 @@ Before dispatching subagents, print a timing estimate:
 Before dispatching any subagents, check which files already have cached extraction results:
 
 ```bash
-$(cat graphify-out/.graphify_python) -c "
+"$(cat graphify-out/.graphify_python)" -c "
 import json
 from graphify.cache import check_semantic_cache
 from pathlib import Path
@@ -263,9 +270,9 @@ All three in one message. Not three separate messages.
 Each subagent receives this exact prompt (substitute FILE_LIST, CHUNK_NUM, TOTAL_CHUNKS, DEEP_MODE, and CHUNK_PATH).
 
 CHUNK_PATH must be an **absolute** path — derive it before dispatching:
-```powershell
-$PROJECT_ROOT = (Get-Location).Path  # cwd — where Part C globs graphify-out\ (NOT .graphify_root/scan dir, #1392)
-# Then for chunk N: $CHUNK_PATH = Join-Path $PROJECT_ROOT "graphify-out\.graphify_chunk_0N.json"
+```bash
+PROJECT_ROOT=$(pwd)  # cwd — where Part C globs graphify-out/ (NOT .graphify_root/scan dir, #1392)
+# Then for chunk N: CHUNK_PATH="${PROJECT_ROOT}/graphify-out/.graphify_chunk_0N.json"
 ```
 
 Subagent prompt template:
@@ -284,7 +291,7 @@ If more than half the chunks failed or are missing, stop and tell the user to re
 
 Merge all chunk files into `.graphify_semantic_new.json`. **After each Agent call completes, read the real token counts from the Agent tool result's `usage` field and write them back into the chunk JSON before merging** — the chunk JSON itself always has placeholder zeros. Then run:
 ```bash
-$(cat graphify-out/.graphify_python) -c "
+"$(cat graphify-out/.graphify_python)" -c "
 import json, glob
 from pathlib import Path
 
@@ -308,7 +315,7 @@ print(f'Merged {len(chunks)} chunks: {total_in:,} in / {total_out:,} out tokens'
 
 Save new results to cache:
 ```bash
-$(cat graphify-out/.graphify_python) -c "
+"$(cat graphify-out/.graphify_python)" -c "
 import json
 from graphify.cache import save_semantic_cache
 from pathlib import Path
@@ -321,7 +328,7 @@ print(f'Cached {saved} files')
 
 Merge cached + new results into `graphify-out/.graphify_semantic.json`:
 ```bash
-$(cat graphify-out/.graphify_python) -c "
+"$(cat graphify-out/.graphify_python)" -c "
 import json
 from pathlib import Path
 
@@ -354,7 +361,7 @@ Clean up temp files: `rm -f graphify-out/.graphify_cached.json graphify-out/.gra
 #### Part C - Merge AST + semantic into final extraction
 
 ```bash
-$(cat graphify-out/.graphify_python) -c "
+"$(cat graphify-out/.graphify_python)" -c "
 import sys, json
 from pathlib import Path
 
@@ -387,17 +394,18 @@ print(f'Merged: {total} nodes, {edges} edges ({len(ast[\"nodes\"])} AST + {len(s
 
 ### Step 4 - Build graph, cluster, analyze, generate outputs
 
-**Before starting:** the code blocks below pass `directed=IS_DIRECTED` to `build_from_json()`. Replace `IS_DIRECTED` with `True` if `--directed` was given (builds a `DiGraph` preserving edge direction source→target), otherwise `False` (the default undirected `Graph`). Substitute it the same way you substitute `INPUT_PATH` — do not leave the literal `IS_DIRECTED` in the code.
+**Before starting:** replace `IS_DIRECTED` and `IS_MULTIGRAPH` in every code block. For a new graph, use `True` only for the explicitly requested `--directed` / `--multigraph` mode (`--multigraph` also implies directed). For an existing graph, inherit both values from its validated `graphify_profile` unless the user explicitly requested `--simple`, `--directed`, or `--multigraph`. Never infer a simple graph from missing profile state.
 
 ```bash
 mkdir -p graphify-out
-$(cat graphify-out/.graphify_python) -c "
+"$(cat graphify-out/.graphify_python)" -c "
 import sys, json
 from graphify.build import build_from_json
 from graphify.cluster import cluster, score_all
 from graphify.analyze import god_nodes, surprising_connections, suggest_questions
 from graphify.report import generate
-from graphify.export import to_json
+from graphify.export import backup_if_protected, to_json
+from graphify.persistence import FileStateTransaction, atomic_write_text
 from pathlib import Path
 
 extraction = json.loads(Path('graphify-out/.graphify_extract.json').read_text(encoding=\"utf-8\"))
@@ -405,7 +413,12 @@ detection  = json.loads(Path('graphify-out/.graphify_detect.json').read_text(enc
 
 # root= mirrors the --update runbook (#1361): relativize source_file to the same
 # base so the full build and incremental --update never drift apart on re-extract.
-G = build_from_json(extraction, root='INPUT_PATH', directed=IS_DIRECTED)
+G = build_from_json(
+    extraction,
+    root='INPUT_PATH',
+    directed=IS_DIRECTED,
+    multigraph=IS_MULTIGRAPH,
+)
 # Guard BEFORE any write: an empty extraction must not clobber a good graph.json /
 # GRAPH_REPORT.md / analysis sidecar. Check immediately after build (#1392).
 if G.number_of_nodes() == 0:
@@ -425,13 +438,7 @@ questions = suggest_questions(G, communities, labels)
 # nothing) when the new graph is smaller than the existing graph.json. Only write
 # GRAPH_REPORT.md + the analysis sidecar when the graph was actually written, so
 # they never describe a graph that graph.json doesn't contain (#1392).
-wrote = to_json(G, communities, 'graphify-out/graph.json')
-if not wrote:
-    print('ERROR: refused to shrink graphify-out/graph.json (existing graph has more nodes; #479).')
-    print('If this shrink is intentional (you deleted files), re-run a full build with --force.')
-    raise SystemExit(1)
 report = generate(G, communities, cohesion, labels, gods, surprises, detection, tokens, 'INPUT_PATH', suggested_questions=questions)
-Path('graphify-out/GRAPH_REPORT.md').write_text(report, encoding=\"utf-8\")
 analysis = {
     'communities': {str(k): v for k, v in communities.items()},
     'cohesion': {str(k): v for k, v in cohesion.items()},
@@ -439,7 +446,18 @@ analysis = {
     'surprises': surprises,
     'questions': questions,
 }
-Path('graphify-out/.graphify_analysis.json').write_text(json.dumps(analysis, indent=2, ensure_ascii=False), encoding=\"utf-8\")
+graph_path = Path('graphify-out/graph.json')
+report_path = Path('graphify-out/GRAPH_REPORT.md')
+analysis_path = Path('graphify-out/.graphify_analysis.json')
+with FileStateTransaction([graph_path, report_path, analysis_path]) as transaction:
+    backup_if_protected(Path('graphify-out'), transaction=transaction)
+    if not to_json(G, communities, str(graph_path)):
+        print('ERROR: refused to shrink graphify-out/graph.json (existing graph has more nodes; #479).')
+        print('If this shrink is intentional (you deleted files), re-run a full build with --force.')
+        raise SystemExit(1)
+    atomic_write_text(report_path, report)
+    atomic_write_text(analysis_path, json.dumps(analysis, indent=2, ensure_ascii=False))
+    transaction.commit()
 print(f'Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges, {len(communities)} communities')
 "
 ```
@@ -453,7 +471,7 @@ Replace INPUT_PATH with the actual path.
 A non-destructive diagnostic on the extraction, before labeling. It surfaces edge collapse, dangling/missing endpoints, and self-loops — the silent-corruption modes of incremental updates and AST/LLM id mismatches. Read-only; never aborts.
 
 ```bash
-$(cat graphify-out/.graphify_python) -c "
+"$(cat graphify-out/.graphify_python)" -c "
 import json
 from pathlib import Path
 from graphify.diagnostics import diagnose_extraction, format_diagnostic_report
@@ -472,7 +490,7 @@ print('GRAPH HEALTH WARNING: ' + '; '.join(flags) + ' - graph may be incomplete/
 "
 ```
 
-Substitute `IS_DIRECTED` and `INPUT_PATH` as in Step 4. If a `GRAPH HEALTH WARNING` prints, surface it in the final summary (do not abort — the graph is still usable, but the integrity issue must be visible, per the Honesty Rules).
+Substitute `IS_DIRECTED`, `IS_MULTIGRAPH`, and `INPUT_PATH` as in Step 4. If a `GRAPH HEALTH WARNING` prints, surface it in the final summary (do not abort — the graph is still usable, but the integrity issue must be visible, per the Honesty Rules).
 
 ### Step 5 - Label communities
 
@@ -481,12 +499,13 @@ Read `graphify-out/.graphify_analysis.json`. For each community key, look at its
 Then regenerate the report and save the labels for the visualizer:
 
 ```bash
-$(cat graphify-out/.graphify_python) -c "
+"$(cat graphify-out/.graphify_python)" -c "
 import sys, json
 from graphify.build import build_from_json
 from graphify.cluster import score_all
 from graphify.analyze import god_nodes, surprising_connections, suggest_questions
 from graphify.report import generate
+from graphify.persistence import FileStateTransaction, atomic_write_text
 from pathlib import Path
 
 extraction = json.loads(Path('graphify-out/.graphify_extract.json').read_text(encoding=\"utf-8\"))
@@ -494,7 +513,12 @@ detection  = json.loads(Path('graphify-out/.graphify_detect.json').read_text(enc
 analysis   = json.loads(Path('graphify-out/.graphify_analysis.json').read_text(encoding=\"utf-8\"))
 
 # root= as in Step 4 / the --update runbook (#1361) — same base for node-key parity.
-G = build_from_json(extraction, root='INPUT_PATH', directed=IS_DIRECTED)
+G = build_from_json(
+    extraction,
+    root='INPUT_PATH',
+    directed=IS_DIRECTED,
+    multigraph=IS_MULTIGRAPH,
+)
 communities = {int(k): v for k, v in analysis['communities'].items()}
 cohesion = {int(k): v for k, v in analysis['cohesion'].items()}
 tokens = {'input': extraction.get('input_tokens', 0), 'output': extraction.get('output_tokens', 0)}
@@ -506,8 +530,12 @@ labels = LABELS_DICT
 questions = suggest_questions(G, communities, labels)
 
 report = generate(G, communities, cohesion, labels, analysis['gods'], analysis['surprises'], detection, tokens, 'INPUT_PATH', suggested_questions=questions)
-Path('graphify-out/GRAPH_REPORT.md').write_text(report, encoding=\"utf-8\")
-Path('graphify-out/.graphify_labels.json').write_text(json.dumps({str(k): v for k, v in labels.items()}, ensure_ascii=False), encoding=\"utf-8\")
+report_path = Path('graphify-out/GRAPH_REPORT.md')
+labels_path = Path('graphify-out/.graphify_labels.json')
+with FileStateTransaction([report_path, labels_path]) as transaction:
+    atomic_write_text(report_path, report)
+    atomic_write_text(labels_path, json.dumps({str(k): v for k, v in labels.items()}, ensure_ascii=False))
+    transaction.commit()
 print('Report updated with community labels')
 "
 ```
@@ -544,11 +572,13 @@ These run only when their flag is present (`--wiki`, `--neo4j`/`--neo4j-push`, `
 ### Step 9 - Save manifest, update cost tracker, clean up, and report
 
 ```bash
-$(cat graphify-out/.graphify_python) -c "
+"$(cat graphify-out/.graphify_python)" -c "
 import json
 from pathlib import Path
 from datetime import datetime, timezone
 from graphify.detect import save_manifest
+from graphify.paths import write_scan_root_marker
+from graphify.persistence import FileStateTransaction, acknowledge_pending_signal
 
 # Save manifest for --update
 detect = json.loads(Path('graphify-out/.graphify_detect.json').read_text(encoding=\"utf-8\"))
@@ -557,7 +587,16 @@ detect = json.loads(Path('graphify-out/.graphify_detect.json').read_text(encodin
 # root= relativizes the manifest keys to the scan root (same base as the build),
 # so the on-disk manifest is portable across clones/machines and a later --update
 # matches cached files instead of missing every one (#1417).
-save_manifest(detect.get('all_files') or detect['files'], root='INPUT_PATH')
+manifest_path = Path('graphify-out/manifest.json')
+marker_path = Path('graphify-out/.graphify_root')
+with FileStateTransaction([manifest_path, marker_path]) as transaction:
+    save_manifest(detect.get('all_files') or detect['files'], manifest_path=str(manifest_path), root='INPUT_PATH', expected_hashes=detect['_source_snapshot'])
+    write_scan_root_marker(marker_path, Path('INPUT_PATH'))
+    transaction.commit()
+generation_path = Path('graphify-out/.graphify_signal_generation')
+generation = generation_path.read_bytes() if generation_path.exists() else None
+acknowledge_pending_signal(Path('graphify-out/needs_update'), generation or None)
+generation_path.unlink(missing_ok=True)
 
 # Update cumulative cost tracker
 extract = json.loads(Path('graphify-out/.graphify_extract.json').read_text(encoding=\"utf-8\"))
@@ -585,7 +624,6 @@ print(f'All time: {cost[\"total_input_tokens\"]:,} input, {cost[\"total_output_t
 "
 rm -f graphify-out/.graphify_detect.json graphify-out/.graphify_extract.json graphify-out/.graphify_ast.json graphify-out/.graphify_semantic.json graphify-out/.graphify_analysis.json
 find graphify-out -maxdepth 1 -name '.graphify_chunk_*.json' -delete 2>/dev/null
-rm -f graphify-out/.needs_update 2>/dev/null || true
 ```
 
 Replace INPUT_PATH with the actual path (same value used in Steps 4-5) so the manifest is relativized to the scan root.
@@ -678,7 +716,7 @@ If vertical scrolling breaks in PowerShell after running graphify, upgrade first
 1. **Upgrade graphify**: `uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"`
 2. **Use Windows Terminal** instead of the legacy PowerShell console — Windows Terminal handles ANSI codes correctly
 3. **Reset your terminal**: close and reopen PowerShell
-4. **Skip native Leiden**: uninstall it (`pip uninstall graspologic-native`) and graphify will fall back to NetworkX's built-in Louvain algorithm
+4. **Skip native Leiden**: reinstall the base fork without the `leiden` extra (`uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"`) and graphify will fall back to NetworkX's built-in Louvain algorithm
 
 ---
 
