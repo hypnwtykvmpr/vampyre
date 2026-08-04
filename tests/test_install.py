@@ -1035,4 +1035,4 @@ def test_hermes_skill_destination_posix_uses_home():
 
     with patch("graphify.__main__.platform.system", return_value="Linux"):
         dst = _platform_skill_destination("hermes", project=False)
-    assert str(dst).endswith(".hermes/skills/graphify/SKILL.md"), dst
+    assert dst.parts[-4:] == (".hermes", "skills", "graphify", "SKILL.md"), dst

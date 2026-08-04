@@ -34,6 +34,7 @@ from .edge_identity import make_stable_key, strip_schema_key
 from .ids import make_id, normalize_id as _normalize_id
 from .paths import (
     default_graph_json as _default_graph_json,
+    is_absolute_path,
     resolve_scan_root_marker,
 )
 from .validate import is_hashable, validate_extraction
@@ -346,7 +347,7 @@ def _semantic_id_remap(nodes: list, root: str | None) -> dict:
             continue
         sf_norm = _norm_source_file(str(sf), root) or str(sf)
         rel = Path(sf_norm)
-        if rel.is_absolute():
+        if is_absolute_path(sf_norm):
             continue  # can't relativize (no/failed root) — leave id untouched
         if not rel.name:
             # source_file equals the scan root, so _norm_source_file relativized it
@@ -409,7 +410,7 @@ def graph_has_legacy_ids(nodes: list, root: str | Path | None = None, sample: in
         if not nid or not isinstance(nid, str) or not sf:
             continue
         rel = Path(_norm_source_file(str(sf), _r) or str(sf))
-        if rel.is_absolute():
+        if is_absolute_path(str(rel)):
             continue
         if not rel.name:
             continue  # source_file == scan root -> Path('.'), no file stem (#1618)
@@ -447,7 +448,7 @@ def _repair_hyperedge_file_node_aliases_from_records(nodes: list, hyperedges: li
         if not isinstance(source_file, str) or not source_file:
             continue
         rel = Path(source_file)
-        if rel.is_absolute() or not rel.name:
+        if is_absolute_path(source_file) or not rel.name:
             continue
         label = str(node.get("label") or "")
         if label not in {rel.name, rel.as_posix()}:
@@ -707,7 +708,7 @@ def build_from_json(
         if not sf:
             continue
         rel = Path(str(sf))
-        if rel.is_absolute():
+        if is_absolute_path(str(sf)):
             continue
         new_stem = make_id(_fs(rel))
         suffix = ""

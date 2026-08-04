@@ -1,6 +1,8 @@
 """Tests for graphify.querylog."""
 
 import json
+from pathlib import Path
+
 import pytest
 
 from graphify.querylog import log_query, nodes_from_result
@@ -195,7 +197,7 @@ def test_kind_mcp_query(tmp_path, monkeypatch):
 
 def test_optin_off_by_default(tmp_path, monkeypatch):
     # With no GRAPHIFY_QUERY_LOG set, nothing is logged (fork opt-in policy).
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.delenv("GRAPHIFY_QUERY_LOG", raising=False)
     monkeypatch.delenv("GRAPHIFY_QUERY_LOG_DISABLE", raising=False)
 
@@ -206,7 +208,7 @@ def test_optin_off_by_default(tmp_path, monkeypatch):
 
 def test_optin_truthy_uses_default_cache(tmp_path, monkeypatch):
     # GRAPHIFY_QUERY_LOG=1 opts in to the default ~/.cache location.
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setenv("GRAPHIFY_QUERY_LOG", "1")
     monkeypatch.delenv("GRAPHIFY_QUERY_LOG_DISABLE", raising=False)
 

@@ -288,7 +288,7 @@ def _wide_graph(n_communities: int):
 
 def test_label_communities_batches_when_over_batch_size(monkeypatch):
     G, communities = _wide_graph(250)
-    calls = []
+    calls: list[list[int]] = []
 
     def fake_call(prompt, *, backend, max_tokens=200):
         # The fake reads which cids the prompt asks about and answers all of them.
@@ -297,14 +297,17 @@ def test_label_communities_batches_when_over_batch_size(monkeypatch):
             for line in prompt.splitlines()
             if line.startswith("Community ")
         ]
-        calls.append(len(cids))
+        calls.append(cids)
         return "{" + ", ".join(f'"{c}": "Cluster {c}"' for c in cids) + "}"
 
     monkeypatch.setattr("graphify.llm._call_llm", fake_call)
     labels = label_communities(G, communities, backend="gemini", batch_size=100)
 
     # 250 communities / 100 per batch -> 3 batches (100, 100, 50)
-    assert calls == [100, 100, 50]
+    assert sorted(map(len, calls)) == [50, 100, 100]
+    called_cids = [cid for batch in calls for cid in batch]
+    assert len(called_cids) == 250
+    assert set(called_cids) == set(range(250))
     # And every community got a real name, none left as a placeholder.
     assert all(name.startswith("Cluster ") for name in labels.values()), (
         f"some communities still have placeholders: {[k for k, v in labels.items() if not v.startswith('Cluster ')][:5]}"

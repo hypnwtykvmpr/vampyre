@@ -962,7 +962,7 @@ def _filter_blank_stdin() -> None:
     threading.Thread(target=_relay, daemon=True).start()
     os.dup2(r_fd, sys.stdin.fileno())
     os.close(r_fd)
-    sys.stdin = open(0, "r", closefd=False)
+    sys.stdin = open(0, "r", encoding="utf-8", closefd=False)
 
 
 def _community_header(cid: int, community_name) -> str:

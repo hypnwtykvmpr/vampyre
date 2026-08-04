@@ -89,10 +89,7 @@ def test_cli_advertises_multigraph_surface() -> None:
 def test_private_agent_files_not_tracked() -> None:
     """AGENTS.md/CLAUDE.md/GEMINI.md were scrubbed; a re-base must not re-track them."""
     root = Path(__file__).resolve().parent.parent
-    if not (root / ".git").exists():
-        import pytest
-
-        pytest.skip("not a git checkout (e.g. installed wheel)")
+    assert (root / ".git").exists(), "repository contract tests require a git checkout"
     r = subprocess.run(
         ["git", "-C", str(root), "ls-files", "AGENTS.md", "CLAUDE.md", "GEMINI.md"],
         capture_output=True,

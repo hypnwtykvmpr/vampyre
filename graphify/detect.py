@@ -16,7 +16,13 @@ from graphify.google_workspace import (
     google_workspace_enabled,
 )
 from graphify.installation import uv_tool_install_command
-from graphify.paths import GRAPHIFY_OUT, GRAPHIFY_OUT_NAME, out_path
+from graphify.paths import (
+    GRAPHIFY_OUT,
+    GRAPHIFY_OUT_NAME,
+    git_ceiling_directories,
+    is_absolute_path,
+    out_path,
+)
 from graphify.persistence import atomic_write_text
 
 
@@ -927,7 +933,10 @@ def _find_vcs_root(start: Path) -> Path | None:
     """Walk upward from start; return the first directory containing a VCS marker."""
     current = start.resolve()
     home = Path.home()
+    ceilings = git_ceiling_directories()
     while True:
+        if current in ceilings:
+            return None
         if any((current / m).exists() for m in _VCS_MARKERS):
             return current
         parent = current.parent
@@ -1367,6 +1376,8 @@ def _to_relative_for_storage(key: str, root: Path) -> str:
     re-extract on every incremental run.
     """
     p = Path(key)
+    if not is_absolute_path(key):
+        return key
     if not p.is_absolute():
         return key
     try:
@@ -1391,7 +1402,7 @@ def _to_absolute_from_storage(key: str, root: Path) -> str:
     what :func:`detect` returns (which also resolves the scan root).
     """
     p = Path(key)
-    if p.is_absolute():
+    if is_absolute_path(key):
         return str(p)
     return str(Path(root).resolve() / p)
 

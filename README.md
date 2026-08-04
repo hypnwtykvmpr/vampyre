@@ -695,9 +695,9 @@ Built for people whose work lives across hundreds of conversations and documents
 The project uses [uv](https://docs.astral.sh/uv/) for dev workflow. Install it once, then:
 
 ```bash
-git clone https://github.com/safishamsi/graphify.git
-cd graphify
-git checkout v8                        # active development branch
+git clone https://github.com/hypnwtykvmpr/vampyre.git
+cd vampyre
+git checkout v9
 
 # Create the project venv and install graphify + all extras + the dev group
 # (pytest). uv installs the dev dependency group by default; pass --no-dev to
@@ -714,18 +714,19 @@ uv run python -c "import graphify; print(graphify.__file__)"
 ### Running tests
 
 ```bash
-uv run pytest tests/ -q                # run the full suite
+uv run pytest tests/ -n auto --dist loadgroup -q  # run the full suite
 uv run pytest tests/test_extract.py -q # one module
-uv run pytest tests/ -q -k "python"    # filter by name
 ```
 
-> macOS note: the test suite includes both `sample.f90` and `sample.F90` fixtures. These collide on case-insensitive HFS+ / APFS file systems. Run on Linux or in a Docker container if you need to test both Fortran variants simultaneously.
+The blocking CI matrix runs the complete suite on Windows, macOS, and Linux
+with Python 3.10 and 3.13. Skips, deselections, expected failures, unexpected
+passes, and warnings fail the run.
 
 ### Git workflow
 
-- Active development happens on the `v8` branch.
+- Active development happens on the `v9` branch; `main` is the integration branch.
 - Commit style: `fix: <description>` / `feat: <description>` / `docs: <description>`
-- Before opening a PR, run `uv run pytest tests/ -q` and confirm it passes.
+- Before opening a PR, run the complete test command above and confirm it passes.
 - Add a fixture file to `tests/fixtures/` and tests to `tests/test_languages.py` for any new language extractor.
 
 ### What to contribute

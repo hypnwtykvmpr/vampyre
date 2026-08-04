@@ -30,7 +30,12 @@ def run_pipeline(tmp_path: Path) -> dict:
     # Step 2: extract (AST only - no LLM)
     code_files = [Path(f) for f in detection["files"].get("code", [])]
     assert len(code_files) > 0
-    extraction = extract(code_files)
+    extraction = extract(
+        code_files,
+        cache_root=tmp_path / "cache-root",
+        source_root=FIXTURES,
+    )
+    assert extraction["failed_files"] == []
     assert len(extraction["nodes"]) > 0
     assert len(extraction["edges"]) > 0
 

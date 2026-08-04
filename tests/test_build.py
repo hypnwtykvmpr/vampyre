@@ -1090,9 +1090,16 @@ def test_semantic_rekey_relative_vs_absolute_source_file():
 
     rel = [{"id": "api_readme", "source_file": "docs/v1/api/README.md", "type": "document"}]
     assert _semantic_id_remap(rel, ".") == {"api_readme": "docs_v1_api_readme"}
-    # absolute path with no resolvable root → skipped, not remapped to an abs-path id
-    ab = [{"id": "api_readme", "source_file": "/abs/docs/v1/api/README.md", "type": "document"}]
-    assert _semantic_id_remap(ab, None) == {}
+    # Absolute paths from either path convention are skipped on every host. Graph
+    # payloads move between operating systems, so host-native Path semantics alone
+    # are insufficient here.
+    for source_file in (
+        "/abs/docs/v1/api/README.md",
+        r"C:\abs\docs\v1\api\README.md",
+        r"\\server\share\docs\README.md",
+    ):
+        absolute = [{"id": "api_readme", "source_file": source_file, "type": "document"}]
+        assert _semantic_id_remap(absolute, None) == {}, source_file
 
 
 def test_semantic_rekey_is_idempotent_for_canonical_full_path_id():

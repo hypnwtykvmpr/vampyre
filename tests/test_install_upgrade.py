@@ -14,8 +14,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 import graphify.__main__ as mainmod
 
 
@@ -217,8 +215,7 @@ def test_kiro_install_upgrades_stale_steering(tmp_path, monkeypatch):
 
     # Kiro install copies a skill file too; provide a minimal stand-in
     skill_src = Path(mainmod.__file__).parent / "skill-kiro.md"
-    if not skill_src.exists():
-        pytest.skip("skill-kiro.md not present in this checkout")
+    assert skill_src.exists(), "skill-kiro.md must ship in this checkout"
 
     mainmod._kiro_install(tmp_path)
 
@@ -235,8 +232,7 @@ def test_kiro_install_ships_references_sidecar_and_version_stamp(tmp_path, monke
     monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
 
     refs_dir = Path(mainmod.__file__).parent / "skills" / "kiro" / "references"
-    if not refs_dir.exists():
-        pytest.skip("kiro references bundle not present in this checkout")
+    assert refs_dir.exists(), "Kiro references must ship in this checkout"
 
     mainmod._kiro_install(tmp_path)
 

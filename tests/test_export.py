@@ -431,6 +431,34 @@ def test_to_canvas_never_emits_punctuation_only_filenames():
         assert not bad, f"punctuation-only canvas filenames: {bad}"
 
 
+@pytest.mark.parametrize("label", ["CON", "prn.txt", "AUX", "NUL", "COM1", "LPT9.log"])
+def test_obsidian_and_canvas_escape_windows_reserved_device_names(tmp_path, label):
+    G = _punct_graph(label)
+    communities = cluster(G)
+    canvas = tmp_path / "graph.canvas"
+
+    to_obsidian(G, communities, str(tmp_path))
+    to_canvas(G, communities, str(canvas))
+
+    reserved = {
+        "con",
+        "prn",
+        "aux",
+        "nul",
+        *{f"com{i}" for i in range(1, 10)},
+        *{f"lpt{i}" for i in range(1, 10)},
+    }
+    note_stems = {path.name.split(".", 1)[0].lower() for path in tmp_path.glob("*.md")}
+    canvas_data = json.loads(canvas.read_text(encoding="utf-8"))
+    canvas_stems = {
+        Path(node["file"]).name.split(".", 1)[0].lower()
+        for node in canvas_data["nodes"]
+        if node.get("type") == "file"
+    }
+    assert note_stems.isdisjoint(reserved)
+    assert canvas_stems.isdisjoint(reserved)
+
+
 # ── Existing-vault safety: graphify must not clobber user notes / .obsidian (#1506) ──
 
 

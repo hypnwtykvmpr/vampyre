@@ -17,18 +17,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 PKG = REPO / "graphify"
-
-
-def _has_build() -> bool:
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "build", "--version"],
-            check=True,
-            capture_output=True,
-        )
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
+pytestmark = pytest.mark.xdist_group(name="wheel-build")
 
 
 def _skill_bodies() -> list[Path]:
@@ -56,8 +45,6 @@ def _expected_artifacts() -> list[Path]:
 
 @pytest.fixture(scope="module")
 def wheel_namelist(tmp_path_factory) -> set[str]:
-    if not _has_build():
-        pytest.skip("`python -m build` unavailable (dev extra not installed)")
     out = tmp_path_factory.mktemp("wheel")
     proc = subprocess.run(
         [
@@ -73,8 +60,7 @@ def wheel_namelist(tmp_path_factory) -> set[str]:
         capture_output=True,
         text=True,
     )
-    if proc.returncode != 0:
-        pytest.skip(f"wheel build failed in this env:\n{proc.stderr[-800:]}")
+    assert proc.returncode == 0, f"wheel build failed:\n{proc.stderr[-800:]}"
     wheels = list(out.glob("graphifyy-*.whl"))
     assert wheels, "no wheel produced"
     with zipfile.ZipFile(max(wheels, key=lambda p: p.stat().st_mtime)) as z:

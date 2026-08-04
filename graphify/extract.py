@@ -6669,7 +6669,7 @@ def _is_spock_file(path: Path, ts_result: dict) -> bool:
 
     _SPOCK_FEATURE_RE = _re.compile(r"""^\s*def\s+[\"']""", _re.MULTILINE)
     try:
-        return bool(_SPOCK_FEATURE_RE.search(path.read_text(errors="replace")))
+        return bool(_SPOCK_FEATURE_RE.search(path.read_text(encoding="utf-8", errors="replace")))
     except OSError:
         return False
 
@@ -6681,7 +6681,7 @@ def _extract_spock_fallback(path: Path, ts_result: dict) -> dict:
     """
     import re as _re
 
-    source = path.read_text(errors="replace")
+    source = path.read_text(encoding="utf-8", errors="replace")
     str_path = str(path)
     stem = _file_stem(path)
 
@@ -8215,7 +8215,7 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
         return {"nodes": [], "edges": [], "error": str(e)}
 
     stem = _file_stem(path)
-    str_path = str(path)
+    str_path = path.as_posix()
     file_nid = _make_id(str_path)
     nodes: list[dict] = [
         {
@@ -10579,9 +10579,9 @@ def _source_key(source_file: str, root: Path) -> str:
         return ""
     source_path = Path(source_file)
     try:
-        return str(source_path.resolve().relative_to(root))
+        return source_path.resolve().relative_to(root).as_posix()
     except Exception:
-        return str(source_path)
+        return source_path.as_posix()
 
 
 def _node_disambiguation_source_key(node: dict, root: Path) -> str:

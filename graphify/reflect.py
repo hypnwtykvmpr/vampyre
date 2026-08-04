@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from graphify.ingest import OUTCOMES
-from graphify.paths import GRAPHIFY_OUT_NAME, resolve_scan_root_marker
+from graphify.paths import GRAPHIFY_OUT_NAME, is_absolute_path, resolve_scan_root_marker
 
 _UNCATEGORIZED = "Uncategorized"
 
@@ -737,7 +737,9 @@ def _resolve_source_path(src: str, graph_path: Path) -> Path | None:
     if not src:
         return None
     p = Path(src)
-    if p.is_absolute():
+    if is_absolute_path(src):
+        if not p.is_absolute():
+            return None
         return p if p.is_file() else None
     gp = Path(graph_path)
     out_dir = gp.parent

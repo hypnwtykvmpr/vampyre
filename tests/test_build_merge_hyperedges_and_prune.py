@@ -17,8 +17,6 @@ import json
 import os
 from pathlib import Path
 
-import pytest
-
 from graphify.build import build_merge, _infer_merge_root
 
 
@@ -190,8 +188,7 @@ def test_portable_marker_prunes_ghost_node_from_unrelated_cwd(tmp_path, monkeypa
     assert {data["label"] for _, data in G.nodes(data=True)} == {"keep"}
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
-def test_prune_matches_across_symlinked_root(tmp_path):
+def test_prune_matches_across_symlinked_root(tmp_path, path_alias):
     """A symlinked scan root (macOS /var -> /private/var, symlinked home/worktree)
     makes the absolute prune path and the resolved root differ by prefix. The prune
     must still match — lexical relative_to fails, so normalization resolves both
@@ -199,7 +196,7 @@ def test_prune_matches_across_symlinked_root(tmp_path):
     real = tmp_path / "real"
     (real / "graphify-out").mkdir(parents=True)
     link = tmp_path / "link"
-    os.symlink(real, link)
+    link = path_alias(link, real)
     graph_path = real / "graphify-out" / "graph.json"
     _write_graph(
         graph_path,

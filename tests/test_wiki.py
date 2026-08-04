@@ -269,6 +269,17 @@ def test_to_wiki_case_only_distinct_labels_dont_overwrite(tmp_path):
     assert len(set(lowered)) == len(lowered), [p.name for p in articles]
 
 
+def test_to_wiki_escapes_windows_reserved_device_names(tmp_path):
+    G = nx.Graph()
+    G.add_node("n1", label="symbol", file_type="code", source_file="a.py", community=0)
+
+    to_wiki(G, {0: ["n1"]}, tmp_path, community_labels={0: "CON"})
+
+    names = {path.name.lower() for path in tmp_path.glob("*.md")}
+    assert "con.md" not in names
+    assert "index.md" in names
+
+
 def test_to_wiki_god_node_label_case_collides_with_community(tmp_path):
     """Community and god-node articles share one slug-dedup set, so a god-node
     label differing only by case from a community label must still get its own

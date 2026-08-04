@@ -11,9 +11,8 @@ import json
 from pathlib import Path
 
 import pytest
-
-pytest.importorskip("mcp")
-pytest.importorskip("starlette")
+import mcp  # noqa: F401
+import starlette  # noqa: F401
 
 from starlette.testclient import TestClient  # noqa: E402
 

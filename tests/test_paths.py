@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,8 @@ import pytest
 from graphify.paths import (
     _is_test_path,
     disambiguate_ambiguous_candidates,
+    is_absolute_path,
+    portable_filename_stem,
     resolve_scan_root_marker,
     write_scan_root_marker,
 )
@@ -64,6 +67,40 @@ def test_is_test_path_positive(path: str) -> None:
 )
 def test_is_test_path_negative(path: str) -> None:
     assert _is_test_path(path) is False, path
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/var/tmp/project/file.py",
+        r"C:\Users\dev\project\file.py",
+        r"\\server\share\project\file.py",
+    ],
+)
+def test_is_absolute_path_accepts_both_platform_conventions(path: str) -> None:
+    assert is_absolute_path(path) is True
+
+
+@pytest.mark.parametrize("path", ["src/file.py", r"src\file.py", "C:drive-relative.py"])
+def test_is_absolute_path_rejects_relative_forms(path: str) -> None:
+    assert is_absolute_path(path) is False
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["CON", "con.txt", "PRN", "AUX", "NUL", "COM1", "COM9.log", "LPT1", "lpt9.md"],
+)
+def test_portable_filename_stem_escapes_windows_device_names(name: str) -> None:
+    safe = portable_filename_stem(name)
+    assert safe != name
+    assert safe.split(".", 1)[0].upper() not in {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *{f"COM{i}" for i in range(1, 10)},
+        *{f"LPT{i}" for i in range(1, 10)},
+    }
 
 
 def test_disambiguate_drops_test_candidate_for_nontest_call_site() -> None:
@@ -164,6 +201,24 @@ def test_resolve_scan_root_marker_supports_legacy_cwd_relative_marker(
 def test_resolve_scan_root_marker_rejects_malformed_values(tmp_path: Path, recorded: str) -> None:
     marker = tmp_path / ".graphify_root"
     marker.write_text(recorded, encoding="utf-8")
+
+    assert resolve_scan_root_marker(marker) is None
+
+
+@pytest.mark.parametrize("recorded", [r"marker-relative:C:\repo", "marker-relative:/repo"])
+def test_resolve_scan_root_marker_rejects_absolute_relative_payloads(
+    tmp_path: Path, recorded: str
+) -> None:
+    marker = tmp_path / ".graphify_root"
+    marker.write_text(recorded, encoding="utf-8")
+
+    assert resolve_scan_root_marker(marker) is None
+
+
+def test_resolve_scan_root_marker_rejects_foreign_absolute_path(tmp_path: Path) -> None:
+    marker = tmp_path / ".graphify_root"
+    foreign = "/repo" if os.name == "nt" else r"C:\repo"
+    marker.write_text(foreign, encoding="utf-8")
 
     assert resolve_scan_root_marker(marker) is None
 

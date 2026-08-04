@@ -27,6 +27,7 @@ from graphify.persistence import (
 # Single source of truth in graphify.paths (#1423); re-exported as _GRAPHIFY_OUT.
 from graphify.paths import (
     GRAPHIFY_OUT as _GRAPHIFY_OUT,
+    is_absolute_path,
     write_scan_root_marker,
 )
 
@@ -53,7 +54,7 @@ def _queue_pending(out_dir: Path, changed_paths: list[Path]) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     pending = out_dir / _PENDING_FILENAME
     payload = "".join(
-        json.dumps({"path": os.fspath(path)}, ensure_ascii=False, separators=(",", ":")) + "\n"
+        json.dumps({"path": path.as_posix()}, ensure_ascii=False, separators=(",", ":")) + "\n"
         for path in changed_paths
     )
     with locked_file(out_dir / _PENDING_GUARD_FILENAME) as acquired:
@@ -689,8 +690,8 @@ def _missing_local_source(source_file: object, *roots: Path) -> bool:
     source = source_file.strip()
     if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", source):
         return False
-    # A Windows absolute path cannot be proven stale from a non-Windows host.
-    if os.name != "nt" and re.match(r"^[A-Za-z]:[\\/]", source):
+    # A foreign-host absolute path cannot be proven stale on this filesystem.
+    if is_absolute_path(source) and not Path(source).is_absolute():
         return False
 
     path = Path(source).expanduser()

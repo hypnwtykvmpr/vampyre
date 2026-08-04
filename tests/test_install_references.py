@@ -16,7 +16,6 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -30,47 +29,39 @@ PKG_DIR = Path(graphify.__file__).parent
 
 
 @pytest.fixture()
-def fake_bundle():
-    """Stage a fake references/ bundle in claude's slot, then restore the real one.
-
-    Yields the platform name. claude is used because its skill_refs bundle is
-    "claude" and it has no extra plugin wiring. The real committed bundle is
-    moved aside for the duration and put back afterward, so the on-disk package
-    is left exactly as found.
-    """
+def fake_bundle(tmp_path, monkeypatch):
+    """Route claude to an isolated packaged references bundle."""
     platform = "claude"
-    bundle = mainmod._PLATFORM_CONFIG[platform]["skill_refs"]
-    skills_root = PKG_DIR / "skills"
-    bundle_dir = skills_root / bundle
-    refs_dir = bundle_dir / "references"
-
-    created_root = not skills_root.exists()
-    backup_dir = None
-    if bundle_dir.exists():
-        backup_dir = Path(tempfile.mkdtemp()) / "bundle_backup"
-        shutil.move(str(bundle_dir), str(backup_dir))
-
-    refs_dir.mkdir(parents=True, exist_ok=True)
+    refs_dir = tmp_path / "packaged" / "claude" / "references"
+    refs_dir.mkdir(parents=True)
     (refs_dir / "extraction-spec.md").write_text("# extraction spec fragment\n", encoding="utf-8")
     (refs_dir / "query.md").write_text("# query fragment\n", encoding="utf-8")
-    try:
-        yield platform
-    finally:
-        if bundle_dir.exists():
-            shutil.rmtree(bundle_dir, ignore_errors=True)
-        if backup_dir is not None:
-            shutil.move(str(backup_dir), str(bundle_dir))
-            shutil.rmtree(backup_dir.parent, ignore_errors=True)
-        elif created_root:
-            shutil.rmtree(skills_root, ignore_errors=True)
+    real_resolver = mainmod._packaged_skill_refs_dir
+    monkeypatch.setattr(
+        mainmod,
+        "_packaged_skill_refs_dir",
+        lambda name: refs_dir if name == platform else real_resolver(name),
+    )
+    return platform
 
 
 def _install(tmp_path, platform):
     old_cwd = Path.cwd()
     try:
         os.chdir(tmp_path)
-        with patch("graphify.__main__.Path.home", return_value=tmp_path):
+        platform_env = {
+            "HOME": str(tmp_path),
+            "USERPROFILE": str(tmp_path),
+            "LOCALAPPDATA": str(tmp_path / "AppData" / "Local"),
+            "APPDATA": str(tmp_path / "AppData" / "Roaming"),
+            "XDG_CONFIG_HOME": str(tmp_path / ".config"),
+        }
+        with (
+            patch.dict(os.environ, platform_env),
+            patch("graphify.__main__.Path.home", return_value=tmp_path),
+        ):
             mainmod.install(platform=platform)
+            return mainmod._platform_skill_destination(platform)
     finally:
         os.chdir(old_cwd)
 
@@ -186,33 +177,21 @@ def test_hard_fail_when_bundle_dir_present_but_references_missing(tmp_path, monk
     shipped) and falls back to monolith, covered by
     ``test_unbuilt_bundle_host_falls_back_to_monolith``.
     """
-    platform = "claude"
-    bundle = mainmod._PLATFORM_CONFIG[platform]["skill_refs"]
-    skills_root = PKG_DIR / "skills"
-    bundle_dir = skills_root / bundle
-
-    created_root = not skills_root.exists()
-    backup_dir = None
-    if bundle_dir.exists():
-        backup_dir = Path(tempfile.mkdtemp()) / "bundle_backup"
-        shutil.move(str(bundle_dir), str(backup_dir))
+    bundle_dir = tmp_path / "packaged" / "claude"
     # Bundle dir present, but no references/ subdir inside it.
     bundle_dir.mkdir(parents=True, exist_ok=True)
     (bundle_dir / "SKILL.md").write_text("body\n", encoding="utf-8")
-    try:
-        with pytest.raises(SystemExit) as exc:
-            with patch("graphify.__main__.Path.home", return_value=tmp_path):
-                monkeypatch.chdir(tmp_path)
-                mainmod._copy_skill_file("claude")
-        assert exc.value.code == 1
-    finally:
-        if bundle_dir.exists():
-            shutil.rmtree(bundle_dir, ignore_errors=True)
-        if backup_dir is not None:
-            shutil.move(str(backup_dir), str(bundle_dir))
-            shutil.rmtree(backup_dir.parent, ignore_errors=True)
-        elif created_root:
-            shutil.rmtree(skills_root, ignore_errors=True)
+    monkeypatch.setattr(
+        mainmod,
+        "_packaged_skill_refs_dir",
+        lambda _name: bundle_dir / "references",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        with patch("graphify.__main__.Path.home", return_value=tmp_path):
+            monkeypatch.chdir(tmp_path)
+            mainmod._copy_skill_file("claude")
+    assert exc.value.code == 1
 
 
 def test_unbuilt_bundle_host_falls_back_to_monolith(tmp_path, monkeypatch):
@@ -277,8 +256,7 @@ def test_gemini_install_references_all_resolve(tmp_path):
     """
     import re
 
-    _install(tmp_path, "gemini")
-    skill = tmp_path / ".gemini" / "skills" / "graphify" / "SKILL.md"
+    skill = _install(tmp_path, "gemini")
     assert skill.exists()
     refdir = skill.parent / "references"
     assert refdir.is_dir()
@@ -316,8 +294,7 @@ def test_pyproject_declares_references_globs():
         import tomli as tomllib  # type: ignore[no-redef]
 
     pyproject = PKG_DIR.parent / "pyproject.toml"
-    if not pyproject.exists():
-        pytest.skip("pyproject.toml not adjacent to package (installed wheel)")
+    assert pyproject.exists(), "repository packaging tests require pyproject.toml"
     data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     pkg_data = data["tool"]["setuptools"]["package-data"]["graphify"]
     assert "skills/*/references/*.md" in pkg_data
@@ -437,8 +414,9 @@ def test_built_wheel_ships_the_full_skill_payload():
     when the build backend is missing, because build is a declared dev dependency.
     """
     repo_root = PKG_DIR.parent
-    if not (repo_root / "pyproject.toml").exists():
-        pytest.skip("pyproject.toml not adjacent to package (installed wheel)")
+    assert (repo_root / "pyproject.toml").exists(), (
+        "repository packaging tests require pyproject.toml"
+    )
     # In this wave every split-host bundle ships, so its absence is a real failure,
     # not a reason to skip.
     assert (PKG_DIR / "skills" / "claude" / "references" / "extraction-spec.md").exists(), (

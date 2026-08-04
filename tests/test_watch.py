@@ -3,7 +3,6 @@
 import json
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 import pytest
@@ -75,6 +74,17 @@ def test_check_update_no_flag_returns_true(tmp_path):
     assert check_update(tmp_path) is True
 
 
+@pytest.mark.parametrize(
+    "foreign",
+    [r"C:\repo\src\app.py", r"\\server\share\app.py", "/repo/src/app.py"],
+)
+def test_missing_local_source_does_not_guess_across_host_path_conventions(tmp_path, foreign):
+    from graphify.watch import _missing_local_source
+
+    expected = Path(foreign).is_absolute()
+    assert _missing_local_source(foreign, tmp_path) is expected
+
+
 def test_check_update_with_flag_returns_true_and_prints(tmp_path, capsys):
     """check_update returns True and prints notification when flag exists."""
     from graphify.watch import check_update
@@ -139,7 +149,6 @@ def test_watch_raises_without_watchdog(tmp_path, monkeypatch):
 # --- _rebuild_lock (GH-858) ---
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="fcntl-only (POSIX)")
 def test_rebuild_lock_writes_pid_with_newline(tmp_path):
     out = tmp_path / "graphify-out"
     lock_path = out / ".rebuild.lock"
@@ -150,7 +159,6 @@ def test_rebuild_lock_writes_pid_with_newline(tmp_path):
         assert contents == f"{os.getpid()}\n", contents
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="fcntl-only (POSIX)")
 def test_rebuild_lock_removed_after_release(tmp_path):
     """GH-858: lock file must be unlinked once the rebuild completes so
     downstream waiters that poll for its absence unblock promptly."""
@@ -161,7 +169,6 @@ def test_rebuild_lock_removed_after_release(tmp_path):
     assert not lock_path.exists(), "lock file should be unlinked after release"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="fcntl-only (POSIX)")
 def test_rebuild_lock_does_not_accumulate_pids_across_runs(tmp_path):
     """GH-858: each acquisition truncates and rewrites the PID line rather
     than appending, so the file never grows into a digit-concatenation."""
@@ -360,7 +367,6 @@ def test_rebuild_code_preupgrade_marker_less_node_one_cycle_lag(tmp_path):
     assert "bar()" in labels(healed), "surviving symbol must be kept throughout"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="fcntl-only (POSIX)")
 def test_rebuild_lock_non_blocking_does_not_clobber_holder(tmp_path):
     """GH-858: a non-blocking caller that fails to acquire the lock must not
     truncate the holder's PID payload."""
@@ -458,16 +464,6 @@ def test_rebuild_code_no_viz_removes_stale_html_and_skips_export(tmp_path, monke
 # --- .graphifyignore honored in watch handler (gh-928) ---
 
 
-def _watchdog_available() -> bool:
-    try:
-        import watchdog  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
-
-@pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
 def test_watch_handler_honors_graphifyignore(tmp_path, monkeypatch):
     """gh-928: the watch Handler must short-circuit paths matching
     .graphifyignore so busy volumes (node_modules churn, build artefacts,
@@ -520,7 +516,6 @@ def test_watch_handler_honors_graphifyignore(tmp_path, monkeypatch):
     assert {Path(path).name for path in changed_paths} == {"app.py"}
 
 
-@pytest.mark.skipif(not _watchdog_available(), reason="watchdog not installed")
 def test_watch_loads_graphifyignore_once(tmp_path, monkeypatch):
     """gh-928: .graphifyignore must be parsed exactly once at watch() startup,
     not per filesystem event. Otherwise busy volumes re-read the file
@@ -696,7 +691,6 @@ def test_check_shrink_keeps_tmp_when_deletions_declared(tmp_path):
 # --- _rebuild_code integration: post-commit delete scenario ---
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_rebuild_code_prunes_deleted_file_nodes(tmp_path):
     """End-to-end probe of the post-commit-delete bug fix.
 
@@ -852,7 +846,6 @@ def test_queue_pending_noop_on_empty_list(tmp_path):
     assert not (out / _PENDING_FILENAME).exists()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="fcntl-only (POSIX)")
 def test_rebuild_code_queues_on_lock_contention(tmp_path, monkeypatch, capsys):
     """#1059: when the rebuild lock is held, an incremental hook must queue
     its changed_paths to .pending_changes and print 'queued' instead of
@@ -895,7 +888,6 @@ def test_rebuild_code_queues_on_lock_contention(tmp_path, monkeypatch, capsys):
         ]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="fcntl-only (POSIX)")
 def test_rebuild_code_merges_pending_on_acquire(tmp_path, monkeypatch):
     """#1059: the process that acquires the lock must drain .pending_changes
     and pass the merged change set to the inner rebuild call."""
@@ -935,7 +927,6 @@ def test_rebuild_code_merges_pending_on_acquire(tmp_path, monkeypatch):
     assert not (out / watch_mod._PENDING_FILENAME).exists()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="fcntl-only (POSIX)")
 def test_rebuild_code_drains_late_arrivals(tmp_path, monkeypatch):
     """#1059: after the primary rebuild, the lock-holder must loop and drain
     any paths queued by hooks that arrived mid-rebuild."""
@@ -1146,7 +1137,6 @@ def _ab_links(graph_path: Path, a_id: str, b_id: str, source_file: str | None = 
     return out
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_watch_multigraph_unchanged_file_parallel_edges_persist(tmp_path):
     """A pair with 3 parallel edges from a file that is NOT changed must keep all
     3 across an incremental rebuild triggered by an unrelated file."""
@@ -1204,7 +1194,6 @@ def test_watch_multigraph_unchanged_file_parallel_edges_persist(tmp_path):
     assert {e["relation"] for e in survivors} == {"calls", "imports", "references"}
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_watch_multigraph_changed_file_evicts_its_parallel_edges(tmp_path):
     """A pair A->B with parallel edges from file1 AND file2; changing file1 must
     evict file1's parallel edges between A->B while file2's survive (keyed,
@@ -1265,7 +1254,6 @@ def test_watch_multigraph_changed_file_evicts_its_parallel_edges(tmp_path):
     assert file2_survivors[0]["relation"] == "calls"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_watch_multigraph_changed_file_evicts_stale_cross_file_edge(tmp_path):
     """The FIX 3 gap: an edge between two SURVIVING nodes that was CONTRIBUTED by
     the changed file must be evicted. The old endpoints-only check wrongly kept
@@ -1308,7 +1296,6 @@ def test_watch_multigraph_changed_file_evicts_stale_cross_file_edge(tmp_path):
     )
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_watch_multigraph_deleted_file_removes_all_its_edge_records(tmp_path):
     """Deleting a file must remove ALL its edge records, including parallels,
     while leaving another file's parallel between the same pair intact."""
@@ -1459,7 +1446,6 @@ def test_watch_simple_mode_unchanged_regression(tmp_path, monkeypatch):
     assert calls["n"] == 1, "topology-unchanged simple-graph rebuild must not re-cluster"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_watch_multigraph_full_rebuild_preserves_profile_flag(tmp_path, monkeypatch):
     """Regression for the DEFERRED silent collapse to simple graph.
 
@@ -1581,7 +1567,6 @@ def test_watch_multigraph_full_rebuild_preserves_profile_flag(tmp_path, monkeypa
     )
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_watch_no_cluster_full_rebuild_does_not_duplicate_links(tmp_path):
     """A full raw rebuild must be idempotent for links.
 
@@ -1621,7 +1606,6 @@ def test_watch_no_cluster_full_rebuild_does_not_duplicate_links(tmp_path):
     assert len({fingerprint(edge) for edge in second_links}) == len(second_links)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_watch_full_rebuild_preserves_real_call_site_parallels(tmp_path):
     """A real multigraph corpus where one function calls another at THREE distinct
     source locations yields three parallel call edges (distinct source_location ->
@@ -1687,7 +1671,6 @@ def test_watch_full_rebuild_preserves_real_call_site_parallels(tmp_path):
     assert reloaded.number_of_edges(b, a) == 3, "reloaded MultiDiGraph must keep 3 parallels"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_watch_full_rebuild_prunes_removed_import_edge(tmp_path):
     """A removed import between two surviving files must NOT linger as a phantom
     stale edge on a full rebuild (the #1521 motivation). Both endpoint nodes still
@@ -1727,7 +1710,6 @@ def test_watch_full_rebuild_prunes_removed_import_edge(tmp_path):
     )
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_watch_full_rebuild_preserves_semantic_edge(tmp_path):
     """A full rebuild is AST-only (the LLM/semantic pass is NOT re-run from the
     CLI), so a semantic / INFERRED (_origin != "ast") edge whose endpoints survive
@@ -2133,7 +2115,6 @@ def _downgrade_to_legacy_edges(graph_path: Path) -> None:
     graph_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_rebuild_code_no_cluster_does_not_flap_on_legacy_edges_key(tmp_path):
     """RISK 3: a no-op ``--no-cluster`` rebuild over a graph.json written in the
     legacy ``edges``-keyed shape must detect "no change" and leave graph.json
@@ -2202,7 +2183,6 @@ def test_rebuild_code_no_cluster_does_not_flap_on_legacy_edges_key(tmp_path):
 # --- RISK 4 Guard 2: a failed/aborted extraction must not wipe a populated graph ---
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_watch_no_cluster_delete_all_preserves_graph(tmp_path, monkeypatch):
     """RISK 4: when a declared-deletion rebuild ends with 0 nodes because the
     remaining files' extraction aborted (a failed/half-written extraction, not a
@@ -2272,7 +2252,6 @@ def test_watch_no_cluster_delete_all_preserves_graph(tmp_path, monkeypatch):
     assert marker.read_bytes() == marker_before, "refused rebuild must not rewrite marker state"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_watch_clustered_delete_all_preserves_graph(tmp_path, monkeypatch):
     """RISK 4: the clustered ``tmp.replace`` write site must likewise refuse to
     overwrite a populated graph.json with an empty (0-node) graph produced by a

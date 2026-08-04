@@ -44,7 +44,6 @@ def test_extract_stamps_every_edge_ast(tmp_path):
     assert all(n.get("_origin") == "ast" for n in result.get("nodes", []))
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_ast_edge_origin_survives_to_graph_json(tmp_path):
     """The stamp must flow through the build/write path to the on-disk graph."""
     from graphify.watch import _rebuild_code
@@ -160,7 +159,6 @@ def test_norm_source_file_none_passthrough():
 # --- backward compatibility + future tertiary _origin ---
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_unmarked_and_tertiary_origin_edges_load(tmp_path):
     """A legacy graph with un-stamped edges AND an edge with a FUTURE tertiary
     _origin value must both load and survive a full rebuild (no hard binary
@@ -218,7 +216,6 @@ def test_unmarked_and_tertiary_origin_edges_load(tmp_path):
 # --- CLI semantic merge stamps cached edges (doc-pipeline gap) ---
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="git CLI behaviour varies on Windows runners")
 def test_cli_semantic_merge_stamps_cached_edges(tmp_path):
     """Cached semantic edges bypass llm._merge_into (check_semantic_cache path),
     so the CLI merge must stamp them _origin='semantic' itself. Unstamped, a doc

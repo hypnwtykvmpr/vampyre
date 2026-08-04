@@ -109,9 +109,14 @@ def test_legacy_graphifyinclude_is_inert_and_warned(tmp_path, capsys):
     result = detect(tmp_path)
 
     assert result["files"] == baseline["files"]
-    assert any(path.endswith("/.hermes/plans/plan.md") for path in result["files"]["document"])
+    assert any(
+        path.replace("\\", "/").endswith("/.hermes/plans/plan.md")
+        for path in result["files"]["document"]
+    )
     assert not any(
-        path.endswith("/.graphifyinclude") for paths in result["files"].values() for path in paths
+        path.replace("\\", "/").endswith("/.graphifyinclude")
+        for paths in result["files"].values()
+        for path in paths
     )
     assert (
         capsys.readouterr().err.count("[graphify] WARNING: .graphifyinclude is no longer supported")
@@ -179,28 +184,28 @@ def test_graphifyignore_comments_ignored(tmp_path):
     assert any("other.py" in f for f in result["files"]["code"])
 
 
-def test_detect_follows_symlinked_directory(tmp_path):
+def test_detect_follows_symlinked_directory(tmp_path, path_alias):
     real_dir = tmp_path / "real_lib"
     real_dir.mkdir()
     (real_dir / "util.py").write_text("x = 1")
-    (tmp_path / "linked_lib").symlink_to(real_dir)
+    linked = path_alias(tmp_path / "linked_lib", real_dir)
 
     result_no = detect(tmp_path, follow_symlinks=False)
     result_yes = detect(tmp_path, follow_symlinks=True)
 
     assert any("real_lib" in f for f in result_no["files"]["code"])
     assert not any("linked_lib" in f for f in result_no["files"]["code"])
-    assert any("linked_lib" in f for f in result_yes["files"]["code"])
+    assert any(str(linked) in f for f in result_yes["files"]["code"])
 
 
-def test_detect_follows_symlinked_file(tmp_path):
+def test_detect_follows_symlinked_file(tmp_path, path_alias):
     (tmp_path / "real.py").write_text("x = 1")
-    (tmp_path / "link.py").symlink_to(tmp_path / "real.py")
+    linked = path_alias(tmp_path / "link.py", tmp_path / "real.py")
 
     result = detect(tmp_path, follow_symlinks=True)
     code = result["files"]["code"]
     assert any("real.py" in f for f in code)
-    assert any("link.py" in f for f in code)
+    assert any(str(linked) == f for f in code)
 
 
 def test_graphifyignore_hermetic_without_vcs(tmp_path):
@@ -219,6 +224,16 @@ def test_graphifyignore_hermetic_without_vcs(tmp_path):
     # parent .graphifyignore must NOT leak into a non-VCS scan
     assert any("vendor" in f for f in code_files)
     assert result["graphifyignore_patterns"] == 0
+
+
+def test_vcs_root_honors_git_ceiling_directories(tmp_path, monkeypatch):
+    outer = tmp_path / "outer"
+    nested = outer / "work" / "nested"
+    nested.mkdir(parents=True)
+    (outer / ".git").mkdir()
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(outer / "work"))
+
+    assert detect_mod._find_vcs_root(nested) is None
 
 
 def test_graphifyignore_discovered_from_parent_in_vcs(tmp_path):
@@ -275,26 +290,26 @@ def test_graphifyignore_at_git_root_is_included(tmp_path):
     assert result["graphifyignore_patterns"] == 1
 
 
-def test_detect_handles_circular_symlinks(tmp_path):
+def test_detect_handles_circular_symlinks(tmp_path, path_alias):
     sub = tmp_path / "a"
     sub.mkdir()
     (sub / "main.py").write_text("x = 1")
-    (sub / "loop").symlink_to(tmp_path)
+    path_alias(sub / "loop", tmp_path)
 
     result = detect(tmp_path, follow_symlinks=True)
     assert any("main.py" in f for f in result["files"]["code"])
 
 
-def test_detect_default_does_not_auto_follow_direct_symlink_child(tmp_path):
+def test_detect_default_does_not_auto_follow_direct_symlink_child(tmp_path, path_alias):
     """Symlink directory following is explicit opt-in."""
     real_dir = tmp_path / "real_lib"
     real_dir.mkdir()
     (real_dir / "util.py").write_text("x = 1")
-    (tmp_path / "linked_lib").symlink_to(real_dir)
+    linked = path_alias(tmp_path / "linked_lib", real_dir)
 
     result = detect(tmp_path)
     assert any("real_lib" in f for f in result["files"]["code"])
-    assert not any("linked_lib" in f for f in result["files"]["code"])
+    assert not any(str(linked) in f for f in result["files"]["code"])
 
 
 def test_detect_default_does_not_follow_when_no_symlinks(tmp_path):
@@ -309,47 +324,47 @@ def test_detect_default_does_not_follow_when_no_symlinks(tmp_path):
     assert any("other.py" in f for f in result["files"]["code"])
 
 
-def test_detect_explicit_false_overrides_auto_detect(tmp_path):
+def test_detect_explicit_false_overrides_auto_detect(tmp_path, path_alias):
     """An explicit follow_symlinks=False skips symlinked directories."""
     real_dir = tmp_path / "real_lib"
     real_dir.mkdir()
     (real_dir / "util.py").write_text("x = 1")
-    (tmp_path / "linked_lib").symlink_to(real_dir)
+    linked = path_alias(tmp_path / "linked_lib", real_dir)
 
     # Explicit False overrides auto-detect; symlink contents must NOT appear.
     result = detect(tmp_path, follow_symlinks=False)
-    assert not any("linked_lib" in f for f in result["files"]["code"])
+    assert not any(str(linked) in f for f in result["files"]["code"])
 
 
-def test_detect_skips_out_of_root_symlinked_directory_even_when_following(tmp_path):
+def test_detect_skips_out_of_root_symlinked_directory_even_when_following(tmp_path, path_alias):
     root = tmp_path / "root"
     root.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.py").write_text("token = 'outside'")
-    (root / "linked_secret").symlink_to(outside)
+    linked = path_alias(root / "linked_secret", outside)
 
     result = detect(root, follow_symlinks=True)
 
-    assert not any("linked_secret" in f for f in result["files"]["code"])
+    assert not any(str(linked) in f for f in result["files"]["code"])
     assert any("symlink target outside scan root" in item for item in result["skipped_sensitive"])
 
 
-def test_detect_skips_out_of_root_symlinked_file_by_default(tmp_path):
+def test_detect_skips_out_of_root_symlinked_file_by_default(tmp_path, path_alias):
     root = tmp_path / "root"
     root.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.py").write_text("token = 'outside'")
-    (root / "secret_link.py").symlink_to(outside / "secret.py")
+    linked = path_alias(root / "secret_link.py", outside / "secret.py")
 
     result = detect(root)
 
-    assert not any("secret_link.py" in f for f in result["files"]["code"])
+    assert str(linked) not in result["files"]["code"]
     assert any("symlink target outside scan root" in item for item in result["skipped_sensitive"])
 
 
-def test_detect_incremental_propagates_follow_symlinks(tmp_path, monkeypatch):
+def test_detect_incremental_propagates_follow_symlinks(tmp_path, monkeypatch, path_alias):
     """detect_incremental must forward follow_symlinks so symlinked sub-trees
     appear in incremental scans the same way they appear in full scans."""
     monkeypatch.chdir(tmp_path)
@@ -357,7 +372,7 @@ def test_detect_incremental_propagates_follow_symlinks(tmp_path, monkeypatch):
     real_dir = tmp_path / "real_corpus"
     real_dir.mkdir()
     (real_dir / "note.md").write_text("# real note\n\nsome content")
-    (tmp_path / "linked_corpus").symlink_to(real_dir)
+    linked = path_alias(tmp_path / "linked_corpus", real_dir)
 
     # Store manifest inside graphify-out/ so it is pruned by _SKIP_DIRS
     # and doesn't get re-detected as a code file now that .json is indexed.
@@ -367,11 +382,11 @@ def test_detect_incremental_propagates_follow_symlinks(tmp_path, monkeypatch):
 
     # Without following symlinks, the symlinked dir contents are invisible.
     no_link = detect_incremental(tmp_path, manifest_path, follow_symlinks=False)
-    assert not any("linked_corpus" in f for f in no_link["files"]["document"])
+    assert not any(str(linked) in f for f in no_link["files"]["document"])
 
     # With follow_symlinks=True, the symlinked dir contents appear and are new.
     yes_link = detect_incremental(tmp_path, manifest_path, follow_symlinks=True)
-    assert any("linked_corpus" in f for f in yes_link["files"]["document"])
+    assert any(str(linked) in f for f in yes_link["files"]["document"])
     assert yes_link["new_total"] >= 2  # real + linked
 
     # After saving manifest, a second incremental scan should see no changes.
@@ -1554,6 +1569,14 @@ def test_load_manifest_passes_through_legacy_absolute_keys(tmp_path):
     assert abs_key in loaded
 
 
+@pytest.mark.parametrize("foreign", [r"C:\repo\src\app.py", r"\\server\share\app.py"])
+def test_manifest_helpers_do_not_reanchor_foreign_absolute_paths(tmp_path, foreign):
+    from graphify.detect import _to_absolute_from_storage, _to_relative_for_storage
+
+    assert _to_absolute_from_storage(foreign, tmp_path) == foreign
+    assert _to_relative_for_storage(foreign, tmp_path) == foreign
+
+
 def test_save_manifest_out_of_root_keeps_absolute(tmp_path):
     """Files outside ``root`` (e.g. symlinked external corpora) are stored
     absolute so they round-trip on the saving machine even when they can't
@@ -1611,7 +1634,7 @@ def test_detect_incremental_portable_across_paths(tmp_path):
     )
 
 
-def test_save_manifest_in_root_symlink_roundtrips(tmp_path):
+def test_save_manifest_in_root_symlink_roundtrips(tmp_path, path_alias):
     """In-root symlinks must store under the symlink's own name, not the
     resolved target. Resolving the key when relativizing pointed the stored
     entry at ``sub/target.py`` instead of ``alias.py``, so the original
@@ -1623,25 +1646,22 @@ def test_save_manifest_in_root_symlink_roundtrips(tmp_path):
     (tmp_path / "sub").mkdir()
     target = tmp_path / "sub" / "target.py"
     target.write_text("pass\n")
-    alias = tmp_path / "alias.py"
-    try:
-        alias.symlink_to(target)
-    except (OSError, NotImplementedError):
-        import pytest
-
-        pytest.skip("filesystem does not support symlinks")
+    alias = path_alias(tmp_path / "alias.py", target)
 
     manifest_path = str(tmp_path / "graphify-out" / "manifest.json")
     save_manifest({"code": [str(alias)]}, manifest_path, root=tmp_path)
 
     raw = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-    assert "alias.py" in raw, f"in-root symlink must be stored under its own name, got {list(raw)}"
+    expected_alias = alias.relative_to(tmp_path).as_posix()
+    assert expected_alias in raw, (
+        f"in-root alias must be stored under its own name, got {list(raw)}"
+    )
     assert "sub/target.py" not in raw, (
         f"symlink must not be stored under resolved target path; got {list(raw)}"
     )
 
     loaded = load_manifest(manifest_path, root=tmp_path)
-    assert str(tmp_path.resolve() / "alias.py") in loaded
+    assert str(alias) in loaded
 
 
 def test_convert_office_file_hash_stable_across_nfc_nfd(tmp_path, monkeypatch):

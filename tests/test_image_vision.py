@@ -76,15 +76,14 @@ def test_non_pdf_still_read_as_plain_text(tmp_path):
     assert "# hello" in llm._file_to_text(md)
 
 
-def test_read_files_skips_out_of_root_symlink(tmp_path):
+def test_read_files_skips_out_of_root_symlink(tmp_path, path_alias):
     root = tmp_path / "root"
     root.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     secret = outside / "secret.md"
     secret.write_text("SECRET SHOULD NOT REACH THE PROMPT")
-    link = root / "secret.md"
-    link.symlink_to(secret)
+    link = path_alias(root / "secret.md", secret)
 
     out = llm._read_files([link], root)
 
@@ -110,15 +109,14 @@ def test_build_image_refs_sets_rel_media_and_bytes(tmp_path):
     assert ref.bedrock_format == "png"
 
 
-def test_build_image_refs_skips_out_of_root_symlink(tmp_path):
+def test_build_image_refs_skips_out_of_root_symlink(tmp_path, path_alias):
     root = tmp_path / "root"
     root.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     secret = outside / "secret.png"
     secret.write_bytes(_PNG_BYTES)
-    link = root / "secret.png"
-    link.symlink_to(secret)
+    link = path_alias(root / "secret.png", secret)
 
     refs = llm._build_image_refs([link], root)
 

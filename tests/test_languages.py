@@ -1,9 +1,7 @@
 """Tests for language extractors: Java, C, C++, Ruby, C#, Kotlin, Scala, PHP, Swift, Go, Julia, Fortran, JS/TS, .NET project files, XAML."""
 
 from __future__ import annotations
-import importlib.util as _ilu
 from pathlib import Path
-import pytest
 from graphify.extract import (
     _get_extractor,
     _is_cpp_header,
@@ -41,15 +39,6 @@ from graphify.extract import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
-
-# tree-sitter-dm is an optional extra (#1104) - it ships no Linux/Mac wheel, so it
-# is not installed by a default `uv sync`. Skip the .dm/.dme grammar tests when the
-# grammar is absent (.dmi/.dmm/.dmf use no tree-sitter and are always tested).
-
-_needs_dm = pytest.mark.skipif(
-    _ilu.find_spec("tree_sitter_dm") is None,
-    reason="tree-sitter-dm not installed (optional [dm] extra)",
-)
 
 
 def _labels(r):
@@ -2517,13 +2506,11 @@ def test_groovy_spock_no_dangling_edges():
 # ── DM (BYOND DreamMaker) ────────────────────────────────────────────────────
 
 
-@_needs_dm
 def test_dm_no_error():
     r = extract_dm(FIXTURES / "sample.dm")
     assert "error" not in r
 
 
-@_needs_dm
 def test_dm_finds_global_proc():
     r = extract_dm(FIXTURES / "sample.dm")
     labels = _labels(r)
@@ -2531,7 +2518,6 @@ def test_dm_finds_global_proc():
     assert any(label == "RunTest()" for label in labels)
 
 
-@_needs_dm
 def test_dm_finds_type_definition():
     r = extract_dm(FIXTURES / "sample.dm")
     labels = _labels(r)
@@ -2539,7 +2525,6 @@ def test_dm_finds_type_definition():
     assert "/datum/weapon/sword" in labels
 
 
-@_needs_dm
 def test_dm_qualifies_proc_with_type_path():
     r = extract_dm(FIXTURES / "sample.dm")
     labels = _labels(r)
@@ -2547,13 +2532,11 @@ def test_dm_qualifies_proc_with_type_path():
     assert "/datum/weapon/sword/attack()" in labels
 
 
-@_needs_dm
 def test_dm_finds_path_form_proc_definition():
     r = extract_dm(FIXTURES / "sample.dm")
     assert "/datum/weapon/sword/sharpen()" in _labels(r)
 
 
-@_needs_dm
 def test_dm_emits_include_edge():
     r = extract_dm(FIXTURES / "sample.dm")
     import_edges = _edges_with_relation(r, "imports", "imports_from")
@@ -2561,7 +2544,6 @@ def test_dm_emits_include_edge():
     assert all(e.get("context") == "import" for e in import_edges)
 
 
-@_needs_dm
 def test_dm_unresolved_include_flagged_external():
     r = extract_dm(FIXTURES / "sample.dm")
     import_edges = _edges_with_relation(r, "imports", "imports_from")
@@ -2570,7 +2552,6 @@ def test_dm_unresolved_include_flagged_external():
     assert all(e.get("external") is True for e in helpers)
 
 
-@_needs_dm
 def test_dm_resolves_in_file_calls():
     r = extract_dm(FIXTURES / "sample.dm")
     calls = _calls(r)
@@ -2578,7 +2559,6 @@ def test_dm_resolves_in_file_calls():
     assert ("/datum/weapon/sword/attack()", "/datum/weapon/sword/sharpen()") in calls
 
 
-@_needs_dm
 def test_dm_ambiguous_member_call_left_unresolved():
     r = extract_dm(FIXTURES / "sample.dm")
     calls = _calls(r)
@@ -2587,7 +2567,6 @@ def test_dm_ambiguous_member_call_left_unresolved():
     assert any(rc["callee"] == "attack" for rc in r.get("raw_calls", []))
 
 
-@_needs_dm
 def test_dm_emits_new_as_instantiates():
     r = extract_dm(FIXTURES / "sample.dm")
     node_by_id = {n["id"]: n["label"] for n in r["nodes"]}
@@ -2599,7 +2578,6 @@ def test_dm_emits_new_as_instantiates():
     assert ("RunTest()", "/datum/weapon/sword") in inst
 
 
-@_needs_dm
 def test_dm_call_edges_have_call_context():
     r = extract_dm(FIXTURES / "sample.dm")
     call_edges = _edges_with_relation(r, "calls", "instantiates")
@@ -2607,7 +2585,6 @@ def test_dm_call_edges_have_call_context():
     assert all(e.get("context") == "call" for e in call_edges)
 
 
-@_needs_dm
 def test_dm_no_dangling_edges():
     r = extract_dm(FIXTURES / "sample.dm")
     node_ids = {n["id"] for n in r["nodes"]}
@@ -2615,7 +2592,6 @@ def test_dm_no_dangling_edges():
         assert e["source"] in node_ids
 
 
-@_needs_dm
 def test_dm_super_call_not_emitted():
     r = extract_dm(FIXTURES / "sample.dm")
     calls = _calls(r)

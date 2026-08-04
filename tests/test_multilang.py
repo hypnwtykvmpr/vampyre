@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 from pathlib import Path
-import pytest
 from graphify.extract import extract_js, extract_go, extract_rust, extract, extract_sql
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -479,7 +478,6 @@ def test_cache_miss_after_file_change(tmp_path):
 
 
 def _extract_sql_or_skip(fixture: str = "sample.sql"):
-    pytest.importorskip("tree_sitter_sql")
     return extract_sql(FIXTURES / fixture)
 
 

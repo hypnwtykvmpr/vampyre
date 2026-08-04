@@ -409,50 +409,50 @@ def test_collect_files_skips_hidden():
         assert not any(part.startswith(".") for part in f.parts)
 
 
-def test_collect_files_follows_symlinked_directory(tmp_path):
+def test_collect_files_follows_symlinked_directory(tmp_path, path_alias):
     real_dir = tmp_path / "real_src"
     real_dir.mkdir()
     (real_dir / "lib.py").write_text("x = 1")
-    (tmp_path / "linked_src").symlink_to(real_dir)
+    linked = path_alias(tmp_path / "linked_src", real_dir)
 
     files_no = collect_files(tmp_path, follow_symlinks=False)
     files_yes = collect_files(tmp_path, follow_symlinks=True)
 
     assert [f.name for f in files_no].count("lib.py") == 1
-    assert [f.name for f in files_yes].count("lib.py") == 2
+    assert any(str(linked) in str(f) for f in files_yes)
 
 
-def test_collect_files_skips_out_of_root_symlinked_directory(tmp_path):
+def test_collect_files_skips_out_of_root_symlinked_directory(tmp_path, path_alias):
     root = tmp_path / "root"
     root.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.py").write_text("token = 'outside'")
-    (root / "linked_secret").symlink_to(outside)
+    linked = path_alias(root / "linked_secret", outside)
 
     files = collect_files(root, follow_symlinks=True)
 
-    assert not any("linked_secret" in str(f) for f in files)
+    assert not any(str(linked) in str(f) for f in files)
 
 
-def test_collect_files_skips_out_of_root_symlinked_file_by_default(tmp_path):
+def test_collect_files_skips_out_of_root_symlinked_file_by_default(tmp_path, path_alias):
     root = tmp_path / "root"
     root.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.py").write_text("token = 'outside'")
-    (root / "secret_link.py").symlink_to(outside / "secret.py")
+    linked = path_alias(root / "secret_link.py", outside / "secret.py")
 
     files = collect_files(root)
 
-    assert not any(f.name == "secret_link.py" for f in files)
+    assert linked not in files
 
 
-def test_collect_files_handles_circular_symlinks(tmp_path):
+def test_collect_files_handles_circular_symlinks(tmp_path, path_alias):
     sub = tmp_path / "pkg"
     sub.mkdir()
     (sub / "mod.py").write_text("x = 1")
-    (sub / "cycle").symlink_to(tmp_path)
+    path_alias(sub / "cycle", tmp_path)
 
     files = collect_files(tmp_path, follow_symlinks=True)
     assert any(f.name == "mod.py" for f in files)
@@ -473,7 +473,11 @@ def _legacy_collect_files(target, *, root=None):
             if not any(_is_noise_dir(part) for part in p.parts)
             and not (patterns and _is_ignored(p, ignore_root, patterns))
         )
-    return sorted(results)
+    # The legacy extension-by-extension walk returned duplicates on
+    # case-insensitive filesystems when case-distinct suffixes (such as .f/.F)
+    # matched the same file. File collection is a set-valued operation, so the
+    # parity oracle compares unique paths rather than preserving that scan bug.
+    return sorted(set(results))
 
 
 def test_collect_files_parity_with_legacy_on_fixtures():
@@ -507,6 +511,7 @@ def test_collect_files_parity_with_legacy_synthetic(tmp_path):
 
     result = collect_files(tmp_path)
     assert result == _legacy_collect_files(tmp_path)
+    assert len(result) == len(set(result))
     names = {f.name for f in result}
     assert names == {"app.py", "lib.ts", "legacy.f", "modern.F", "ci.sh", "keep.py"}
 
@@ -1769,7 +1774,9 @@ def test_separator_collision_paths_get_distinct_ids(tmp_path):
     # distinct nodes (no silent separator-collision merge)
     file_nodes = [n for n in result["nodes"] if str(n.get("label", "")).endswith(".py")]
     assert len(file_nodes) == 2
-    assert len({n["id"] for n in file_nodes}) == 2, [n["id"] for n in file_nodes]
+    file_ids = {n["id"] for n in file_nodes}
+    assert len(file_ids) == 2, sorted(file_ids)
+    assert {node_id.rsplit("_", 1)[-1] for node_id in file_ids} == {"50ab1c", "70fe68"}
 
 
 def test_non_colliding_path_id_is_not_salted(tmp_path):

@@ -87,6 +87,18 @@ def test_no_git_repo_raises(tmp_path):
         install(tmp_path / "not_a_repo")
 
 
+def test_git_root_honors_git_ceiling_directories(tmp_path, monkeypatch):
+    from graphify.hooks import _git_root
+
+    outer = tmp_path / "outer"
+    nested = outer / "work" / "nested"
+    nested.mkdir(parents=True)
+    (outer / ".git").mkdir()
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(outer / "work"))
+
+    assert _git_root(nested) is None
+
+
 def test_install_creates_post_checkout_hook(tmp_path):
     repo = _make_git_repo(tmp_path)
     install(repo)

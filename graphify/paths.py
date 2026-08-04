@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from graphify.persistence import atomic_write_text
 
@@ -29,6 +29,40 @@ GRAPHIFY_OUT = os.environ.get("GRAPHIFY_OUT", "graphify-out")
 # substrings) so "src/contest.py" / "latest/x.py" / "src/greatest/x.py" do NOT
 # match — only a segment that *equals* one of these names (case-insensitively).
 _TEST_DIR_SEGMENTS = frozenset({"tests", "test", "spec", "specs", "__tests__"})
+
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def is_absolute_path(path: str | os.PathLike[str]) -> bool:
+    """Recognize POSIX and Windows absolute paths on every host OS."""
+    value = os.fspath(path)
+    return PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute()
+
+
+def portable_filename_stem(value: str, *, fallback: str = "unnamed") -> str:
+    """Escape a filename stem that Windows reserves on every platform."""
+    stem = value.strip(". ") or fallback
+    if stem.split(".", 1)[0].upper() in _WINDOWS_DEVICE_NAMES:
+        return f"_{stem}"
+    return stem
+
+
+def git_ceiling_directories() -> set[Path]:
+    """Return native Git discovery ceilings from ``GIT_CEILING_DIRECTORIES``."""
+    ceilings: set[Path] = set()
+    for raw in os.environ.get("GIT_CEILING_DIRECTORIES", "").split(os.pathsep):
+        if not raw:
+            continue
+        try:
+            ceilings.add(Path(raw).expanduser().resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return ceilings
+
 
 # Filename patterns marking a file as a test, matched against the *filename*
 # only (case-insensitive). These are conventions across ecosystems:
@@ -253,7 +287,7 @@ def resolve_scan_root_marker(
         recorded = marker.read_text(encoding="utf-8").strip()
     except (OSError, ValueError):
         return None
-    if not recorded:
+    if not recorded or "\x00" in recorded:
         return None
 
     if recorded.startswith(SCAN_ROOT_MARKER_PREFIX):
@@ -262,7 +296,7 @@ def resolve_scan_root_marker(
             return None
         try:
             relative_path = Path(relative)
-            if relative_path.is_absolute():
+            if is_absolute_path(relative):
                 return None
             return (marker.parent / relative_path).resolve()
         except (OSError, RuntimeError, ValueError):
@@ -270,7 +304,9 @@ def resolve_scan_root_marker(
 
     try:
         legacy_path = Path(recorded)
-        if legacy_path.is_absolute():
+        if is_absolute_path(recorded):
+            if not legacy_path.is_absolute():
+                return None
             return legacy_path.resolve()
     except (OSError, RuntimeError, ValueError):
         return None

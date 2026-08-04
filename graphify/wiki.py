@@ -7,6 +7,7 @@ from urllib.parse import quote
 import networkx as nx
 
 from graphify.build import edge_data
+from graphify.paths import portable_filename_stem
 
 
 def _safe_filename(name: str) -> str:
@@ -22,7 +23,7 @@ def _safe_filename(name: str) -> str:
     s = name.replace("/", "-").replace(" ", "_").replace(":", "-")
     s = re.sub(r'[<>:"/\\|?*]', "_", s)
     s = s.strip(". ")
-    return s[:200] if s else "unnamed"
+    return portable_filename_stem(s if s else "unnamed")[:200]
 
 
 def _md_link(label: str, resolver: dict[str, str]) -> str:

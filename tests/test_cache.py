@@ -361,6 +361,17 @@ def test_load_cached_absolutizes_source_file(tmp_path):
     assert loaded["edges"][0]["source_file"] == abs_src
 
 
+@pytest.mark.parametrize("foreign", [r"C:\repo\src\app.py", r"\\server\share\app.py"])
+def test_cache_path_normalizers_preserve_foreign_absolute_paths(tmp_path, foreign):
+    from graphify.cache import _absolutize_source_files_in, _relativize_source_files_in
+
+    payload = {"nodes": [{"source_file": foreign}], "edges": [], "hyperedges": []}
+    _relativize_source_files_in(payload, tmp_path)
+    _absolutize_source_files_in(payload, tmp_path)
+
+    assert payload["nodes"][0]["source_file"] == foreign
+
+
 def test_load_cached_passes_through_legacy_absolute_source_file(tmp_path):
     """Cache entries written by an older graphify (with absolute source_file
     inside) must still load correctly: the absolutize step is a no-op for
@@ -515,7 +526,7 @@ def test_semantic_cache_survives_version_bump(tmp_path, monkeypatch):
     )
 
 
-def test_save_cached_in_root_symlink_keeps_symlink_name(tmp_path):
+def test_save_cached_in_root_symlink_keeps_symlink_name(tmp_path, path_alias):
     """``source_file`` for an in-root symlink must be stored under the
     symlink's own name, not the resolved target. Lower-impact than the
     manifest case (cache lookup is content-hashed, not key-matched), but
@@ -526,13 +537,7 @@ def test_save_cached_in_root_symlink_keeps_symlink_name(tmp_path):
     (tmp_path / "sub").mkdir()
     target = tmp_path / "sub" / "target.py"
     target.write_text("pass\n")
-    alias = tmp_path / "alias.py"
-    try:
-        alias.symlink_to(target)
-    except (OSError, NotImplementedError):
-        import pytest
-
-        pytest.skip("filesystem does not support symlinks")
+    alias = path_alias(tmp_path / "alias.py", target)
 
     abs_alias = str(alias)  # caller's view — the symlink path, unresolved
     save_cached(
@@ -548,7 +553,8 @@ def test_save_cached_in_root_symlink_keeps_symlink_name(tmp_path):
     h = file_hash(alias, tmp_path)
     entry = cache_dir(tmp_path, "ast") / f"{h}.json"
     on_disk = json.loads(entry.read_text(encoding="utf-8"))
-    assert on_disk["nodes"][0]["source_file"] == "alias.py", (
+    expected_alias = alias.relative_to(tmp_path).as_posix()
+    assert on_disk["nodes"][0]["source_file"] == expected_alias, (
         f"cache must store symlink name, not resolved target; got "
         f"{on_disk['nodes'][0]['source_file']!r}"
     )

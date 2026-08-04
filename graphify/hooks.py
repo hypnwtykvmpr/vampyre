@@ -6,6 +6,8 @@ import re
 import sys
 from pathlib import Path
 
+from graphify.paths import git_ceiling_directories
+
 _HOOK_MARKER = "# graphify-hook-start"
 _HOOK_MARKER_END = "# graphify-hook-end"
 _CHECKOUT_MARKER = "# graphify-checkout-hook-start"
@@ -53,7 +55,7 @@ fi
 if [ -z "$GRAPHIFY_PYTHON" ]; then
     GRAPHIFY_BIN=$(command -v graphify 2>/dev/null)
     if [ -n "$GRAPHIFY_BIN" ]; then
-        # Windows pip layout: Scripts/graphify(.exe) sits beside ..\\python.exe
+        # Windows console-script layout: Scripts/graphify(.exe) sits beside ..\\python.exe
         # (or .\\python.exe inside a venv's Scripts dir). NOTE: command -v may
         # return the launcher path WITHOUT the .exe suffix, so this cannot key
         # on the extension.
@@ -356,7 +358,10 @@ echo "[graphify] Branch switched - launching background rebuild (log: $_GRAPHIFY
 def _git_root(path: Path) -> Path | None:
     """Walk up to find .git directory."""
     current = path.resolve()
+    ceilings = git_ceiling_directories()
     for parent in [current, *current.parents]:
+        if parent in ceilings:
+            return None
         if (parent / ".git").exists():
             return parent
     return None

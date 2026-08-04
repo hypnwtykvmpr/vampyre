@@ -104,6 +104,7 @@ dev = [
     "wheel>=0.47.0",
     "tomli>=2.0 ; python_version < '3.11'",
     "tree-sitter-hcl>=1.2.0",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.uv]
@@ -124,6 +125,7 @@ include-package-data = false
 graphify = ["skill.md", "skill-codex.md", "skill-opencode.md", "skill-kilo.md", "command-kilo.md", "skill-aider.md", "skill-amp.md", "skill-agents.md", "skill-copilot.md", "skill-claw.md", "skill-windows.md", "skill-droid.md", "skill-trae.md", "skill-kiro.md", "skill-vscode.md", "skill-pi.md", "skill-devin.md", "skills/*/references/*.md", "always_on/*.md"]
 
 [tool.pytest.ini_options]
+addopts = "-W error -ra"
 testpaths = ["tests"]
 norecursedirs = [
     "graphify-benchmark", "graphify_eval", "graphify_test",

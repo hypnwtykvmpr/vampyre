@@ -71,13 +71,28 @@ def test_ci_targets_active_branches_and_security_findings_block() -> None:
     assert "--always-on-roundtrip" not in workflow
 
 
+def test_ci_runs_full_strict_suite_on_windows_macos_and_linux() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    test_job = workflow.split("\n  test:", 1)[1].split("\n  quality:", 1)[0]
+
+    assert "ubuntu-latest" in test_job
+    assert "macos-latest" in test_job
+    assert "windows-latest" in test_job
+    assert 'python-version: ["3.10", "3.13"]' in test_job
+    assert "fail-fast: false" in test_job
+    assert "pytest tests/ -n auto --dist loadgroup" in test_job
+    assert "-k " not in test_job
+
+
 def test_parallel_ci_jobs_have_a_single_uv_cache_writer_per_python_version() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     skillgen_job = workflow.split("  skillgen-check:", 1)[1].split("\n  test:", 1)[0]
-    test_job = workflow.split("\n  test:", 1)[1].split("\n  security-scan:", 1)[0]
+    test_job = workflow.split("\n  test:", 1)[1].split("\n  quality:", 1)[0]
+    quality_job = workflow.split("\n  quality:", 1)[1].split("\n  security-scan:", 1)[0]
     security_job = workflow.split("\n  security-scan:", 1)[1]
 
     assert 'save-cache: "false"' in skillgen_job
+    assert 'save-cache: "false"' in quality_job
     assert 'save-cache: "false"' in security_job
     assert 'save-cache: "false"' not in test_job
 

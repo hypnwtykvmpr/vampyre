@@ -14,6 +14,7 @@ from pathlib import Path
 # absolute path ("/shared/graphify-out"). Single source of truth in graphify.paths
 # (#1423); re-exported here as _GRAPHIFY_OUT for the existing call sites.
 from graphify.paths import GRAPHIFY_OUT as _GRAPHIFY_OUT
+from graphify.paths import is_absolute_path
 
 # AST cache entries are the output of graphify's own extractor code, so they
 # are only valid for the version that wrote them: keying purely on file
@@ -240,6 +241,8 @@ def _relativize_source_files_in(payload: dict, root: Path) -> None:
             if not source:
                 continue
             sp = Path(source)
+            if not is_absolute_path(str(source)):
+                continue
             if not sp.is_absolute():
                 continue
             try:
@@ -271,7 +274,7 @@ def _absolutize_source_files_in(payload: dict, root: Path) -> None:
             if not source:
                 continue
             sp = Path(source)
-            if sp.is_absolute():
+            if is_absolute_path(str(source)):
                 continue
             try:
                 item["source_file"] = str(root_resolved / sp)
@@ -497,7 +500,7 @@ def check_semantic_cache(
     identity_root = source_root or root
     for fpath in files:
         p = Path(fpath)
-        if not p.is_absolute():
+        if not is_absolute_path(fpath):
             p = Path(identity_root) / p
         result = load_cached(p, root, kind="semantic", source_root=identity_root)
         if result is not None:
@@ -545,7 +548,7 @@ def save_semantic_cache(
     saved = 0
     for fpath, result in by_file.items():
         p = Path(fpath)
-        if not p.is_absolute():
+        if not is_absolute_path(fpath):
             p = Path(identity_root) / p
         if p.is_file():
             save_cached(p, result, root, kind="semantic", source_root=identity_root)

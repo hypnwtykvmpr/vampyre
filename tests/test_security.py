@@ -30,6 +30,15 @@ from graphify.security import (
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _stable_public_dns(monkeypatch):
+    """Keep URL validation offline while preserving public-address checks."""
+    monkeypatch.setattr(
+        "graphify.security.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("93.184.216.34", 0))],
+    )
+
+
 def test_validate_url_accepts_http():
     assert validate_url("http://example.com/page") == "http://example.com/page"
 

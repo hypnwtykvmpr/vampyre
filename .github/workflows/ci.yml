@@ -32,10 +32,17 @@ jobs:
         run: uv run --frozen python -m tools.skillgen --schema-singleton
 
   test:
-    runs-on: ubuntu-latest
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.13"]
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
 
     steps:
       - uses: actions/checkout@v6
@@ -51,12 +58,35 @@ jobs:
         run: uv sync --all-extras --frozen
 
       - name: Run tests
-        run: uv run --frozen pytest tests/ -q --tb=short
+        run: uv run --frozen pytest tests/ -n auto --dist loadgroup -q --tb=short
 
       - name: Verify install works end-to-end
         run: |
           uv run --frozen graphify --help
           uv run --frozen graphify install
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: "3.12"
+          save-cache: "false"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Ruff
+        run: uv run --frozen ruff check .
+
+      - name: Explicit encodings in shipped code
+        run: uv run --frozen ruff check graphify tools --select PLW1514 --preview
+
+      - name: Pyright
+        run: uv run --frozen pyright
 
   security-scan:
     # The dev deps include bandit and pip-audit. Both checks are blocking.

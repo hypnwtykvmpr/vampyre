@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -58,6 +57,8 @@ def test_skill_roundtrip_at_real_destination(platform, project, tmp_path, monkey
     home.mkdir()
     project_dir.mkdir()
     monkeypatch.chdir(project_dir)
+    monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
 
     with patch("graphify.__main__.Path.home", return_value=home):
         dst = mainmod._platform_skill_destination(
@@ -193,7 +194,7 @@ def test_install_entrypoint_roundtrip_for_progressive_and_monolith(tmp_path):
 
 
 @pytest.fixture()
-def fake_progressive_bundle():
+def fake_progressive_bundle(tmp_path, monkeypatch):
     """Stage a controllable references bundle in claude's slot.
 
     Lets a test flip a host between "monolith on disk" and "progressive on disk"
@@ -201,30 +202,20 @@ def fake_progressive_bundle():
     committed bundle is moved aside and restored on teardown.
     """
     platform = "claude"
-    bundle = mainmod._PLATFORM_CONFIG[platform]["skill_refs"]
-    skills_root = PKG_DIR / "skills"
-    bundle_dir = skills_root / bundle
+    bundle_dir = tmp_path / "packaged" / "claude"
     refs_dir = bundle_dir / "references"
-
-    created_root = not skills_root.exists()
-    backup_dir = None
-    if bundle_dir.exists():
-        backup_dir = Path(tempfile.mkdtemp()) / "bundle_backup"
-        shutil.move(str(bundle_dir), str(backup_dir))
-
     refs_dir.mkdir(parents=True, exist_ok=True)
     (refs_dir / "extraction-spec.md").write_text("# spec\n", encoding="utf-8")
     (refs_dir / "query.md").write_text("# query\n", encoding="utf-8")
-    try:
-        yield platform, bundle_dir, refs_dir
-    finally:
-        if bundle_dir.exists():
-            shutil.rmtree(bundle_dir, ignore_errors=True)
-        if backup_dir is not None:
-            shutil.move(str(backup_dir), str(bundle_dir))
-            shutil.rmtree(backup_dir.parent, ignore_errors=True)
-        elif created_root:
-            shutil.rmtree(skills_root, ignore_errors=True)
+    real_resolver = mainmod._packaged_skill_refs_dir
+
+    def resolve(name):
+        if name == platform:
+            return refs_dir if bundle_dir.is_dir() else None
+        return real_resolver(name)
+
+    monkeypatch.setattr(mainmod, "_packaged_skill_refs_dir", resolve)
+    return platform, bundle_dir, refs_dir
 
 
 def test_monolith_to_progressive_upgrade(tmp_path, fake_progressive_bundle):

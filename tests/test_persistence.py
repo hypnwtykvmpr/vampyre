@@ -46,12 +46,13 @@ def test_atomic_write_text_preserves_mode_without_fchmod(tmp_path, monkeypatch):
     target = tmp_path / "state.json"
     target.write_text("old", encoding="utf-8")
     target.chmod(0o640)
-    monkeypatch.delattr(persistence.os, "fchmod")
+    monkeypatch.delattr(persistence.os, "fchmod", raising=False)
 
     persistence.atomic_write_text(target, "new")
 
     assert target.read_text(encoding="utf-8") == "new"
-    assert target.stat().st_mode & 0o777 == 0o640
+    if os.name != "nt":
+        assert target.stat().st_mode & 0o777 == 0o640
 
 
 def test_atomic_write_text_new_file_uses_normal_creation_mode(tmp_path):

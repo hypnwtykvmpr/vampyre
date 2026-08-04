@@ -22,6 +22,7 @@ from graphify.edge_identity import make_stable_key
 from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
 from graphify.installation import uv_tool_install_command
 from graphify.persistence import FileStateTransaction, atomic_write_text
+from graphify.paths import portable_filename_stem
 from graphify.projections import (
     DEFAULT_RELATIONSHIP_CAP,
     format_relationship_envelope,
@@ -1236,7 +1237,7 @@ def to_obsidian(
         # emit a "@.md"-style filename. (#1409)
         if not re.search(r"\w", cleaned, flags=re.UNICODE):
             return "unnamed"
-        return _cap_filename(cleaned)
+        return _cap_filename(portable_filename_stem(cleaned))
 
     node_filename = _dedup_node_filenames(G, safe_name)
 
@@ -1544,7 +1545,7 @@ def to_canvas(
         # emit a "@.md"-style filename. (#1409)
         if not re.search(r"\w", cleaned, flags=re.UNICODE):
             return "unnamed"
-        return _cap_filename(cleaned)
+        return _cap_filename(portable_filename_stem(cleaned))
 
     # Build node_filenames if not provided (same dedup logic as to_obsidian)
     if node_filenames is None:
