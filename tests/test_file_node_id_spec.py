@@ -29,7 +29,7 @@ def test_file_node_id_uses_parent_dir_and_stem_no_extension(tmp_path):
     sub = tmp_path / "match" / "script"
     sub.mkdir(parents=True)
     f = sub / "pipeline_step.py"
-    f.write_text("def run():\n    pass\n")
+    f.write_text("def run():\n    pass\n", encoding="utf-8")
 
     extraction = extract([f], cache_root=tmp_path)
     ids = {n["id"] for n in extraction["nodes"]}
@@ -45,7 +45,7 @@ def test_file_node_id_uses_parent_dir_and_stem_no_extension(tmp_path):
 def test_top_level_file_node_id_is_bare_stem(tmp_path):
     """A file directly at the project root collapses to just its stem."""
     f = tmp_path / "setup.py"
-    f.write_text("def configure():\n    pass\n")
+    f.write_text("def configure():\n    pass\n", encoding="utf-8")
 
     extraction = extract([f], cache_root=tmp_path)
     ids = {n["id"] for n in extraction["nodes"]}
@@ -61,7 +61,7 @@ def test_top_level_file_SYMBOL_ids_use_bare_stem(tmp_path):
     stem here splits the symbol into two ghost nodes (#1096). Pass ABSOLUTE paths,
     as the CLI does, to exercise the root-relative remap."""
     f = tmp_path / "main.py"
-    f.write_text("def run():\n    return 1\n")
+    f.write_text("def run():\n    return 1\n", encoding="utf-8")
 
     extraction = extract([f.resolve()], cache_root=tmp_path)
     ids = {n["id"] for n in extraction["nodes"]}
@@ -84,7 +84,7 @@ def test_nested_file_symbol_ids_unchanged(tmp_path):
     sub = tmp_path / "sub"
     sub.mkdir()
     f = sub / "mod.py"
-    f.write_text("def work():\n    return 2\n")
+    f.write_text("def work():\n    return 2\n", encoding="utf-8")
 
     extraction = extract([f.resolve()], cache_root=tmp_path)
     ids = {n["id"] for n in extraction["nodes"]}
@@ -98,7 +98,7 @@ def test_symbol_and_file_ids_share_the_same_stem(tmp_path):
     sub = tmp_path / "match" / "script"
     sub.mkdir(parents=True)
     f = sub / "pipeline_step.py"
-    f.write_text("def run():\n    pass\n\nclass Stage:\n    pass\n")
+    f.write_text("def run():\n    pass\n\nclass Stage:\n    pass\n", encoding="utf-8")
 
     extraction = extract([f], cache_root=tmp_path)
     ids = {n["id"] for n in extraction["nodes"]}
@@ -123,9 +123,10 @@ def test_cross_file_import_edges_stay_connected(tmp_path):
     target must resolve to the imported file's (new-format) node id."""
     pkg = tmp_path / "pkg"
     pkg.mkdir()
-    (pkg / "models.py").write_text("class User:\n    pass\n")
+    (pkg / "models.py").write_text("class User:\n    pass\n", encoding="utf-8")
     (pkg / "auth.py").write_text(
-        "from models import User\n\nclass Session:\n    def check(self):\n        return User()\n"
+        "from models import User\n\nclass Session:\n    def check(self):\n        return User()\n",
+        encoding="utf-8",
     )
 
     files = [pkg / "models.py", pkg / "auth.py"]

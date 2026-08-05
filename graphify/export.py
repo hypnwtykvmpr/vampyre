@@ -513,7 +513,13 @@ def _git_head() -> str | None:
     import subprocess as _sp
 
     try:
-        r = _sp.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=3)
+        r = _sp.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            encoding="utf-8",
+        )
         return r.stdout.strip() if r.returncode == 0 else None
     except Exception:
         return None

@@ -29,7 +29,7 @@ def test_pack_chunks_packs_small_files_together(tmp_path):
     files = []
     for i in range(20):
         f = tmp_path / f"small_{i}.py"
-        f.write_text("x = 1\n")  # ~6 bytes => ~1 token
+        f.write_text("x = 1\n", encoding="utf-8")  # ~6 bytes => ~1 token
         files.append(f)
 
     chunks = _pack_chunks_by_tokens(files, token_budget=10_000)
@@ -53,7 +53,7 @@ def test_pack_chunks_starts_new_chunk_when_budget_would_overflow(tmp_path, no_to
     files = []
     for i in range(5):
         f = tmp_path / f"file_{i}.py"
-        f.write_text("x" * 10_000)
+        f.write_text("x" * 10_000, encoding="utf-8")
         files.append(f)
 
     chunks = _pack_chunks_by_tokens(files, token_budget=6_000)
@@ -72,13 +72,13 @@ def test_pack_chunks_groups_by_directory(tmp_path):
     dir_b.mkdir()
 
     a1 = dir_a / "x.py"
-    a1.write_text("a")
+    a1.write_text("a", encoding="utf-8")
     a2 = dir_a / "y.py"
-    a2.write_text("a")
+    a2.write_text("a", encoding="utf-8")
     b1 = dir_b / "x.py"
-    b1.write_text("b")
+    b1.write_text("b", encoding="utf-8")
     b2 = dir_b / "y.py"
-    b2.write_text("b")
+    b2.write_text("b", encoding="utf-8")
 
     # Big budget — everything fits in one chunk in principle, but the order
     # within the chunk should keep dir_a's files contiguous and dir_b's
@@ -103,9 +103,9 @@ def test_pack_chunks_oversized_file_gets_its_own_chunk(tmp_path, no_tokenizer):
     from graphify.llm import _pack_chunks_by_tokens
 
     big = tmp_path / "big.py"
-    big.write_text("x" * 200_000)  # ~50k tokens (cap-bound)
+    big.write_text("x" * 200_000, encoding="utf-8")  # ~50k tokens (cap-bound)
     small = tmp_path / "small.py"
-    small.write_text("x")
+    small.write_text("x", encoding="utf-8")
 
     chunks = _pack_chunks_by_tokens([big, small], token_budget=1_000)
     sizes = [len(c) for c in chunks]
@@ -118,7 +118,7 @@ def test_pack_chunks_rejects_non_positive_budget(tmp_path):
     from graphify.llm import _pack_chunks_by_tokens
 
     f = tmp_path / "x.py"
-    f.write_text("a")
+    f.write_text("a", encoding="utf-8")
     with pytest.raises(ValueError):
         _pack_chunks_by_tokens([f], token_budget=0)
 
@@ -133,7 +133,7 @@ def test_estimate_file_tokens_uses_tiktoken_when_available(tmp_path):
 
     f = tmp_path / "sample.py"
     text = "def hello():\n    return 'world'\n" * 50  # ~1500 chars
-    f.write_text(text)
+    f.write_text(text, encoding="utf-8")
 
     # Force the tokenizer to be a mock that records calls and returns a known
     # token list, so we can assert the tiktoken path is taken.
@@ -148,7 +148,7 @@ def test_estimate_file_tokens_falls_back_to_chars_when_no_tokenizer(tmp_path):
     from graphify import llm
 
     f = tmp_path / "sample.py"
-    f.write_text("x" * 1_000)  # 1000 bytes
+    f.write_text("x" * 1_000, encoding="utf-8")  # 1000 bytes
 
     with patch.object(llm, "_TOKENIZER", None):
         n = llm._estimate_file_tokens(f)
@@ -178,7 +178,7 @@ def test_corpus_parallel_runs_chunks_concurrently(tmp_path):
     files = []
     for i in range(8):
         f = tmp_path / f"f{i}.py"
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
         files.append(f)
 
     def slow_extract(chunk, **kwargs):
@@ -205,7 +205,7 @@ def test_corpus_parallel_sequential_when_max_concurrency_is_one(tmp_path):
     files = []
     for i in range(3):
         f = tmp_path / f"f{i}.py"
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
         files.append(f)
 
     call_order = []
@@ -231,7 +231,7 @@ def test_corpus_parallel_continues_after_chunk_failure(tmp_path, capsys):
     files = []
     for i in range(4):
         f = tmp_path / f"f{i}.py"
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
         files.append(f)
 
     call_count = {"n": 0}
@@ -260,7 +260,7 @@ def test_corpus_parallel_legacy_mode_when_token_budget_is_none(tmp_path):
     files = []
     for i in range(45):
         f = tmp_path / f"f{i}.py"
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
         files.append(f)
 
     chunks_seen = []
@@ -285,7 +285,7 @@ def test_corpus_parallel_token_budget_default_packs_files(tmp_path):
     files = []
     for i in range(50):
         f = tmp_path / f"f{i}.py"
-        f.write_text("x = 1\n")
+        f.write_text("x = 1\n", encoding="utf-8")
         files.append(f)
 
     chunks_seen = []
@@ -323,7 +323,7 @@ def test_adaptive_retry_returns_directly_when_not_truncated(tmp_path):
 
     files = [tmp_path / f"f{i}.py" for i in range(4)]
     for f in files:
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
 
     calls = []
 
@@ -348,7 +348,7 @@ def test_adaptive_retry_splits_when_finish_reason_length(tmp_path):
 
     files = [tmp_path / f"f{i}.py" for i in range(4)]
     for f in files:
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
 
     calls = []
 
@@ -375,7 +375,7 @@ def test_adaptive_retry_recurses_for_persistent_truncation(tmp_path):
 
     files = [tmp_path / f"f{i}.py" for i in range(8)]
     for f in files:
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
 
     calls = []
 
@@ -403,7 +403,7 @@ def test_adaptive_retry_caps_at_max_depth(tmp_path, capsys):
 
     files = [tmp_path / f"f{i}.py" for i in range(8)]
     for f in files:
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
 
     calls = []
 
@@ -429,7 +429,7 @@ def test_adaptive_retry_single_file_truncation_does_not_recurse(tmp_path, capsys
     from graphify.llm import _extract_with_adaptive_retry
 
     f = tmp_path / "huge.py"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
 
     calls = []
 
@@ -456,7 +456,7 @@ def test_corpus_parallel_uses_adaptive_retry(tmp_path):
 
     files = [tmp_path / f"f{i}.py" for i in range(4)]
     for f in files:
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
 
     calls = []
 

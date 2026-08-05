@@ -53,6 +53,7 @@ def path_alias() -> Iterator[Callable[[Path, Path], Path]]:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
         assert completed.returncode == 0, completed.stdout + completed.stderr
         junctions.append(junction)

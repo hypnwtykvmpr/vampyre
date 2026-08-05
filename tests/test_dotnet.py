@@ -76,7 +76,7 @@ def test_slnx_project_dependency():
 
 
 def test_slnx_invalid_xml():
-    with tempfile.NamedTemporaryFile(suffix=".slnx", mode="w", delete=False) as f:
+    with tempfile.NamedTemporaryFile(suffix=".slnx", mode="w", encoding="utf-8", delete=False) as f:
         f.write("<Solution><Project></Solution>")
         f.flush()
         r = extract_slnx(Path(f.name))
@@ -117,7 +117,9 @@ def test_csproj_sdk():
 
 
 def test_csproj_invalid_xml():
-    with tempfile.NamedTemporaryFile(suffix=".csproj", mode="w", delete=False) as f:
+    with tempfile.NamedTemporaryFile(
+        suffix=".csproj", mode="w", encoding="utf-8", delete=False
+    ) as f:
         f.write("<Project><Invalid></Project>")
         f.flush()
         r = extract_csproj(Path(f.name))
@@ -387,8 +389,8 @@ def test_xaml_event_match_requires_handler_signature():
     )
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "view.xaml"
-        p.write_text(xaml)
-        (Path(d) / "view.xaml.cs").write_text(cs)
+        p.write_text(xaml, encoding="utf-8")
+        (Path(d) / "view.xaml.cs").write_text(cs, encoding="utf-8")
         r = extract_xaml(p)
     assert "error" not in r
     assert _event_targets(r) == set()
@@ -413,8 +415,8 @@ def test_xaml_non_event_attribute_value_does_not_fabricate_event():
     )
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "view.xaml"
-        p.write_text(xaml)
-        (Path(d) / "view.xaml.cs").write_text(cs)
+        p.write_text(xaml, encoding="utf-8")
+        (Path(d) / "view.xaml.cs").write_text(cs, encoding="utf-8")
         r = extract_xaml(p)
     handlers = {
         n["label"].strip("()").lstrip("."): n["id"]

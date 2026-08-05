@@ -17,7 +17,9 @@ import pytest
 
 
 def _graphify(*args: str) -> str:
-    r = subprocess.run([sys.executable, "-m", "graphify", *args], capture_output=True, text=True)
+    r = subprocess.run(
+        [sys.executable, "-m", "graphify", *args], capture_output=True, text=True, encoding="utf-8"
+    )
     return r.stdout + r.stderr
 
 

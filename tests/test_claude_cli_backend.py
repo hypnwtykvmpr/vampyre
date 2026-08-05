@@ -118,7 +118,7 @@ def test_raises_on_garbage_envelope():
 
 def test_extract_files_direct_dispatches_to_claude_cli(tmp_path, fake_claude):
     f = tmp_path / "foo.md"
-    f.write_text("# Foo\n\nThe greet() helper formats a name.\n")
+    f.write_text("# Foo\n\nThe greet() helper formats a name.\n", encoding="utf-8")
     result = llm.extract_files_direct(files=[f], backend="claude-cli", root=tmp_path)
     assert fake_claude.called
     assert len(result["nodes"]) == 2

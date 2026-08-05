@@ -165,7 +165,7 @@ def test_to_json_includes_hyperedges():
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         path = f.name
     to_json(G, communities, path)
-    data = json.loads(Path(path).read_text())
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
     assert "hyperedges" in data
     assert len(data["hyperedges"]) == 1
     assert data["hyperedges"][0]["id"] == "auth_flow"
@@ -178,7 +178,7 @@ def test_to_json_hyperedges_empty_when_none():
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         path = f.name
     to_json(G, communities, path)
-    data = json.loads(Path(path).read_text())
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
     assert "hyperedges" in data
     assert data["hyperedges"] == []
 
@@ -197,7 +197,7 @@ def test_hyperedges_roundtrip_via_json_file():
     to_json(G, communities, path)
 
     # Reload the JSON as if build_from_json were called on it
-    data = json.loads(Path(path).read_text())
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
     G2 = build_from_json(
         {
             "nodes": [

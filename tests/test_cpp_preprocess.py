@@ -12,7 +12,7 @@ from graphify import extract
 
 def test_cpp_preprocess_passes_absolute_path(tmp_path, monkeypatch):
     f = tmp_path / "weird.F90"
-    f.write_text("program x\nend program x\n")
+    f.write_text("program x\nend program x\n", encoding="utf-8")
 
     captured = {}
 

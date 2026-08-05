@@ -34,7 +34,7 @@ def _write_graph(tmp_path):
         ],
     }
     p = tmp_path / "graph.json"
-    p.write_text(json.dumps(graph_data))
+    p.write_text(json.dumps(graph_data), encoding="utf-8")
     return p
 
 

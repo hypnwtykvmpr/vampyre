@@ -58,7 +58,7 @@ def _write_graph(tmp_path):
         ],
     }
     p = tmp_path / "graph.json"
-    p.write_text(json.dumps(graph_data))
+    p.write_text(json.dumps(graph_data), encoding="utf-8")
     return p
 
 
@@ -120,7 +120,7 @@ def test_explain_source_file_path_prefers_file_level_node(monkeypatch, tmp_path,
         ],
     }
     p = tmp_path / "graph.json"
-    p.write_text(json.dumps(graph_data))
+    p.write_text(json.dumps(graph_data), encoding="utf-8")
 
     out = _run(monkeypatch, p, source_file, capsys)
 

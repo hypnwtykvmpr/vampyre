@@ -60,18 +60,43 @@ def _raise_recursion_limit() -> None:
         sys.setrecursionlimit(_RECURSION_LIMIT)
 
 
+def _console_safe(text: str, stream) -> str:
+    """Keep diagnostics writable to strict legacy-encoded library streams."""
+    try:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+    except Exception:
+        encoding = "ascii"
+    try:
+        return text.encode(encoding, errors="backslashreplace").decode(encoding)
+    except (LookupError, TypeError):
+        return text.encode("ascii", errors="backslashreplace").decode("ascii")
+
+
+def _print_console(text: str, *, file=None, **kwargs) -> None:
+    stream = file if file is not None else sys.stdout
+    print(_console_safe(text, stream), file=stream, **kwargs)
+
+
 def _safe_extract(extractor: Callable, path: Path) -> dict:
     try:
         return extractor(path)
     except RecursionError:
-        print(f"  warning: skipped {path} (recursion limit exceeded)", file=sys.stderr, flush=True)
+        _print_console(
+            f"  warning: skipped {path} (recursion limit exceeded)",
+            file=sys.stderr,
+            flush=True,
+        )
         return {"nodes": [], "edges": [], "error": "recursion_limit_exceeded"}
     except Exception as e:
         if os.environ.get("GRAPHIFY_DEBUG"):
             import traceback
 
-            traceback.print_exc(file=sys.stderr)
-        print(f"  warning: skipped {path} ({type(e).__name__}: {e})", file=sys.stderr, flush=True)
+            _print_console(traceback.format_exc(), file=sys.stderr, end="")
+        _print_console(
+            f"  warning: skipped {path} ({type(e).__name__}: {e})",
+            file=sys.stderr,
+            flush=True,
+        )
         return {"nodes": [], "edges": [], "error": f"{type(e).__name__}: {e}"}
 
 
@@ -240,7 +265,7 @@ def _read_tsconfig_aliases(tsconfig: Path, base_dir: Path, seen: set) -> dict[st
     try:
         raw = tsconfig.read_text(encoding="utf-8")
     except Exception as e:
-        print(
+        _print_console(
             f"  warning: could not read {tsconfig} ({type(e).__name__}: {e})",
             file=sys.stderr,
             flush=True,
@@ -252,14 +277,14 @@ def _read_tsconfig_aliases(tsconfig: Path, base_dir: Path, seen: set) -> dict[st
         try:
             data = json.loads(_strip_jsonc(raw))
         except json.JSONDecodeError as e:
-            print(
+            _print_console(
                 f"  warning: failed to parse {tsconfig} as JSON/JSONC ({e.msg} at line {e.lineno} col {e.colno})",
                 file=sys.stderr,
                 flush=True,
             )
             return {}
     except Exception as e:
-        print(
+        _print_console(
             f"  warning: failed to parse {tsconfig} ({type(e).__name__}: {e})",
             file=sys.stderr,
             flush=True,
@@ -18005,7 +18030,7 @@ def _extract_parallel(
                         "edges": [],
                         "error": f"{type(exc).__name__}: {exc}",
                     }
-                    print(
+                    _print_console(
                         f"  warning: worker failed for {work_items[pos][1]}: {exc}",
                         file=sys.stderr,
                         flush=True,
@@ -18036,7 +18061,7 @@ def _extract_parallel(
         # ProcessPoolExecutor performs while starting. That is recoverable for
         # extraction: fall back to in-process sequential extraction instead of
         # failing the whole pipeline.
-        print(
+        _print_console(
             f"  warning: parallel extraction unavailable ({exc.__class__.__name__}: {exc}); "
             "falling back to sequential. Pass parallel=False to extract() to skip the pool "
             "entirely.",

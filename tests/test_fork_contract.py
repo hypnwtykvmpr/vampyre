@@ -14,7 +14,9 @@ from graphify.build import build_from_json
 
 
 def _graphify(*args: str) -> str:
-    r = subprocess.run([sys.executable, "-m", "graphify", *args], capture_output=True, text=True)
+    r = subprocess.run(
+        [sys.executable, "-m", "graphify", *args], capture_output=True, text=True, encoding="utf-8"
+    )
     return r.stdout + r.stderr
 
 
@@ -94,6 +96,7 @@ def test_private_agent_files_not_tracked() -> None:
         ["git", "-C", str(root), "ls-files", "AGENTS.md", "CLAUDE.md", "GEMINI.md"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     tracked = [ln for ln in r.stdout.splitlines() if ln.strip()]
     assert not tracked, f"private agent files re-tracked by an upstream merge: {tracked}"

@@ -24,7 +24,7 @@ PYTHON = sys.executable
 
 def _run(args, cwd):
     return subprocess.run(
-        [PYTHON, "-m", "graphify"] + args, cwd=cwd, capture_output=True, text=True
+        [PYTHON, "-m", "graphify"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8"
     )
 
 
@@ -39,7 +39,8 @@ def _write(p: Path, directed: bool, multigraph: bool, node_id: str):
                 "nodes": [{"id": node_id}],
                 "links": [],
             }
-        )
+        ),
+        encoding="utf-8",
     )
 
 
@@ -55,7 +56,7 @@ def test_merge_graphs_mixed_directed_and_multigraph(tmp_path):
     r = _run(["merge-graphs", str(a), str(b), str(c), "--out", str(out)], tmp_path)
     assert r.returncode == 0, f"merge crashed: {r.stderr}"
     assert out.exists()
-    data = json.loads(out.read_text())
+    data = json.loads(out.read_text(encoding="utf-8"))
     ids = {n["id"] for n in data["nodes"]}
     # every input's node survives, lifted into one common LOSSLESS class:
     # any-multi + any-directed => multidigraph (no silent collapse)
@@ -78,7 +79,7 @@ def test_merge_graphs_mixed_explicit_simple_collapses(tmp_path):
 
     r = _run(["merge-graphs", str(a), str(b), str(c), "--simple", "--out", str(out)], tmp_path)
     assert r.returncode == 0, f"merge crashed: {r.stderr}"
-    data = json.loads(out.read_text())
+    data = json.loads(out.read_text(encoding="utf-8"))
     ids = {n["id"] for n in data["nodes"]}
     assert {"r1::x", "r2::y", "r3::z"} <= ids or len(ids) == 3
     assert data.get("directed") is False

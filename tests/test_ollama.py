@@ -121,7 +121,9 @@ def test_ollama_api_key_sentinel(monkeypatch):
     with patch("graphify.llm._call_openai_compat", return_value=fake_result) as mock_call:
         from graphify.llm import extract_files_direct
 
-        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            suffix=".py", mode="w", encoding="utf-8", delete=False
+        ) as f:
             f.write("x = 1\n")
             tmp = Path(f.name)
         try:

@@ -464,10 +464,10 @@ def test_cache_hit_returns_same_result(tmp_path):
 
 def test_cache_miss_after_file_change(tmp_path):
     dst = tmp_path / "a.py"
-    dst.write_text("def foo(): pass\n")
+    dst.write_text("def foo(): pass\n", encoding="utf-8")
     extract([dst])
 
-    dst.write_text("def foo(): pass\ndef bar(): pass\n")
+    dst.write_text("def foo(): pass\ndef bar(): pass\n", encoding="utf-8")
     r2 = extract([dst])
     # bar() should appear in the second result
     labels2 = [n["label"] for n in r2["nodes"]]

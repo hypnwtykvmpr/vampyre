@@ -11,7 +11,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def make_graph():
-    return build_from_json(json.loads((FIXTURES / "extraction.json").read_text()))
+    return build_from_json(json.loads((FIXTURES / "extraction.json").read_text(encoding="utf-8")))
 
 
 def test_cluster_returns_dict():
@@ -270,7 +270,9 @@ def test_cluster_survives_malformed_edge_weights(weight_expr):
         "assert isinstance(c, dict) and c\n"
         "print('OK')\n"
     ) % (str(Path(__file__).resolve().parent.parent), weight_expr)
-    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300)
+    r = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=300, encoding="utf-8"
+    )
     assert r.returncode == 0, f"weight={weight_expr} crashed:\n{r.stdout}\n{r.stderr}"
     assert "OK" in r.stdout
 
@@ -383,6 +385,7 @@ def test_cluster_only_preserves_multigraph_class(tmp_path):
         capture_output=True,
         text=True,
         timeout=300,
+        encoding="utf-8",
     )
     assert r.returncode == 0, f"cluster-only failed:\n{r.stdout}\n{r.stderr}"
 
@@ -469,6 +472,7 @@ def test_cluster_only_preserves_graph_metadata_and_is_idempotent(tmp_path):
             capture_output=True,
             text=True,
             timeout=300,
+            encoding="utf-8",
         )
         assert r.returncode == 0, f"run {run} failed:\n{r.stdout}\n{r.stderr}"
         after = json.loads((out / "graph.json").read_text(encoding="utf-8"))

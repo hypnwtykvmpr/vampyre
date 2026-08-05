@@ -179,7 +179,9 @@ def _ci_icon(status: str) -> str:
 
 def _gh(*args: str) -> list | dict | None:
     try:
-        result = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            ["gh", *args], capture_output=True, text=True, timeout=30, encoding="utf-8"
+        )
         if result.returncode != 0:
             return None
         return json.loads(result.stdout)
@@ -207,6 +209,7 @@ def _detect_default_branch(repo: str | None = None) -> str:
             capture_output=True,
             text=True,
             timeout=5,
+            encoding="utf-8",
         )
         if result.returncode == 0:
             # refs/remotes/origin/main → main
@@ -281,7 +284,9 @@ def fetch_pr_files(number: int, repo: str | None = None) -> list[str]:
     if repo:
         args += ["--repo", repo]
     try:
-        result = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            ["gh", *args], capture_output=True, text=True, timeout=30, encoding="utf-8"
+        )
         if result.returncode != 0:
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -359,7 +364,11 @@ def fetch_worktrees() -> dict[str, str]:
     """Returns {branch: worktree_path}."""
     try:
         result = subprocess.run(
-            ["git", "worktree", "list", "--porcelain"], capture_output=True, text=True, timeout=10
+            ["git", "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            encoding="utf-8",
         )
         if result.returncode != 0:
             return {}
@@ -754,6 +763,7 @@ def triage_with_opus(prs: list[PRInfo], base: str) -> None:
                 capture_output=True,
                 text=True,
                 timeout=120,
+                encoding="utf-8",
             )
             if proc.returncode != 0:
                 print(red(f"  claude -p failed: {proc.stderr.strip()[:300]}"), file=sys.stderr)

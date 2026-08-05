@@ -50,7 +50,7 @@ def test_log_query_writes_jsonl(tmp_path, monkeypatch):
         depth=2,
     )
 
-    lines = log_file.read_text().splitlines()
+    lines = log_file.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     rec = json.loads(lines[0])
     assert rec["kind"] == "query"
@@ -71,7 +71,7 @@ def test_log_query_appends(tmp_path, monkeypatch):
     log_query(kind="query", question="q1", corpus="/g.json")
     log_query(kind="query", question="q2", corpus="/g.json")
 
-    lines = log_file.read_text().splitlines()
+    lines = log_file.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert json.loads(lines[0])["question"] == "q1"
     assert json.loads(lines[1])["question"] == "q2"
@@ -110,7 +110,7 @@ def test_responses_not_logged_by_default(tmp_path, monkeypatch):
 
     log_query(kind="query", question="q", corpus="/g.json", result="NODE foo")
 
-    rec = json.loads(log_file.read_text())
+    rec = json.loads(log_file.read_text(encoding="utf-8"))
     assert "response" not in rec
 
 
@@ -122,7 +122,7 @@ def test_responses_optin(tmp_path, monkeypatch):
 
     log_query(kind="query", question="q", corpus="/g.json", result="NODE foo bar")
 
-    rec = json.loads(log_file.read_text())
+    rec = json.loads(log_file.read_text(encoding="utf-8"))
     assert rec["response"] == "NODE foo bar"
 
 
@@ -164,7 +164,7 @@ def test_nodes_returned_inferred_from_result(tmp_path, monkeypatch):
 
     log_query(kind="query", question="q", corpus="/g.json", result="5 nodes found\nNODE a\nNODE b")
 
-    rec = json.loads(log_file.read_text())
+    rec = json.loads(log_file.read_text(encoding="utf-8"))
     assert rec["nodes_returned"] == 5
 
 
@@ -175,7 +175,7 @@ def test_explicit_nodes_returned_takes_precedence(tmp_path, monkeypatch):
 
     log_query(kind="path", question="A -> B", corpus="/g.json", nodes_returned=3)
 
-    rec = json.loads(log_file.read_text())
+    rec = json.loads(log_file.read_text(encoding="utf-8"))
     assert rec["nodes_returned"] == 3
 
 
@@ -186,7 +186,7 @@ def test_kind_mcp_query(tmp_path, monkeypatch):
 
     log_query(kind="mcp_query", question="q", corpus="/g.json")
 
-    rec = json.loads(log_file.read_text())
+    rec = json.loads(log_file.read_text(encoding="utf-8"))
     assert rec["kind"] == "mcp_query"
 
 

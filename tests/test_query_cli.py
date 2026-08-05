@@ -18,7 +18,7 @@ def _write_graph(tmp_path):
     G.add_edge("n1", "n2", relation="calls", confidence="EXTRACTED", context="call")
     G.add_edge("n2", "n3", relation="imports", confidence="EXTRACTED", context="import")
     graph_path = tmp_path / "graph.json"
-    graph_path.write_text(json.dumps(json_graph.node_link_data(G, edges="links")))
+    graph_path.write_text(json.dumps(json_graph.node_link_data(G, edges="links")), encoding="utf-8")
     return graph_path
 
 

@@ -74,7 +74,7 @@ def test_skill_roundtrip_at_real_destination(platform, project, tmp_path, monkey
         returned = mainmod._copy_skill_file(platform, project=project, project_dir=project_dir)
         assert returned == dst
         assert dst.exists(), f"{platform} ({'project' if project else 'user'}) skill not installed"
-        assert (dst.parent / ".graphify_version").read_text() == mainmod.__version__
+        assert (dst.parent / ".graphify_version").read_text(encoding="utf-8") == mainmod.__version__
 
         refs = dst.parent / "references"
         if _has_real_bundle(platform):
@@ -134,7 +134,9 @@ def test_vscode_install_uninstall_roundtrip(tmp_path, monkeypatch):
         assert skill.exists()
         assert instructions.exists()
         assert "## graphify" in instructions.read_text(encoding="utf-8")
-        assert (skill.parent / ".graphify_version").read_text() == mainmod.__version__
+        assert (skill.parent / ".graphify_version").read_text(
+            encoding="utf-8"
+        ) == mainmod.__version__
 
         mainmod.vscode_uninstall(project_dir=project_dir)
         assert not skill.exists()
@@ -234,8 +236,8 @@ def test_monolith_to_progressive_upgrade(tmp_path, fake_progressive_bundle):
 
     refs = skill_dir / "references"
     assert refs.is_dir()
-    assert (refs / "extraction-spec.md").read_text() == "# spec\n"
-    assert (skill_dir / ".graphify_version").read_text() == mainmod.__version__
+    assert (refs / "extraction-spec.md").read_text(encoding="utf-8") == "# spec\n"
+    assert (skill_dir / ".graphify_version").read_text(encoding="utf-8") == mainmod.__version__
     assert not (skill_dir / "references.tmp").exists()
 
 
@@ -305,4 +307,4 @@ def test_failed_copytree_leaves_no_partial_references(tmp_path, fake_progressive
     # (the swap only happens after a successful copytree).
     assert not (skill_dir / "references.tmp").exists()
     assert good.is_dir()
-    assert (good / "keep.md").read_text() == "keep\n"
+    assert (good / "keep.md").read_text(encoding="utf-8") == "keep\n"

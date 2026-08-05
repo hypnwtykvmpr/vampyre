@@ -11,13 +11,24 @@ from __future__ import annotations
 import subprocess
 import sys
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 PKG = REPO / "graphify"
 pytestmark = pytest.mark.xdist_group(name="wheel-build")
+
+
+def _artifact_id(path: PurePath, package_root: PurePath = PKG) -> str:
+    return path.relative_to(package_root).as_posix()
+
+
+def test_artifact_id_is_portable() -> None:
+    package_root = PureWindowsPath("C:/repo/graphify")
+    artifact = package_root / "skills" / "agents" / "references" / "update.md"
+
+    assert _artifact_id(artifact, package_root) == "skills/agents/references/update.md"
 
 
 def _skill_bodies() -> list[Path]:
@@ -59,6 +70,7 @@ def wheel_namelist(tmp_path_factory) -> set[str]:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     assert proc.returncode == 0, f"wheel build failed:\n{proc.stderr[-800:]}"
     wheels = list(out.glob("graphifyy-*.whl"))
@@ -70,7 +82,7 @@ def wheel_namelist(tmp_path_factory) -> set[str]:
 @pytest.mark.parametrize(
     "artifact",
     _expected_artifacts(),
-    ids=lambda p: str(p.relative_to(PKG)),
+    ids=_artifact_id,
 )
 def test_skill_artifact_ships_in_wheel(artifact: Path, wheel_namelist: set[str]) -> None:
     rel = "graphify/" + artifact.relative_to(PKG).as_posix()

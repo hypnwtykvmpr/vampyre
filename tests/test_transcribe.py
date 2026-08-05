@@ -75,7 +75,7 @@ def test_transcribe_uses_cache(tmp_path):
     out_dir = tmp_path / "transcripts"
     out_dir.mkdir()
     cached = out_dir / "lecture.txt"
-    cached.write_text("Cached transcript content.")
+    cached.write_text("Cached transcript content.", encoding="utf-8")
 
     result = transcribe(video, output_dir=out_dir)
     assert result == cached
@@ -87,7 +87,7 @@ def test_transcribe_force_reruns(tmp_path):
     video.write_bytes(b"fake")
     out_dir = tmp_path / "transcripts"
     out_dir.mkdir()
-    (out_dir / "talk.txt").write_text("Old transcript.")
+    (out_dir / "talk.txt").write_text("Old transcript.", encoding="utf-8")
 
     fake_segment = MagicMock()
     fake_segment.text = "New transcript segment."
@@ -100,7 +100,7 @@ def test_transcribe_force_reruns(tmp_path):
     with patch("graphify.transcribe._get_whisper", return_value=lambda *a, **kw: fake_model):
         result = transcribe(video, output_dir=out_dir, force=True)
 
-    assert result.read_text() == "New transcript segment."
+    assert result.read_text(encoding="utf-8") == "New transcript segment."
 
 
 def test_transcribe_missing_faster_whisper(tmp_path):
@@ -132,7 +132,7 @@ def test_transcribe_all_uses_cache(tmp_path):
     out_dir = tmp_path / "transcripts"
     out_dir.mkdir()
     cached = out_dir / "lecture.txt"
-    cached.write_text("Cached.")
+    cached.write_text("Cached.", encoding="utf-8")
 
     results = transcribe_all([str(video)], output_dir=out_dir)
     assert len(results) == 1

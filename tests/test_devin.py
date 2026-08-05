@@ -53,7 +53,7 @@ def test_devin_install_user_creates_skill_file(tmp_path):
 def test_devin_skill_file_contains_frontmatter(tmp_path):
     """Installed skill file must include Devin-specific YAML frontmatter."""
     _devin_install_user(tmp_path)
-    content = _skill_path_user(tmp_path).read_text()
+    content = _skill_path_user(tmp_path).read_text(encoding="utf-8")
     assert "name: graphify" in content
     assert "argument-hint:" in content
     assert "triggers:" in content
@@ -62,7 +62,7 @@ def test_devin_skill_file_contains_frontmatter(tmp_path):
 def test_devin_skill_file_references_graphify_query(tmp_path):
     """/graphify skill must mention graphify query (query-first policy)."""
     _devin_install_user(tmp_path)
-    content = _skill_path_user(tmp_path).read_text()
+    content = _skill_path_user(tmp_path).read_text(encoding="utf-8")
     assert "graphify query" in content or "/graphify query" in content
 
 
@@ -105,8 +105,8 @@ def test_devin_install_project_creates_rules_file(tmp_path, monkeypatch):
         main()
     rules = _rules_path(project)
     assert rules.exists()
-    assert "graphify" in rules.read_text()
-    assert "GRAPH_REPORT.md" in rules.read_text()
+    assert "graphify" in rules.read_text(encoding="utf-8")
+    assert "GRAPH_REPORT.md" in rules.read_text(encoding="utf-8")
 
 
 def test_devin_rules_content_recommends_graphify_query(tmp_path):
@@ -114,7 +114,7 @@ def test_devin_rules_content_recommends_graphify_query(tmp_path):
     from graphify.__main__ import _devin_rules_install
 
     _devin_rules_install(tmp_path)
-    content = _rules_path(tmp_path).read_text()
+    content = _rules_path(tmp_path).read_text(encoding="utf-8")
     assert "graphify query" in content
 
 
@@ -123,9 +123,9 @@ def test_devin_rules_install_idempotent(tmp_path, capsys):
     from graphify.__main__ import _devin_rules_install
 
     _devin_rules_install(tmp_path)
-    content_first = _rules_path(tmp_path).read_text()
+    content_first = _rules_path(tmp_path).read_text(encoding="utf-8")
     _devin_rules_install(tmp_path)
-    content_second = _rules_path(tmp_path).read_text()
+    content_second = _rules_path(tmp_path).read_text(encoding="utf-8")
     assert content_first == content_second
     assert "no change" in capsys.readouterr().out
 
@@ -227,7 +227,7 @@ def test_devin_uninstall_project_does_not_touch_user_scope(tmp_path, monkeypatch
     # Pre-create a user-scope skill file
     user_skill = _skill_path_user(home)
     user_skill.parent.mkdir(parents=True, exist_ok=True)
-    user_skill.write_text("user skill")
+    user_skill.write_text("user skill", encoding="utf-8")
     monkeypatch.chdir(project)
     with patch("graphify.__main__.Path.home", return_value=home):
         monkeypatch.setattr(sys, "argv", ["graphify", "devin", "install", "--project"])
@@ -266,7 +266,7 @@ def test_devin_skill_file_uses_python_c_syntax():
     """
     import graphify
 
-    skill = (Path(graphify.__file__).parent / "skill-devin.md").read_text()
+    skill = (Path(graphify.__file__).parent / "skill-devin.md").read_text(encoding="utf-8")
     assert '.graphify_python)" -c "' in skill, (
         "skill-devin.md must use the interpreter-detection pattern "
         '\'"$(cat graphify-out/.graphify_python)" -c "..."\''
@@ -278,7 +278,7 @@ def test_devin_skill_file_frontmatter_has_triggers():
     """Devin skill frontmatter must list triggers for model-invocable activation."""
     import graphify
 
-    skill = (Path(graphify.__file__).parent / "skill-devin.md").read_text()
+    skill = (Path(graphify.__file__).parent / "skill-devin.md").read_text(encoding="utf-8")
     assert "triggers:" in skill
     assert "model" in skill
 

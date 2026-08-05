@@ -1436,6 +1436,8 @@ def save_manifest(
     kind: str = "both",
     root: Path | None = None,
     expected_hashes: dict[str, str] | None = None,
+    prune_files: list[str] | set[str] | None = None,
+    replace: bool = False,
 ) -> None:
     """Save current file mtimes + content hashes for change detection.
 
@@ -1451,8 +1453,23 @@ def save_manifest(
     machines and checkout locations (#777). Out-of-root entries are written
     as absolute so they continue to round-trip on the saving machine.
     When ``root`` is None the legacy absolute-keyed format is preserved.
+
+    ``prune_files`` removes entries that were explicitly deleted or excluded
+    from the current corpus. This is distinct from subset updates, which still
+    preserve every untouched manifest entry.
+
+    ``replace`` declares that ``files`` is a complete corpus snapshot. Existing
+    entries not present in that snapshot are omitted even when they still exist
+    on disk, which is required after ignore rules change.
     """
     existing = load_manifest(manifest_path, root=root)
+
+    prune_keys: set[str] = set()
+    for key in prune_files or []:
+        prune_keys.add(key)
+        if root is not None:
+            prune_keys.add(_to_absolute_from_storage(key, root))
+            prune_keys.add(_to_relative_for_storage(key, root))
 
     def _normalise_entry(entry):
         if isinstance(entry, (int, float)):
@@ -1468,15 +1485,19 @@ def save_manifest(
     # Prune entries whose file no longer exists on disk — those are genuine
     # deletions that detect_incremental() should treat as gone.
     manifest: dict[str, dict] = {}
-    for f, entry in existing.items():
-        normalised = _normalise_entry(entry)
-        if normalised is None:
-            continue
-        try:
-            if Path(f).exists():
-                manifest[f] = normalised
-        except OSError:
-            continue
+    if not replace:
+        for f, entry in existing.items():
+            storage_key = _to_relative_for_storage(f, root) if root is not None else f
+            if f in prune_keys or storage_key in prune_keys:
+                continue
+            normalised = _normalise_entry(entry)
+            if normalised is None:
+                continue
+            try:
+                if Path(f).exists():
+                    manifest[f] = normalised
+            except OSError:
+                continue
 
     all_files = [f for file_list in files.values() for f in file_list]
     with ThreadPoolExecutor() as pool:

@@ -117,6 +117,7 @@ def _run_gws_export(
         cwd=output.parent,
         text=True,
         timeout=timeout,
+        encoding="utf-8",
     )
     if result.returncode != 0:
         stderr = (result.stderr or result.stdout or "").strip()

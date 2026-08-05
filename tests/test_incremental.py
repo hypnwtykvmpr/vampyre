@@ -39,14 +39,17 @@ def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         env=env,
+        encoding="utf-8",
     )
 
 
 def _make_docs_corpus(tmp_path: Path) -> Path:
     docs = tmp_path / "docs"
     docs.mkdir()
-    (docs / "intro.md").write_text("# Introduction\nThis doc introduces the system.")
-    (docs / "api.md").write_text("# API Reference\nThe API has endpoints.")
+    (docs / "intro.md").write_text(
+        "# Introduction\nThis doc introduces the system.", encoding="utf-8"
+    )
+    (docs / "api.md").write_text("# API Reference\nThe API has endpoints.", encoding="utf-8")
     return docs
 
 
@@ -66,8 +69,10 @@ def test_incremental_mode_detected_via_manifest(tmp_path):
     docs = _make_docs_corpus(tmp_path)
     out = docs / "graphify-out"
     out.mkdir()
-    (out / "graph.json").write_text(json.dumps({"nodes": [], "links": []}))
-    (out / "manifest.json").write_text(json.dumps({"document": [str(docs / "intro.md")]}))
+    (out / "graph.json").write_text(json.dumps({"nodes": [], "links": []}), encoding="utf-8")
+    (out / "manifest.json").write_text(
+        json.dumps({"document": [str(docs / "intro.md")]}), encoding="utf-8"
+    )
     r = _run(["extract", str(docs)], tmp_path)
     combined = r.stdout + r.stderr
     assert "incremental" in combined.lower() or r.returncode != 0
@@ -122,6 +127,7 @@ def test_bare_update_resolves_portable_marker_from_unrelated_cwd(tmp_path):
         capture_output=True,
         text=True,
         env=env,
+        encoding="utf-8",
     )
     assert initial.returncode == 0, initial.stderr
     marker = output / ".graphify_root"
@@ -134,6 +140,7 @@ def test_bare_update_resolves_portable_marker_from_unrelated_cwd(tmp_path):
         capture_output=True,
         text=True,
         env=env,
+        encoding="utf-8",
     )
 
     assert updated.returncode == 0, updated.stderr
@@ -479,6 +486,7 @@ def test_update_out_respects_process_bound_graphify_out(tmp_path):
         capture_output=True,
         text=True,
         env=env,
+        encoding="utf-8",
     )
     assert initial.returncode == 0, initial.stderr
     source.write_text("def run():\n    return 2\n", encoding="utf-8")
@@ -498,6 +506,7 @@ def test_update_out_respects_process_bound_graphify_out(tmp_path):
         capture_output=True,
         text=True,
         env=env,
+        encoding="utf-8",
     )
 
     assert updated.returncode == 0, updated.stderr
@@ -510,7 +519,7 @@ def test_update_out_respects_process_bound_graphify_out(tmp_path):
 
 
 def _edges(graph_json: Path) -> list[dict]:
-    g = json.loads(graph_json.read_text())
+    g = json.loads(graph_json.read_text(encoding="utf-8"))
     return g.get("links", g.get("edges", []))
 
 
@@ -521,8 +530,10 @@ def test_update_prunes_a_removed_imports_edge(tmp_path):
     proj = tmp_path / "proj"
     pkg = proj / "pkg"
     pkg.mkdir(parents=True)
-    (pkg / "b.py").write_text("def helper():\n    return 1\n")
-    (pkg / "a.py").write_text("from pkg.b import helper\ndef use():\n    return helper()\n")
+    (pkg / "b.py").write_text("def helper():\n    return 1\n", encoding="utf-8")
+    (pkg / "a.py").write_text(
+        "from pkg.b import helper\ndef use():\n    return helper()\n", encoding="utf-8"
+    )
 
     # initial extract -> the import edge a -> b exists
     r1 = _run(["extract", str(proj), "--no-cluster"], tmp_path)
@@ -536,7 +547,7 @@ def test_update_prunes_a_removed_imports_edge(tmp_path):
     ), f"expected an import edge from a.py initially: {before}"
 
     # remove the import, then update
-    (pkg / "a.py").write_text("def use():\n    return 1\n")
+    (pkg / "a.py").write_text("def use():\n    return 1\n", encoding="utf-8")
     r2 = _run(["update", str(proj)], tmp_path)
     assert r2.returncode == 0, r2.stderr
     after = _edges(gj)

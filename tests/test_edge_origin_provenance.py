@@ -275,6 +275,7 @@ def test_cli_semantic_merge_stamps_cached_edges(tmp_path):
         capture_output=True,
         text=True,
         timeout=300,
+        encoding="utf-8",
     )
     assert proc.returncode == 0, f"extract failed:\n{proc.stdout}\n{proc.stderr}"
     assert "semantic cache: 1 hit" in proc.stdout, (

@@ -433,6 +433,7 @@ def _hooks_dir(root: Path) -> Path:
             ["git", "-C", str(root), "rev-parse", "--git-path", "hooks"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
         raw = res.stdout.strip()
         # A valid hooks path can never contain newlines or NUL. Their presence

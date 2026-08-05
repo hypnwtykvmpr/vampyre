@@ -20,7 +20,7 @@ def _calls(tmp_path, files: dict[str, str]):
     for name, body in files.items():
         p = tmp_path / name
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(body)
+        p.write_text(body, encoding="utf-8")
     old = os.getcwd()
     try:
         os.chdir(tmp_path)

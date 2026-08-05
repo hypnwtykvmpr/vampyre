@@ -510,7 +510,7 @@ def test_load_graph_roundtrip(tmp_path):
     G = _make_graph()
     data = json_graph.node_link_data(G, edges="links")
     p = tmp_path / "graph.json"
-    p.write_text(json.dumps(data))
+    p.write_text(json.dumps(data), encoding="utf-8")
     G2 = _load_graph(str(p))
     assert G2.number_of_nodes() == G.number_of_nodes()
     assert G2.number_of_edges() == G.number_of_edges()
@@ -528,7 +528,7 @@ def test_load_graph_rejects_oversized_file(monkeypatch, tmp_path, capsys):
     G = _make_graph()
     data = json_graph.node_link_data(G, edges="links")
     p = tmp_path / "graph.json"
-    p.write_text(json.dumps(data))
+    p.write_text(json.dumps(data), encoding="utf-8")
     monkeypatch.setattr("graphify.security._MAX_GRAPH_FILE_BYTES", 16)
     with pytest.raises(SystemExit):
         _load_graph(str(p))
@@ -542,7 +542,7 @@ def test_load_graph_accepts_under_cap(monkeypatch, tmp_path):
     G = _make_graph()
     data = json_graph.node_link_data(G, edges="links")
     p = tmp_path / "graph.json"
-    p.write_text(json.dumps(data))
+    p.write_text(json.dumps(data), encoding="utf-8")
     # Cap well above the actual file size — load proceeds.
     monkeypatch.setattr("graphify.security._MAX_GRAPH_FILE_BYTES", 10 * 1024 * 1024)
     G2 = _load_graph(str(p))

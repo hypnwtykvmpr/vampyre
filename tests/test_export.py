@@ -15,7 +15,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def make_graph() -> nx.Graph:
-    graph = build_from_json(json.loads((FIXTURES / "extraction.json").read_text()))
+    graph = build_from_json(json.loads((FIXTURES / "extraction.json").read_text(encoding="utf-8")))
     assert type(graph) is nx.Graph
     return graph
 
@@ -35,7 +35,7 @@ def test_to_json_valid_json():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.json"
         to_json(G, communities, str(out))
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert "nodes" in data
         assert "links" in data
 
@@ -46,7 +46,7 @@ def test_to_json_nodes_have_community():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.json"
         to_json(G, communities, str(out))
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         for node in data["nodes"]:
             assert "community" in node
 
@@ -83,7 +83,7 @@ def test_to_cypher_contains_merge_statements():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "cypher.txt"
         to_cypher(G, str(out))
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
         assert "MERGE" in content
 
 
@@ -102,7 +102,7 @@ def test_to_graphml_valid_xml():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.graphml"
         to_graphml(G, communities, str(out))
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
         assert "<graphml" in content
         assert "<node" in content
 
@@ -113,7 +113,7 @@ def test_to_graphml_has_community_attribute():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.graphml"
         to_graphml(G, communities, str(out))
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
         assert "community" in content
 
 
@@ -131,7 +131,7 @@ def test_to_graphml_tolerates_none_attribute_values():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.graphml"
         to_graphml(G, communities, str(out))  # must not raise
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
         assert "<graphml" in content
 
 
@@ -150,7 +150,7 @@ def test_to_html_contains_visjs():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.html"
         to_html(G, communities, str(out))
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
         assert "vis-network" in content
 
 
@@ -168,7 +168,7 @@ def test_to_html_pins_visjs_version_with_sri():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.html"
         to_html(G, communities, str(out))
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
 
     # Versioned URL — unversioned `vis-network/standalone/...` is rejected.
     assert "vis-network@9.1.6/standalone/umd/vis-network.min.js" in content
@@ -190,7 +190,7 @@ def test_to_html_contains_search():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.html"
         to_html(G, communities, str(out))
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
         assert "search" in content.lower()
 
 
@@ -201,7 +201,7 @@ def test_to_html_contains_legend_with_labels():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.html"
         to_html(G, communities, str(out), community_labels=labels)
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
         assert "Group 0" in content
 
 
@@ -211,7 +211,7 @@ def test_to_html_contains_nodes_and_edges():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.html"
         to_html(G, communities, str(out))
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
         assert "RAW_NODES" in content
         assert "RAW_EDGES" in content
 
@@ -245,7 +245,7 @@ def test_to_html_annotated_node_gets_learning_status_and_ring():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.html"
         to_html(G, communities, str(out), learning_overlay=overlay)
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
     nodes = {n["id"]: n for n in _vis_nodes_from_html(content)}
     ann = nodes["n_transformer"]
     assert ann["learning_status"] == "preferred"
@@ -274,7 +274,7 @@ def test_to_html_contested_stale_node_gets_dashed_desaturated_ring():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.html"
         to_html(G, communities, str(out), learning_overlay=overlay)
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
     ann = {n["id"]: n for n in _vis_nodes_from_html(content)}["n_transformer"]
     assert ann["learning_status"] == "contested"
     assert ann["learning_stale"] is True
@@ -294,8 +294,8 @@ def test_to_html_unannotated_identical_to_pre_feature():
         to_html(G, communities, str(a))
         to_html(G, communities, str(b), learning_overlay={})
         # Output path appears in the title, so compare with paths normalized out.
-        ca = a.read_text().replace("a.html", "X.html")
-        cb = b.read_text().replace("b.html", "X.html")
+        ca = a.read_text(encoding="utf-8").replace("a.html", "X.html")
+        cb = b.read_text(encoding="utf-8").replace("b.html", "X.html")
     assert ca == cb
     assert "learning_status" not in ca
 
@@ -307,7 +307,7 @@ def test_to_canvas_file_paths_relative_to_vault():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.canvas"
         to_canvas(G, communities, str(out))
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         file_nodes = [n for n in data["nodes"] if n.get("type") == "file"]
         assert file_nodes, "canvas should contain file nodes"
         for node in file_nodes:
@@ -322,7 +322,7 @@ def test_to_canvas_no_communities_still_populates():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.canvas"
         to_canvas(G, {}, str(out))  # no community data — the bug condition
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert len(data["nodes"]) >= G.number_of_nodes()
         assert len(data["edges"]) >= 1
         assert out.stat().st_size > 32
@@ -354,7 +354,7 @@ def test_to_canvas_node_grid_matches_box_columns():
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "graph.canvas"
             to_canvas(G, communities, str(out))
-            data = json.loads(out.read_text())
+            data = json.loads(out.read_text(encoding="utf-8"))
 
         group = next(g for g in data["nodes"] if g.get("type") == "group")
         cards = [c for c in data["nodes"] if c.get("type") == "file"]
@@ -420,7 +420,7 @@ def test_to_canvas_never_emits_punctuation_only_filenames():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.canvas"
         to_canvas(G, communities, str(out))
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         file_nodes = [n for n in data["nodes"] if n.get("type") == "file"]
         assert file_nodes, "canvas has no file nodes"
         bad = [
@@ -483,8 +483,10 @@ def test_to_obsidian_preserves_existing_user_notes_and_obsidian_config():
         (vault / ".obsidian" / "graph.json").write_text('{"USER":"settings"}', encoding="utf-8")
         to_obsidian(G, communities, str(vault), community_labels={0: "Backend"})
         # user content untouched
-        assert "MY NOTES" in (vault / "Database.md").read_text()
-        assert json.loads((vault / ".obsidian" / "graph.json").read_text()) == {"USER": "settings"}
+        assert "MY NOTES" in (vault / "Database.md").read_text(encoding="utf-8")
+        assert json.loads((vault / ".obsidian" / "graph.json").read_text(encoding="utf-8")) == {
+            "USER": "settings"
+        }
         # non-colliding graphify note still written
         assert (vault / "Server.md").exists()
 
@@ -510,7 +512,9 @@ def test_to_obsidian_rerun_updates_own_notes_but_not_user_files():
         (out / "UserNote.md").write_text("mine\n", encoding="utf-8")
         to_obsidian(G, communities, str(out), community_labels={0: "Backend2"})
         assert (out / "Database.md").exists()  # graphify re-wrote its own
-        assert (out / "UserNote.md").read_text().strip() == "mine"  # user's untouched
+        assert (out / "UserNote.md").read_text(
+            encoding="utf-8"
+        ).strip() == "mine"  # user's untouched
 
 
 def test_to_obsidian_ownership_manifest_is_atomically_replaced(monkeypatch, tmp_path):
@@ -603,7 +607,7 @@ def test_to_canvas_case_only_distinct_labels_get_distinct_files():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.canvas"
         to_canvas(G, communities, str(out))
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         files = [n["file"] for n in data["nodes"] if n.get("type") == "file"]
         lowered = [f.lower() for f in files]
         assert len(set(lowered)) == len(lowered), files
@@ -622,7 +626,7 @@ def test_obsidian_canvas_filenames_agree():
         }
         out = Path(tmp) / "graph.canvas"
         to_canvas(G, communities, str(out))
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         canvas_stems = {Path(n["file"]).stem for n in data["nodes"] if n.get("type") == "file"}
         assert canvas_stems <= note_stems, (sorted(canvas_stems), sorted(note_stems))
 
@@ -664,7 +668,7 @@ def test_backup_no_markers(tmp_path):
     """graph.json present but no sentinel and no curated labels → no backup."""
     from graphify.export import backup_if_protected
 
-    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
+    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}', encoding="utf-8")
     assert backup_if_protected(tmp_path) is None
 
 
@@ -672,9 +676,9 @@ def test_backup_semantic_marker(tmp_path):
     """graph.json + .graphify_semantic_marker → backup taken."""
     from graphify.export import backup_if_protected
 
-    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
-    (tmp_path / "GRAPH_REPORT.md").write_text("# Report")
-    (tmp_path / ".graphify_semantic_marker").write_text('{"output_tokens": 1234}')
+    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}', encoding="utf-8")
+    (tmp_path / "GRAPH_REPORT.md").write_text("# Report", encoding="utf-8")
+    (tmp_path / ".graphify_semantic_marker").write_text('{"output_tokens": 1234}', encoding="utf-8")
     result = backup_if_protected(tmp_path)
     assert result is not None
     assert result.is_dir()
@@ -688,9 +692,9 @@ def test_backup_curated_labels(tmp_path):
     import json
     from graphify.export import backup_if_protected
 
-    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
+    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}', encoding="utf-8")
     (tmp_path / ".graphify_labels.json").write_text(
-        json.dumps({"0": "Auth Pipeline", "1": "Community 1"})
+        json.dumps({"0": "Auth Pipeline", "1": "Community 1"}), encoding="utf-8"
     )
     result = backup_if_protected(tmp_path)
     assert result is not None
@@ -701,9 +705,9 @@ def test_backup_default_labels_only(tmp_path):
     import json
     from graphify.export import backup_if_protected
 
-    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
+    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}', encoding="utf-8")
     (tmp_path / ".graphify_labels.json").write_text(
-        json.dumps({"0": "Community 0", "1": "Community 1"})
+        json.dumps({"0": "Community 0", "1": "Community 1"}), encoding="utf-8"
     )
     assert backup_if_protected(tmp_path) is None
 
@@ -713,8 +717,8 @@ def test_backup_same_day_no_accumulation(tmp_path):
     from graphify.export import backup_if_protected
     from datetime import date
 
-    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
-    (tmp_path / ".graphify_semantic_marker").write_text("{}")
+    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}', encoding="utf-8")
+    (tmp_path / ".graphify_semantic_marker").write_text("{}", encoding="utf-8")
     b1 = backup_if_protected(tmp_path)
     b2 = backup_if_protected(tmp_path)
     assert b1 is not None and b2 is not None
@@ -726,14 +730,14 @@ def test_backup_same_day_changed_content(tmp_path):
     """Changed graph.json on same day overwrites the existing backup in place."""
     from graphify.export import backup_if_protected
 
-    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
-    (tmp_path / ".graphify_semantic_marker").write_text("{}")
+    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}', encoding="utf-8")
+    (tmp_path / ".graphify_semantic_marker").write_text("{}", encoding="utf-8")
     b1 = backup_if_protected(tmp_path)
-    (tmp_path / "graph.json").write_text('{"nodes":[{"id":"x"}],"links":[]}')
+    (tmp_path / "graph.json").write_text('{"nodes":[{"id":"x"}],"links":[]}', encoding="utf-8")
     b2 = backup_if_protected(tmp_path)
     assert b2 is not None
     assert b1 == b2  # still one folder per day
-    assert (b2 / "graph.json").read_text() == '{"nodes":[{"id":"x"}],"links":[]}'
+    assert (b2 / "graph.json").read_text(encoding="utf-8") == '{"nodes":[{"id":"x"}],"links":[]}'
 
 
 def test_backup_env_disable(tmp_path, monkeypatch):
@@ -741,8 +745,8 @@ def test_backup_env_disable(tmp_path, monkeypatch):
     from graphify.export import backup_if_protected
 
     monkeypatch.setenv("GRAPHIFY_NO_BACKUP", "1")
-    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}')
-    (tmp_path / ".graphify_semantic_marker").write_text("{}")
+    (tmp_path / "graph.json").write_text('{"nodes":[],"links":[]}', encoding="utf-8")
+    (tmp_path / ".graphify_semantic_marker").write_text("{}", encoding="utf-8")
     assert backup_if_protected(tmp_path) is None
 
 

@@ -57,7 +57,7 @@ def test_dedupe_nodes_collapses_by_id_last_wins():
 
 
 def load_extraction():
-    return json.loads((FIXTURES / "extraction.json").read_text())
+    return json.loads((FIXTURES / "extraction.json").read_text(encoding="utf-8"))
 
 
 def test_build_from_json_node_count():
@@ -453,7 +453,7 @@ def test_build_merge_preserves_call_edge_direction(tmp_path):
     # iteration, which is the wrong direction for `calls` (a calls b).
     src = "function b() {}\nfunction a() { b(); }\n"
     src_file = tmp_path / "x.js"
-    src_file.write_text(src)
+    src_file.write_text(src, encoding="utf-8")
 
     extraction = extract_js(src_file)
     assert "error" not in extraction
@@ -475,7 +475,7 @@ def test_build_merge_preserves_call_edge_direction(tmp_path):
     assert to_json(G1, communities, str(graph_path), force=True)
 
     # Verify direction is correct in the freshly written JSON.
-    saved = json.loads(graph_path.read_text())
+    saved = json.loads(graph_path.read_text(encoding="utf-8"))
     saved_calls = [
         e for e in saved.get("links", saved.get("edges", [])) if e.get("relation") == "calls"
     ]
@@ -488,7 +488,7 @@ def test_build_merge_preserves_call_edge_direction(tmp_path):
     assert to_json(G2, communities, str(graph_path), force=True)
 
     # The calls edge must still go a -> b, not b -> a.
-    reloaded = json.loads(graph_path.read_text())
+    reloaded = json.loads(graph_path.read_text(encoding="utf-8"))
     reloaded_calls = [
         e for e in reloaded.get("links", reloaded.get("edges", [])) if e.get("relation") == "calls"
     ]
@@ -586,7 +586,7 @@ def test_build_from_json_preserves_first_direction_on_bidirectional_pair(tmp_pat
 
     graph_path = tmp_path / "graph.json"
     assert to_json(G, {}, str(graph_path), force=True)
-    saved = json.loads(graph_path.read_text())
+    saved = json.loads(graph_path.read_text(encoding="utf-8"))
     saved_calls = [
         e for e in saved.get("links", saved.get("edges", [])) if e.get("relation") == "calls"
     ]

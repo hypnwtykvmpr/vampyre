@@ -107,7 +107,7 @@ def test_confidence_score_round_trip():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.json"
         to_json(G, communities, str(out))
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
 
     # to_json uses node_link_data which puts edges in "links"
     links = data.get("links", [])
@@ -155,7 +155,7 @@ def test_to_json_defaults_missing_confidence_score():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.json"
         to_json(G, communities, str(out))
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
 
     links_by_conf = {}
     for link in data.get("links", []):

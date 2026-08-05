@@ -76,7 +76,7 @@ def test_install_platform_agents_writes_user_global_skill_only(tmp_path, platfor
 
     skill = home / ".agents" / "skills" / "graphify" / "SKILL.md"
     assert skill.exists()
-    assert (skill.parent / ".graphify_version").read_text() == mainmod.__version__
+    assert (skill.parent / ".graphify_version").read_text(encoding="utf-8") == mainmod.__version__
     assert (skill.parent / "references" / "extraction-spec.md").exists()
     # Skill-only: the --platform path must not write an AGENTS.md.
     assert not (cwd / "AGENTS.md").exists()

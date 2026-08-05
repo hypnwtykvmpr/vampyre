@@ -48,6 +48,7 @@ def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
         cwd=cwd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
 
 
@@ -589,7 +590,7 @@ def test_cli_reflect_groups_by_community_when_graph_present(tmp_path):
     LABEL (what save-result records), not its id (regression guard: keying community
     lookup on ids alone collapsed every lesson into Uncategorized)."""
     out = _make_graph(tmp_path)
-    graph = json.loads((out / "graph.json").read_text())
+    graph = json.loads((out / "graph.json").read_text(encoding="utf-8"))
     node_label = graph["nodes"][0]["label"]
 
     _run(
@@ -622,7 +623,7 @@ def test_cli_node_existence_gate_drops_stale_node_end_to_end(tmp_path):
     # Cite the node by its LABEL — what an agent/`save-result` actually records —
     # not its id. The gate must match labels too, else every real citation is
     # silently dropped whenever a graph is present (regression guard).
-    real = json.loads((out / "graph.json").read_text())["nodes"][0]["label"]
+    real = json.loads((out / "graph.json").read_text(encoding="utf-8"))["nodes"][0]["label"]
 
     _run(
         [
@@ -654,7 +655,7 @@ def _make_graph(tmp_path: Path) -> Path:
     """
     out = tmp_path / "graphify-out"
     out.mkdir()
-    extraction = json.loads((FIXTURES / "extraction.json").read_text())
+    extraction = json.loads((FIXTURES / "extraction.json").read_text(encoding="utf-8"))
     from graphify.build import build_from_json
     from graphify.cluster import cluster, score_all
     from graphify.analyze import god_nodes, surprising_connections
@@ -674,10 +675,11 @@ def _make_graph(tmp_path: Path) -> Path:
                 "gods": gods,
                 "surprises": surprises,
             }
-        )
+        ),
+        encoding="utf-8",
     )
     (out / ".graphify_labels.json").write_text(
-        json.dumps({str(cid): f"Community {cid}" for cid in communities})
+        json.dumps({str(cid): f"Community {cid}" for cid in communities}), encoding="utf-8"
     )
     return out
 
@@ -762,7 +764,7 @@ def test_cli_reflect_if_stale_skips_when_fresh(tmp_path):
     """`reflect --if-stale` skips the rebuild when LESSONS.md is already current,
     and still runs when a new outcome arrives."""
     out = _make_graph(tmp_path)
-    real = json.loads((out / "graph.json").read_text())["nodes"][0]["label"]
+    real = json.loads((out / "graph.json").read_text(encoding="utf-8"))["nodes"][0]["label"]
     _run(
         ["save-result", "--question", "q", "--answer", "a", "--nodes", real, "--outcome", "useful"],
         tmp_path,
@@ -801,7 +803,7 @@ def test_cli_reflect_if_stale_skips_when_fresh(tmp_path):
 def test_cli_reflect_if_stale_reruns_when_labels_newer(tmp_path):
     """A label refresh changes LESSONS.md topic headings, so --if-stale must rebuild."""
     out = _make_graph(tmp_path)
-    graph_data = json.loads((out / "graph.json").read_text())
+    graph_data = json.loads((out / "graph.json").read_text(encoding="utf-8"))
     node = graph_data["nodes"][0]
     real = node["label"]
     community = str(node["community"])

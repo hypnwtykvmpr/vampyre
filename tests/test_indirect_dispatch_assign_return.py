@@ -15,7 +15,7 @@ from graphify.extract import extract_python
 
 
 def _extract(tmp_path, src):
-    (tmp_path / "m.py").write_text(src)
+    (tmp_path / "m.py").write_text(src, encoding="utf-8")
     r = extract_python(tmp_path / "m.py")
     nid = {n["label"].rstrip("()"): n["id"] for n in r["nodes"]}
     return r, nid

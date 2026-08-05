@@ -58,7 +58,7 @@ def test_codebuddy_install_user_creates_skill_file(tmp_path):
 def test_codebuddy_skill_file_contains_frontmatter(tmp_path):
     """Installed skill file must include graphify YAML frontmatter."""
     _codebuddy_install_user(tmp_path)
-    content = _skill_path_user(tmp_path).read_text()
+    content = _skill_path_user(tmp_path).read_text(encoding="utf-8")
     assert "name: graphify" in content
     assert "description:" in content
 
@@ -66,7 +66,7 @@ def test_codebuddy_skill_file_contains_frontmatter(tmp_path):
 def test_codebuddy_skill_file_references_graphify_query(tmp_path):
     """/graphify skill must mention graphify query (query-first policy)."""
     _codebuddy_install_user(tmp_path)
-    content = _skill_path_user(tmp_path).read_text()
+    content = _skill_path_user(tmp_path).read_text(encoding="utf-8")
     assert "graphify query" in content or "/graphify query" in content
 
 
@@ -82,7 +82,7 @@ def test_codebuddy_install_project_writes_codebuddy_md(tmp_path):
     codebuddy_install(tmp_path)
     md = _codebuddy_md_path(tmp_path)
     assert md.exists()
-    content = md.read_text()
+    content = md.read_text(encoding="utf-8")
     assert "## graphify" in content
     assert "graphify-out/" in content
 
@@ -94,7 +94,7 @@ def test_codebuddy_install_project_writes_hook(tmp_path):
     codebuddy_install(tmp_path)
     settings_path = _settings_path(tmp_path)
     assert settings_path.exists()
-    settings = json.loads(settings_path.read_text())
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
     hooks = settings["hooks"]["PreToolUse"]
     assert any("graphify" in str(h) for h in hooks)
 
@@ -104,7 +104,7 @@ def test_codebuddy_install_hook_has_bash_matcher(tmp_path):
     from graphify.__main__ import codebuddy_install
 
     codebuddy_install(tmp_path)
-    settings = json.loads(_settings_path(tmp_path).read_text())
+    settings = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
     hooks = settings["hooks"]["PreToolUse"]
     bash_hooks = [h for h in hooks if h.get("matcher") == "Bash"]
     assert any("graphify" in str(h) for h in bash_hooks)
@@ -115,7 +115,7 @@ def test_codebuddy_install_hook_has_read_glob_matcher(tmp_path):
     from graphify.__main__ import codebuddy_install
 
     codebuddy_install(tmp_path)
-    settings = json.loads(_settings_path(tmp_path).read_text())
+    settings = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
     hooks = settings["hooks"]["PreToolUse"]
     read_hooks = [h for h in hooks if h.get("matcher") == "Read|Glob"]
     assert any("graphify" in str(h) for h in read_hooks)
@@ -128,7 +128,7 @@ def test_codebuddy_install_idempotent(tmp_path):
     codebuddy_install(tmp_path)
     codebuddy_install(tmp_path)
     md = _codebuddy_md_path(tmp_path)
-    assert md.read_text().count("## graphify") == 1
+    assert md.read_text(encoding="utf-8").count("## graphify") == 1
 
 
 def test_codebuddy_install_upgrades_stale_section(tmp_path):
@@ -137,9 +137,9 @@ def test_codebuddy_install_upgrades_stale_section(tmp_path):
 
     # Write a stale section manually
     md = _codebuddy_md_path(tmp_path)
-    md.write_text("old content\n\n## graphify\nThis is old instructions\n")
+    md.write_text("old content\n\n## graphify\nThis is old instructions\n", encoding="utf-8")
     codebuddy_install(tmp_path)
-    content = md.read_text()
+    content = md.read_text(encoding="utf-8")
     assert _CODEBUDDY_MD_MARKER in content
     assert "old content" in content
     assert "This is old instructions" not in content
@@ -151,9 +151,9 @@ def test_codebuddy_install_merges_existing_codebuddy_md(tmp_path):
     """Install appends to an existing CODEBUDDY.md, preserving other content."""
     from graphify.__main__ import codebuddy_install
 
-    _codebuddy_md_path(tmp_path).write_text("# My project rules\n")
+    _codebuddy_md_path(tmp_path).write_text("# My project rules\n", encoding="utf-8")
     codebuddy_install(tmp_path)
-    content = _codebuddy_md_path(tmp_path).read_text()
+    content = _codebuddy_md_path(tmp_path).read_text(encoding="utf-8")
     assert "# My project rules" in content
     assert "## graphify" in content
     assert "graphify-out/" in content
@@ -216,7 +216,7 @@ def test_codebuddy_uninstall_removes_hook(tmp_path):
     codebuddy_uninstall(tmp_path)
     settings_path = _settings_path(tmp_path)
     if settings_path.exists():
-        settings = json.loads(settings_path.read_text())
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
         hooks = settings.get("hooks", {}).get("PreToolUse", [])
         assert not any("graphify" in str(h) for h in hooks)
 
@@ -232,9 +232,9 @@ def test_codebuddy_uninstall_noop_if_no_section(tmp_path):
     """Uninstall should not error when CODEBUDDY.md exists but no graphify section."""
     from graphify.__main__ import codebuddy_uninstall
 
-    _codebuddy_md_path(tmp_path).write_text("# Some other project\n")
+    _codebuddy_md_path(tmp_path).write_text("# Some other project\n", encoding="utf-8")
     codebuddy_uninstall(tmp_path)
-    content = _codebuddy_md_path(tmp_path).read_text()
+    content = _codebuddy_md_path(tmp_path).read_text(encoding="utf-8")
     assert "# Some other project" in content
 
 
@@ -242,12 +242,12 @@ def test_codebuddy_uninstall_preserves_other_content(tmp_path):
     """Uninstall preserves non-graphify content in CODEBUDDY.md."""
     from graphify.__main__ import codebuddy_install, codebuddy_uninstall
 
-    _codebuddy_md_path(tmp_path).write_text("# My project rules\n")
+    _codebuddy_md_path(tmp_path).write_text("# My project rules\n", encoding="utf-8")
     codebuddy_install(tmp_path)
     codebuddy_uninstall(tmp_path)
     # When graphify section was appended, uninstall removes it and the file
     # becomes the original content
-    content = _codebuddy_md_path(tmp_path).read_text()
+    content = _codebuddy_md_path(tmp_path).read_text(encoding="utf-8")
     assert "## graphify" not in content
     assert "# My project rules" in content
 
@@ -290,7 +290,7 @@ def test_uninstall_all_removes_codebuddy_hook(tmp_path, monkeypatch):
         main()
     settings_path = _settings_path(project)
     if settings_path.exists():
-        settings = json.loads(settings_path.read_text())
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
         hooks = settings.get("hooks", {}).get("PreToolUse", [])
         assert not any("graphify" in str(h) for h in hooks)
 
@@ -355,19 +355,19 @@ def test_codebuddy_installation_roundtrip(tmp_path):
     from graphify.__main__ import codebuddy_install, codebuddy_uninstall
 
     # Pre-existing project file
-    _codebuddy_md_path(tmp_path).write_text("# My project\n")
+    _codebuddy_md_path(tmp_path).write_text("# My project\n", encoding="utf-8")
     # One section above graphify to test cleanup
     codebuddy_install(tmp_path)
     codebuddy_uninstall(tmp_path)
     # CODEBUDDY.md should exist with original content only
     md = _codebuddy_md_path(tmp_path)
     assert md.exists()
-    content = md.read_text()
+    content = md.read_text(encoding="utf-8")
     assert "## graphify" not in content
     assert "# My project" in content
     # Hook should be removed
     settings_path = _settings_path(tmp_path)
     if settings_path.exists():
-        settings = json.loads(settings_path.read_text())
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
         hooks = settings.get("hooks", {}).get("PreToolUse", [])
         assert not any("graphify" in str(h) for h in hooks)

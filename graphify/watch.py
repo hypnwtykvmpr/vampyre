@@ -213,7 +213,13 @@ def _git_head() -> str | None:
     import subprocess as _sp
 
     try:
-        r = _sp.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=3)
+        r = _sp.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            encoding="utf-8",
+        )
         return r.stdout.strip() if r.returncode == 0 else None
     except Exception:
         return None
@@ -683,6 +689,11 @@ def _json_text(data: dict) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
+def _is_foreign_absolute_path(path: str) -> bool:
+    """Return whether ``path`` is absolute only under another host convention."""
+    return is_absolute_path(path) and not Path(path).is_absolute()
+
+
 def _missing_local_source(source_file: object, *roots: Path) -> bool:
     """Return whether a path-like local source is absent from every scan root."""
     if not isinstance(source_file, str) or not source_file.strip():
@@ -691,7 +702,7 @@ def _missing_local_source(source_file: object, *roots: Path) -> bool:
     if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", source):
         return False
     # A foreign-host absolute path cannot be proven stale on this filesystem.
-    if is_absolute_path(source) and not Path(source).is_absolute():
+    if _is_foreign_absolute_path(source):
         return False
 
     path = Path(source).expanduser()
@@ -1002,6 +1013,41 @@ def _rebuild_code(
                         for p in code_files
                         if p.is_relative_to(project_root)
                     }
+                    detected_sources = {
+                        _nsf(str(Path(path)), _root_str) or str(path)
+                        for paths in detected["files"].values()
+                        for path in paths
+                    }
+                    ignore_patterns = _load_graphifyignore(watch_root)
+                    ignore_cache: dict[Path, bool] = {}
+
+                    def _ignored_local_source(source_file: str, norm: str) -> bool:
+                        if norm in detected_sources:
+                            return False
+                        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", source_file):
+                            return False
+                        if _is_foreign_absolute_path(source_file):
+                            return False
+                        source_path = Path(source_file).expanduser()
+                        candidates = (
+                            [source_path]
+                            if source_path.is_absolute()
+                            else [project_root / source_path, watch_root / source_path]
+                        )
+                        for candidate in candidates:
+                            try:
+                                resolved = candidate.resolve()
+                            except OSError:
+                                continue
+                            if _is_relative_to(resolved, watch_root) and _is_ignored(
+                                resolved,
+                                watch_root,
+                                ignore_patterns,
+                                _cache=ignore_cache,
+                            ):
+                                return True
+                        return False
+
                     sourced_records = (
                         list(existing.get("nodes", []))
                         + list(existing.get("links", existing.get("edges", [])))
@@ -1018,9 +1064,12 @@ def _rebuild_code(
                         stale_code_source = (
                             Path(source_file).suffix.lower() in _CODE_EXTENSIONS
                             and norm not in current_sources
+                            and not _is_foreign_absolute_path(source_file)
                         )
-                        if stale_code_source or _missing_local_source(
-                            source_file, project_root, watch_root
+                        if (
+                            stale_code_source
+                            or _ignored_local_source(source_file, norm)
+                            or _missing_local_source(source_file, project_root, watch_root)
                         ):
                             evict_sources.add(source_file)
                             evict_sources.add(norm)
@@ -1098,12 +1147,17 @@ def _rebuild_code(
                     sf = e.get("source_file")
                     if not sf:
                         return False
+                    norm = _nsf(sf, str(project_root))
                     sf_evicted = sf in edge_evict_sources
                     if not sf_evicted:
-                        norm = _nsf(sf, str(project_root))
                         sf_evicted = bool(norm) and norm in edge_evict_sources
                     if not sf_evicted:
                         return False
+                    explicit_source_eviction = sf in evict_sources or (
+                        bool(norm) and norm in evict_sources
+                    )
+                    if explicit_source_eviction:
+                        return True
                     if full_rebuild and not _edge_ast_resuppliable(e):
                         return False
                     return True
@@ -1260,6 +1314,8 @@ def _rebuild_code(
                     kind="ast",
                     root=project_root,
                     expected_hashes=source_snapshot,
+                    prune_files=deleted_paths or None,
+                    replace=changed_paths is None,
                 )
                 write_scan_root_marker(out / ".graphify_root", project_root)
                 state_transaction.commit()
@@ -1326,6 +1382,8 @@ def _rebuild_code(
                         kind="ast",
                         root=project_root,
                         expected_hashes=source_snapshot,
+                        prune_files=deleted_paths or None,
+                        replace=changed_paths is None,
                     )
                     write_scan_root_marker(out / ".graphify_root", project_root)
                     state_transaction.commit()
@@ -1454,6 +1512,8 @@ def _rebuild_code(
                 kind="ast",
                 root=project_root,
                 expected_hashes=source_snapshot,
+                prune_files=deleted_paths or None,
+                replace=changed_paths is None,
             )
             write_scan_root_marker(out / ".graphify_root", project_root)
             state_transaction.commit()

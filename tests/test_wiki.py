@@ -81,7 +81,7 @@ def test_to_wiki_god_node_article_created(tmp_path):
 def test_index_links_all_communities(tmp_path):
     G = _make_graph()
     to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS)
-    index = (tmp_path / "index.md").read_text()
+    index = (tmp_path / "index.md").read_text(encoding="utf-8")
     assert "[Parsing Layer](Parsing_Layer.md)" in index
     assert "[Rendering Layer](Rendering_Layer.md)" in index
 
@@ -89,7 +89,7 @@ def test_index_links_all_communities(tmp_path):
 def test_index_lists_god_nodes(tmp_path):
     G = _make_graph()
     to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS, god_nodes_data=GOD_NODES)
-    index = (tmp_path / "index.md").read_text()
+    index = (tmp_path / "index.md").read_text(encoding="utf-8")
     assert "[parse](parse.md)" in index
     assert "2 connections" in index
 
@@ -97,7 +97,7 @@ def test_index_lists_god_nodes(tmp_path):
 def test_community_article_has_cross_links(tmp_path):
     G = _make_graph()
     to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS)
-    parsing = (tmp_path / "Parsing_Layer.md").read_text()
+    parsing = (tmp_path / "Parsing_Layer.md").read_text(encoding="utf-8")
     # n1 (parsing) references n3 (rendering) → cross-community link
     assert "[Rendering Layer](Rendering_Layer.md)" in parsing
 
@@ -105,14 +105,14 @@ def test_community_article_has_cross_links(tmp_path):
 def test_community_article_shows_cohesion(tmp_path):
     G = _make_graph()
     to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS, cohesion=COHESION)
-    parsing = (tmp_path / "Parsing_Layer.md").read_text()
+    parsing = (tmp_path / "Parsing_Layer.md").read_text(encoding="utf-8")
     assert "cohesion 0.85" in parsing
 
 
 def test_community_article_has_audit_trail(tmp_path):
     G = _make_graph()
     to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS)
-    parsing = (tmp_path / "Parsing_Layer.md").read_text()
+    parsing = (tmp_path / "Parsing_Layer.md").read_text(encoding="utf-8")
     assert "EXTRACTED" in parsing
     assert "INFERRED" in parsing
 
@@ -120,7 +120,7 @@ def test_community_article_has_audit_trail(tmp_path):
 def test_god_node_article_has_connections(tmp_path):
     G = _make_graph()
     to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS, god_nodes_data=GOD_NODES)
-    article = (tmp_path / "parse.md").read_text()
+    article = (tmp_path / "parse.md").read_text(encoding="utf-8")
     # parse's neighbours (validate, render) have no article of their own, so the
     # connections list shows them as plain text rather than as links.
     assert "validate" in article and "render" in article
@@ -131,7 +131,7 @@ def test_god_node_article_has_connections(tmp_path):
 def test_god_node_article_links_community(tmp_path):
     G = _make_graph()
     to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS, god_nodes_data=GOD_NODES)
-    article = (tmp_path / "parse.md").read_text()
+    article = (tmp_path / "parse.md").read_text(encoding="utf-8")
     assert "[Parsing Layer](Parsing_Layer.md)" in article
 
 
@@ -150,14 +150,14 @@ def test_to_wiki_no_labels_uses_fallback(tmp_path):
     assert (tmp_path / "Community_0.md").exists()
     assert (tmp_path / "Community_1.md").exists()
     # fallback "Community N" labels still produce links that resolve to the file
-    targets = [t for _, t in _inline_links((tmp_path / "index.md").read_text())]
+    targets = [t for _, t in _inline_links((tmp_path / "index.md").read_text(encoding="utf-8"))]
     assert "Community_0.md" in targets and (tmp_path / "Community_0.md").exists()
 
 
 def test_article_navigation_footer(tmp_path):
     G = _make_graph()
     to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS)
-    article = (tmp_path / "Parsing_Layer.md").read_text()
+    article = (tmp_path / "Parsing_Layer.md").read_text(encoding="utf-8")
     assert "[index](index.md)" in article
 
 
@@ -171,7 +171,7 @@ def test_community_article_truncation_notice(tmp_path):
         G.add_edge(nodes[i], nodes[i + 1], relation="calls", confidence="EXTRACTED", weight=1.0)
     communities = {0: nodes}
     to_wiki(G, communities, tmp_path, community_labels={0: "Big Community"})
-    article = (tmp_path / "Big_Community.md").read_text()
+    article = (tmp_path / "Big_Community.md").read_text(encoding="utf-8")
     assert "and 5 more nodes" in article
 
 
@@ -185,7 +185,7 @@ def test_cross_community_links_without_node_community_attrs(tmp_path):
     communities = {0: ["n1"], 1: ["n2"]}
     labels = {0: "Parsing", 1: "Rendering"}
     to_wiki(G, communities, tmp_path, community_labels=labels)
-    article = (tmp_path / "Parsing.md").read_text()
+    article = (tmp_path / "Parsing.md").read_text(encoding="utf-8")
     assert "[Rendering](Rendering.md)" in article
 
 
@@ -199,7 +199,7 @@ def test_god_node_article_community_without_node_attr(tmp_path):
     labels = {0: "Core Logic"}
     god_nodes = [{"id": "n1", "label": "parse", "degree": 1}]
     to_wiki(G, communities, tmp_path, community_labels=labels, god_nodes_data=god_nodes)
-    article = (tmp_path / "parse.md").read_text()
+    article = (tmp_path / "parse.md").read_text(encoding="utf-8")
     assert "[Core Logic](Core_Logic.md)" in article
 
 
@@ -213,7 +213,7 @@ def test_to_wiki_drops_stale_community_nodes(tmp_path):
     communities = {0: ["n1", "n2", "stale_ghost"], 1: ["n3", "n4"]}
     n = to_wiki(G, communities, tmp_path, community_labels=LABELS)
     assert n == 2  # both community articles still written
-    article = (tmp_path / "Parsing_Layer.md").read_text()
+    article = (tmp_path / "Parsing_Layer.md").read_text(encoding="utf-8")
     assert "parse" in article
     assert "stale_ghost" not in article
 
@@ -316,7 +316,7 @@ def test_wiki_emits_no_obsidian_wikilinks(tmp_path):
         god_nodes_data=GOD_NODES,
     )
     for md in tmp_path.glob("*.md"):
-        assert "[[" not in md.read_text(), md.name
+        assert "[[" not in md.read_text(encoding="utf-8"), md.name
 
 
 def test_wiki_links_resolve_to_real_files(tmp_path):
@@ -335,7 +335,7 @@ def test_wiki_links_resolve_to_real_files(tmp_path):
     )
     seen_link = False
     for md in tmp_path.glob("*.md"):
-        for display, target in _inline_links(md.read_text()):
+        for display, target in _inline_links(md.read_text(encoding="utf-8")):
             seen_link = True
             assert (tmp_path / target).exists(), f"{md.name}: [{display}] -> {target} is dead"
     # guard against the test passing vacuously if links ever stop being emitted
@@ -348,7 +348,7 @@ def test_wiki_link_display_keeps_label_but_target_is_filename(tmp_path):
     [[Domain Data Models]] could never express portably."""
     G = _make_graph()
     to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS)
-    index = (tmp_path / "index.md").read_text()
+    index = (tmp_path / "index.md").read_text(encoding="utf-8")
     assert "[Parsing Layer](Parsing_Layer.md)" in index
     assert "Parsing Layer.md" not in index  # the broken Obsidian-only target
 
@@ -365,7 +365,7 @@ def test_wiki_special_characters_in_label_resolve(tmp_path):
     communities = {0: ["n1"], 1: ["n2"]}
     labels = {0: "C# & Auth (v2)", 1: "Other"}
     to_wiki(G, communities, tmp_path, community_labels=labels)
-    article = (tmp_path / "Other.md").read_text()
+    article = (tmp_path / "Other.md").read_text(encoding="utf-8")
     # the cross-link to the special-char community resolves to its real file
     targets = [t for _, t in _inline_links(article)]
     assert "C#_&_Auth_(v2).md" in targets
@@ -388,7 +388,7 @@ def test_wiki_link_with_bracketed_label_resolves(tmp_path):
     communities = {0: ["n1"], 1: ["n2"]}
     labels = {0: "Array[T] Models", 1: "Other"}
     to_wiki(G, communities, tmp_path, community_labels=labels)
-    article = (tmp_path / "Other.md").read_text()
+    article = (tmp_path / "Other.md").read_text(encoding="utf-8")
     assert r"[Array\[T\] Models](Array%5BT%5D_Models.md)" in article
     assert (tmp_path / "Array[T]_Models.md").exists()
 
@@ -401,7 +401,7 @@ def test_wiki_links_to_nodes_without_articles_are_plain_text(tmp_path):
     # only `parse` (n1) is a god node; its neighbours validate/render are not,
     # and have no article of their own
     to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS, god_nodes_data=GOD_NODES)
-    article = (tmp_path / "parse.md").read_text()
+    article = (tmp_path / "parse.md").read_text(encoding="utf-8")
     assert "validate" in article and "render" in article
     # they appear as plain list items, not links
     assert "- validate" in article and "- render" in article
@@ -425,7 +425,9 @@ def test_wiki_links_use_collision_suffixed_slug(tmp_path):
     communities = {0: ["n1"], 1: ["n2"]}
     labels = {0: "Parser", 1: "parser"}  # collide case-insensitively
     to_wiki(G, communities, tmp_path, community_labels=labels)
-    index_targets = [t for _, t in _inline_links((tmp_path / "index.md").read_text())]
+    index_targets = [
+        t for _, t in _inline_links((tmp_path / "index.md").read_text(encoding="utf-8"))
+    ]
     assert "parser_2.md" in index_targets  # link points at the suffixed file...
     for t in index_targets:
         assert (tmp_path / t).exists(), t  # ...and every target is a real file

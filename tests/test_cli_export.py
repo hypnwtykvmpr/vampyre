@@ -25,6 +25,7 @@ def _run(
         capture_output=True,
         text=True,
         env=env,
+        encoding="utf-8",
     )
 
 
@@ -33,7 +34,7 @@ def _make_graph(tmp_path: Path) -> Path:
     out = tmp_path / "graphify-out"
     out.mkdir()
 
-    extraction = json.loads((FIXTURES / "extraction.json").read_text())
+    extraction = json.loads((FIXTURES / "extraction.json").read_text(encoding="utf-8"))
     from graphify.build import build_from_json
     from graphify.cluster import cluster, score_all
     from graphify.analyze import god_nodes, surprising_connections
@@ -54,8 +55,10 @@ def _make_graph(tmp_path: Path) -> Path:
         "gods": gods,
         "surprises": surprises,
     }
-    (out / ".graphify_analysis.json").write_text(json.dumps(analysis))
-    (out / ".graphify_labels.json").write_text(json.dumps({str(k): v for k, v in labels.items()}))
+    (out / ".graphify_analysis.json").write_text(json.dumps(analysis), encoding="utf-8")
+    (out / ".graphify_labels.json").write_text(
+        json.dumps({str(k): v for k, v in labels.items()}), encoding="utf-8"
+    )
     return out
 
 
@@ -73,7 +76,7 @@ def test_export_html_creates_file(tmp_path):
 
 def test_export_html_no_viz_removes_file(tmp_path):
     out = _make_graph(tmp_path)
-    (out / "graph.html").write_text("<html/>")
+    (out / "graph.html").write_text("<html/>", encoding="utf-8")
     r = _run(["export", "html", "--no-viz"], tmp_path)
     assert r.returncode == 0, r.stderr
     assert not (out / "graph.html").exists()
@@ -121,9 +124,9 @@ def test_export_wiki_creates_articles(tmp_path):
 def test_export_wiki_accepts_edges_only_graph_json(tmp_path):
     out = _make_graph(tmp_path)
     graph_path = out / "graph.json"
-    data = json.loads(graph_path.read_text())
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
     data["edges"] = data.pop("links")
-    graph_path.write_text(json.dumps(data))
+    graph_path.write_text(json.dumps(data), encoding="utf-8")
 
     r = _run(["export", "wiki"], tmp_path)
 
@@ -141,7 +144,7 @@ def test_export_graphml_creates_file(tmp_path):
     gml = tmp_path / "graphify-out" / "graph.graphml"
     assert gml.exists()
     assert gml.stat().st_size > 0
-    content = gml.read_text()
+    content = gml.read_text(encoding="utf-8")
     assert "<graphml" in content
 
 
@@ -155,7 +158,7 @@ def test_export_neo4j_creates_cypher(tmp_path):
     cypher = tmp_path / "graphify-out" / "cypher.txt"
     assert cypher.exists()
     assert cypher.stat().st_size > 0
-    content = cypher.read_text()
+    content = cypher.read_text(encoding="utf-8")
     assert "MERGE" in content or "CREATE" in content
 
 
@@ -203,7 +206,9 @@ def test_extract_writes_to_graphify_out_env(tmp_path):
     """#1423: `graphify extract` honours GRAPHIFY_OUT for where it WRITES, not only
     where readers look — previously it hardcoded graphify-out/ and ignored the
     override. Code-only corpus, so no LLM backend is needed."""
-    (tmp_path / "m.py").write_text("def a():\n    return b()\n\n\ndef b():\n    return 1\n")
+    (tmp_path / "m.py").write_text(
+        "def a():\n    return b()\n\n\ndef b():\n    return 1\n", encoding="utf-8"
+    )
     env = os.environ.copy()
     env["GRAPHIFY_OUT"] = "custom-out"
 
@@ -217,7 +222,9 @@ def test_extract_writes_to_graphify_out_env(tmp_path):
         "extract ignored GRAPHIFY_OUT and wrote graphify-out/"
     )
     # Manifest keys are relative to the scan root (portable) — #1417.
-    keys = list(json.loads((tmp_path / "custom-out" / "manifest.json").read_text()).keys())
+    keys = list(
+        json.loads((tmp_path / "custom-out" / "manifest.json").read_text(encoding="utf-8")).keys()
+    )
     assert keys == ["m.py"], keys
 
 

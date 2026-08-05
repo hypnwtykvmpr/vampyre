@@ -19,7 +19,7 @@ from graphify.extract import extract
 
 def _extract(tmp_path, files: dict[str, str]):
     for name, body in files.items():
-        (tmp_path / name).write_text(body)
+        (tmp_path / name).write_text(body, encoding="utf-8")
     old = os.getcwd()
     try:
         os.chdir(tmp_path)

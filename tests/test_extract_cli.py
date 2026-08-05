@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -19,6 +20,7 @@ from graphify.llm import BACKENDS, _backend_env_keys
 
 
 PYTHON = sys.executable
+EXTRACT_MODULE = importlib.import_module("graphify.extract")
 
 
 def _make_corpus(tmp_path):
@@ -27,8 +29,10 @@ def _make_corpus(tmp_path):
     Both file types are needed so semantic extraction is requested
     (docs path triggers the LLM step we want to assert against).
     """
-    (tmp_path / "main.go").write_text("package main\nfunc main() {}\n")
-    (tmp_path / "README.md").write_text("# Notes\nThe main function entry point.\n")
+    (tmp_path / "main.go").write_text("package main\nfunc main() {}\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text(
+        "# Notes\nThe main function entry point.\n", encoding="utf-8"
+    )
     return tmp_path
 
 
@@ -104,7 +108,7 @@ def test_extract_ast_failure_exits_before_writing_state(
             "output_tokens": 0,
         }
 
-    monkeypatch.setattr("graphify.extract.extract", failed_extract)
+    monkeypatch.setattr(EXTRACT_MODULE, "extract", failed_extract)
     monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
     monkeypatch.setattr(
         mainmod.sys,
@@ -254,7 +258,9 @@ def test_extract_manifest_failure_rolls_back_all_published_state(
 
     (output / ".graphify_semantic_marker").write_text("{}", encoding="utf-8")
     source = corpus / "auth.py"
-    source.write_text(source.read_text(encoding="utf-8") + "\ndef added():\n    return 1\n")
+    source.write_text(
+        source.read_text(encoding="utf-8") + "\ndef added():\n    return 1\n", encoding="utf-8"
+    )
     tree_before = {
         path.relative_to(output).as_posix(): path.read_bytes()
         for path in output.rglob("*")
@@ -407,7 +413,8 @@ def _code_only_corpus(tmp_path):
     """A corpus with only code — no docs/papers/images."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "auth.py").write_text(
-        "def login(user):\n    return validate(user)\n\ndef validate(user):\n    return True\n"
+        "def login(user):\n    return validate(user)\n\ndef validate(user):\n    return True\n",
+        encoding="utf-8",
     )
     return tmp_path
 
@@ -458,7 +465,7 @@ def test_extract_codeonly_succeeds_without_api_key(monkeypatch, tmp_path):
     assert graph.exists(), "code-only extract must write graph.json without a key"
     import json
 
-    assert len(json.loads(graph.read_text()).get("nodes", [])) > 0
+    assert len(json.loads(graph.read_text(encoding="utf-8")).get("nodes", [])) > 0
 
 
 def test_update_remap_routes_to_full_extract_and_stamps_ast(tmp_path):
@@ -1105,7 +1112,9 @@ def test_extract_timing_flag_emits_stage_timings(monkeypatch, tmp_path, capsys):
     it prints none, so default output is unchanged. Code-only corpus => no API key."""
     code = tmp_path / "code"
     code.mkdir()
-    (code / "a.py").write_text("def a():\n    return b()\ndef b():\n    return 1\n")
+    (code / "a.py").write_text(
+        "def a():\n    return b()\ndef b():\n    return 1\n", encoding="utf-8"
+    )
 
     # with --timing
     monkeypatch.setattr(
@@ -1172,6 +1181,7 @@ def _run(args: list[str], cwd: Path, *, env: dict | None = None) -> subprocess.C
         capture_output=True,
         text=True,
         env=env if env is not None else _clean_env(),
+        encoding="utf-8",
     )
 
 

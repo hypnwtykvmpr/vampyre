@@ -128,6 +128,7 @@ def test_export_callflow_html_cli_creates_file(tmp_path):
         cwd=tmp_path,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
 
     assert result.returncode == 0, result.stderr
@@ -206,6 +207,7 @@ def test_export_callflow_html_cli_accepts_positional_graph_path(tmp_path):
         cwd=tmp_path,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
 
     assert result.returncode == 0, result.stderr

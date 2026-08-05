@@ -20,7 +20,9 @@ def _run(tool_input, cwd, *, graph: bool):
         (cwd / "graphify-out").mkdir(parents=True, exist_ok=True)
         (cwd / "graphify-out" / "graph.json").write_text("{}", encoding="utf-8")
     stdin = json.dumps({"tool_input": tool_input})
-    return subprocess.run(["sh", "-c", CMD], input=stdin, capture_output=True, text=True, cwd=cwd)
+    return subprocess.run(
+        ["sh", "-c", CMD], input=stdin, capture_output=True, text=True, cwd=cwd, encoding="utf-8"
+    )
 
 
 def test_matcher_targets_read_and_glob():
@@ -105,7 +107,12 @@ def test_fails_open_on_malformed_stdin(tmp_path):
     (tmp_path / "graphify-out").mkdir()
     (tmp_path / "graphify-out" / "graph.json").write_text("{}", encoding="utf-8")
     r = subprocess.run(
-        ["sh", "-c", CMD], input="this is not json", capture_output=True, text=True, cwd=tmp_path
+        ["sh", "-c", CMD],
+        input="this is not json",
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        encoding="utf-8",
     )
     assert r.returncode == 0
     assert r.stdout.strip() == ""

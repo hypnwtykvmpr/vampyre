@@ -80,10 +80,12 @@ def test_install_project_claude_writes_project_scope(tmp_path, monkeypatch, caps
     assert (project / ".claude" / "skills" / "graphify" / "SKILL.md").exists()
     assert (project / ".claude" / "CLAUDE.md").exists()
     assert not (home / ".claude" / "skills" / "graphify" / "SKILL.md").exists()
-    assert ".claude/skills/graphify/SKILL.md" in (project / ".claude" / "CLAUDE.md").read_text()
-    assert (
-        "~/.claude/skills/graphify/SKILL.md" not in (project / ".claude" / "CLAUDE.md").read_text()
+    assert ".claude/skills/graphify/SKILL.md" in (project / ".claude" / "CLAUDE.md").read_text(
+        encoding="utf-8"
     )
+    assert "~/.claude/skills/graphify/SKILL.md" not in (
+        project / ".claude" / "CLAUDE.md"
+    ).read_text(encoding="utf-8")
     assert "git add .claude/" in capsys.readouterr().out
 
 
@@ -111,7 +113,7 @@ def test_claude_subcommand_project_install_and_uninstall_are_project_scoped(tmp_
     project.mkdir()
     user_skill = home / ".claude" / "skills" / "graphify" / "SKILL.md"
     user_skill.parent.mkdir(parents=True)
-    user_skill.write_text("user skill")
+    user_skill.write_text("user skill", encoding="utf-8")
     monkeypatch.chdir(project)
     with patch("graphify.__main__.Path.home", return_value=home):
         monkeypatch.setattr(sys, "argv", ["graphify", "claude", "install", "--project"])
@@ -138,7 +140,7 @@ def test_codex_subcommand_project_install_and_uninstall_are_project_scoped(tmp_p
     project.mkdir()
     user_skill = home / ".codex" / "skills" / "graphify" / "SKILL.md"
     user_skill.parent.mkdir(parents=True)
-    user_skill.write_text("user skill")
+    user_skill.write_text("user skill", encoding="utf-8")
     monkeypatch.chdir(project)
     with patch("graphify.__main__.Path.home", return_value=home):
         monkeypatch.setattr(sys, "argv", ["graphify", "codex", "install", "--project"])
@@ -156,7 +158,7 @@ def test_codex_subcommand_project_install_and_uninstall_are_project_scoped(tmp_p
     assert not (project / "AGENTS.md").exists()
     hooks_path = project / ".codex" / "hooks.json"
     assert hooks_path.exists()
-    assert "graphify" not in hooks_path.read_text()
+    assert "graphify" not in hooks_path.read_text(encoding="utf-8")
 
 
 def test_antigravity_install_project_writes_project_skill(tmp_path, monkeypatch):
@@ -221,7 +223,7 @@ def test_codex_skill_contains_spawn_agent():
     """Codex skill file must reference spawn_agent."""
     import graphify
 
-    skill = (Path(graphify.__file__).parent / "skill-codex.md").read_text()
+    skill = (Path(graphify.__file__).parent / "skill-codex.md").read_text(encoding="utf-8")
     assert "spawn_agent" in skill
 
 
@@ -234,7 +236,7 @@ def test_codex_skill_uses_graphify_with_existing_graph():
     """
     import graphify
 
-    skill = (Path(graphify.__file__).parent / "skill-codex.md").read_text()
+    skill = (Path(graphify.__file__).parent / "skill-codex.md").read_text(encoding="utf-8")
     assert "Fast path — existing graph" in skill
     assert "skip Steps 1–5 entirely and jump straight to `## For /graphify query`" in skill
     assert "graphify query" in skill
@@ -244,7 +246,7 @@ def test_codex_skill_uses_graphify_with_existing_graph():
 
 def test_codex_agents_install_mentions_dirty_graph_output(tmp_path):
     _agents_install(tmp_path, "codex")
-    content = (tmp_path / "AGENTS.md").read_text()
+    content = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
     assert "Dirty graphify-out/ files are expected" in content
     assert "not a reason to skip graphify" in content
 
@@ -253,7 +255,7 @@ def test_opencode_skill_contains_mention():
     """OpenCode skill file must reference @mention."""
     import graphify
 
-    skill = (Path(graphify.__file__).parent / "skill-opencode.md").read_text()
+    skill = (Path(graphify.__file__).parent / "skill-opencode.md").read_text(encoding="utf-8")
     assert "@mention" in skill
 
 
@@ -269,7 +271,7 @@ def test_opencode_skill_uses_opencode_agent_guidance():
     """
     import graphify
 
-    skill = (Path(graphify.__file__).parent / "skill-opencode.md").read_text()
+    skill = (Path(graphify.__file__).parent / "skill-opencode.md").read_text(encoding="utf-8")
     assert "@mention" in skill
     assert "@agent" in skill
     # Scope the agent-type check to opencode's dispatch slot (B2 -> B3).
@@ -283,7 +285,7 @@ def test_kilo_skill_mentions_task_tool():
     """Kilo skill file should use the native Task tool flow."""
     import graphify
 
-    skill = (Path(graphify.__file__).parent / "skill-kilo.md").read_text()
+    skill = (Path(graphify.__file__).parent / "skill-kilo.md").read_text(encoding="utf-8")
     assert "Task" in skill
 
 
@@ -292,7 +294,7 @@ def test_kilo_skill_avoids_double_quoted_python_c_fstring_dict_keys():
     import re
     import graphify
 
-    skill = (Path(graphify.__file__).parent / "skill-kilo.md").read_text()
+    skill = (Path(graphify.__file__).parent / "skill-kilo.md").read_text(encoding="utf-8")
     assert not re.search(r"print\(f'.*\[[\"'][^\"']+[\"']\]", skill)
 
 
@@ -305,7 +307,7 @@ def test_claw_skill_uses_agent_tool_dispatch():
     """
     import graphify
 
-    skill = (Path(graphify.__file__).parent / "skill-claw.md").read_text()
+    skill = (Path(graphify.__file__).parent / "skill-claw.md").read_text(encoding="utf-8")
     b2 = skill[skill.index("**Step B2") : skill.index("**Step B3")]
     assert 'subagent_type="general-purpose"' in b2
     assert "spawn_agent" not in skill
@@ -358,7 +360,7 @@ def test_codebuddy_install_writes_codebuddy_md(tmp_path):
     codebuddy_install(tmp_path)
     md = tmp_path / "CODEBUDDY.md"
     assert md.exists()
-    assert "graphify-out/GRAPH_REPORT.md" in md.read_text()
+    assert "graphify-out/GRAPH_REPORT.md" in md.read_text(encoding="utf-8")
 
 
 def test_codebuddy_install_writes_hook(tmp_path):
@@ -366,7 +368,7 @@ def test_codebuddy_install_writes_hook(tmp_path):
     from graphify.__main__ import codebuddy_install
 
     codebuddy_install(tmp_path)
-    settings = _json.loads((tmp_path / ".codebuddy" / "settings.json").read_text())
+    settings = _json.loads((tmp_path / ".codebuddy" / "settings.json").read_text(encoding="utf-8"))
     hooks = settings["hooks"]["PreToolUse"]
     assert any("graphify" in str(h) for h in hooks)
 
@@ -377,15 +379,15 @@ def test_codebuddy_install_idempotent(tmp_path):
     codebuddy_install(tmp_path)
     codebuddy_install(tmp_path)
     md = tmp_path / "CODEBUDDY.md"
-    assert md.read_text().count("## graphify") == 1
+    assert md.read_text(encoding="utf-8").count("## graphify") == 1
 
 
 def test_codebuddy_install_merges_existing_codebuddy_md(tmp_path):
     from graphify.__main__ import codebuddy_install
 
-    (tmp_path / "CODEBUDDY.md").write_text("# My project rules\n")
+    (tmp_path / "CODEBUDDY.md").write_text("# My project rules\n", encoding="utf-8")
     codebuddy_install(tmp_path)
-    content = (tmp_path / "CODEBUDDY.md").read_text()
+    content = (tmp_path / "CODEBUDDY.md").read_text(encoding="utf-8")
     assert "# My project rules" in content
     assert "graphify-out/GRAPH_REPORT.md" in content
 
@@ -407,7 +409,7 @@ def test_codebuddy_uninstall_removes_hook(tmp_path):
     codebuddy_uninstall(tmp_path)
     settings_path = tmp_path / ".codebuddy" / "settings.json"
     if settings_path.exists():
-        settings = _json.loads(settings_path.read_text())
+        settings = _json.loads(settings_path.read_text(encoding="utf-8"))
         hooks = settings.get("hooks", {}).get("PreToolUse", [])
         assert not any("graphify" in str(h) for h in hooks)
 
@@ -426,7 +428,7 @@ def test_uninstall_project_removes_project_skill_only(tmp_path, monkeypatch):
     project.mkdir()
     user_skill = home / ".codex" / "skills" / "graphify" / "SKILL.md"
     user_skill.parent.mkdir(parents=True)
-    user_skill.write_text("user skill")
+    user_skill.write_text("user skill", encoding="utf-8")
     monkeypatch.chdir(project)
     with patch("graphify.__main__.Path.home", return_value=home):
         monkeypatch.setattr(
@@ -450,7 +452,7 @@ def test_uninstall_project_without_platform_removes_project_installs(tmp_path, m
     project.mkdir()
     user_skill = home / ".claude" / "skills" / "graphify" / "SKILL.md"
     user_skill.parent.mkdir(parents=True)
-    user_skill.write_text("user skill")
+    user_skill.write_text("user skill", encoding="utf-8")
     monkeypatch.chdir(project)
     with patch("graphify.__main__.Path.home", return_value=home):
         monkeypatch.setattr(sys, "argv", ["graphify", "install", "--project"])
@@ -471,7 +473,7 @@ def test_antigravity_uninstall_project_removes_project_skill_only(tmp_path, monk
     # Global skill lives at ~/.gemini/config/skills/ (per #1079 fix)
     global_skill = home / ".gemini" / "config" / "skills" / "graphify" / "SKILL.md"
     global_skill.parent.mkdir(parents=True)
-    global_skill.write_text("global skill")
+    global_skill.write_text("global skill", encoding="utf-8")
     monkeypatch.chdir(project)
     with patch("graphify.__main__.Path.home", return_value=home):
         monkeypatch.setattr(sys, "argv", ["graphify", "antigravity", "install", "--project"])
@@ -556,8 +558,8 @@ def test_codex_agents_install_writes_agents_md(tmp_path):
     _agents_install(tmp_path, "codex")
     agents_md = tmp_path / "AGENTS.md"
     assert agents_md.exists()
-    assert "graphify" in agents_md.read_text()
-    assert "GRAPH_REPORT.md" in agents_md.read_text()
+    assert "graphify" in agents_md.read_text(encoding="utf-8")
+    assert "GRAPH_REPORT.md" in agents_md.read_text(encoding="utf-8")
 
 
 def test_opencode_agents_install_writes_agents_md(tmp_path):
@@ -574,16 +576,16 @@ def test_agents_install_idempotent(tmp_path):
     """Installing twice does not duplicate the section."""
     _agents_install(tmp_path, "codex")
     _agents_install(tmp_path, "codex")
-    content = (tmp_path / "AGENTS.md").read_text()
+    content = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
     assert content.count("## graphify") == 1
 
 
 def test_agents_install_appends_to_existing(tmp_path):
     """Installs into an existing AGENTS.md without overwriting other content."""
     agents_md = tmp_path / "AGENTS.md"
-    agents_md.write_text("# Existing rules\n\nDo not break things.\n")
+    agents_md.write_text("# Existing rules\n\nDo not break things.\n", encoding="utf-8")
     _agents_install(tmp_path, "codex")
-    content = agents_md.read_text()
+    content = agents_md.read_text(encoding="utf-8")
     assert "Do not break things." in content
     assert "## graphify" in content
 
@@ -599,11 +601,11 @@ def test_agents_uninstall_removes_section(tmp_path):
 def test_agents_uninstall_preserves_other_content(tmp_path):
     """Uninstall keeps pre-existing content."""
     agents_md = tmp_path / "AGENTS.md"
-    agents_md.write_text("# Existing rules\n\nDo not break things.\n")
+    agents_md.write_text("# Existing rules\n\nDo not break things.\n", encoding="utf-8")
     _agents_install(tmp_path, "codex")
     _agents_uninstall(tmp_path)
     assert agents_md.exists()
-    content = agents_md.read_text()
+    content = agents_md.read_text(encoding="utf-8")
     assert "Do not break things." in content
     assert "## graphify" not in content
 
@@ -622,7 +624,7 @@ def test_opencode_agents_install_writes_plugin(tmp_path):
     _agents_install(tmp_path, "opencode")
     plugin = tmp_path / ".opencode" / "plugins" / "graphify.js"
     assert plugin.exists()
-    assert "tool.execute.before" in plugin.read_text()
+    assert "tool.execute.before" in plugin.read_text(encoding="utf-8")
 
 
 def test_opencode_plugin_reminder_has_no_backticks(tmp_path):
@@ -635,7 +637,7 @@ def test_opencode_plugin_reminder_has_no_backticks(tmp_path):
     """
     _agents_install(tmp_path, "opencode")
     plugin = tmp_path / ".opencode" / "plugins" / "graphify.js"
-    body = plugin.read_text()
+    body = plugin.read_text(encoding="utf-8")
     # Extract the echoed reminder string literal between the double-quotes
     # of the `output.args.command = 'echo "..." && ' +` line.
     import re
@@ -656,7 +658,7 @@ def test_opencode_agents_install_registers_plugin_in_config(tmp_path):
     assert config_file.exists()
     import json as _json
 
-    config = _json.loads(config_file.read_text())
+    config = _json.loads(config_file.read_text(encoding="utf-8"))
     assert any("graphify.js" in p for p in config.get("plugin", []))
 
 
@@ -666,9 +668,11 @@ def test_opencode_agents_install_merges_existing_config(tmp_path):
 
     config_file = tmp_path / ".opencode" / "opencode.json"
     config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text(_json.dumps({"model": "claude-opus-4-5", "plugin": []}))
+    config_file.write_text(
+        _json.dumps({"model": "claude-opus-4-5", "plugin": []}), encoding="utf-8"
+    )
     _agents_install(tmp_path, "opencode")
-    config = _json.loads(config_file.read_text())
+    config = _json.loads(config_file.read_text(encoding="utf-8"))
     assert config["model"] == "claude-opus-4-5"
     assert any("graphify.js" in p for p in config["plugin"])
 
@@ -683,7 +687,7 @@ def test_opencode_agents_uninstall_removes_plugin(tmp_path):
     assert not plugin.exists()
     config_file = tmp_path / ".opencode" / "opencode.json"
     if config_file.exists():
-        config = _json.loads(config_file.read_text())
+        config = _json.loads(config_file.read_text(encoding="utf-8"))
         assert not any("graphify.js" in p for p in config.get("plugin", []))
 
 
@@ -696,7 +700,7 @@ def test_kilo_agents_install_writes_plugin(tmp_path):
     _agents_install(tmp_path, "kilo")
     plugin = tmp_path / ".kilo" / "plugins" / "graphify.js"
     assert plugin.exists()
-    assert "tool.execute.before" in plugin.read_text()
+    assert "tool.execute.before" in plugin.read_text(encoding="utf-8")
 
 
 def test_kilo_agents_install_registers_plugin_in_config(tmp_path):
@@ -705,7 +709,7 @@ def test_kilo_agents_install_registers_plugin_in_config(tmp_path):
     _agents_install(tmp_path, "kilo")
     config_file = tmp_path / ".kilo" / "kilo.json"
     assert config_file.exists()
-    config = _json.loads(config_file.read_text())
+    config = _json.loads(config_file.read_text(encoding="utf-8"))
     assert (tmp_path / ".kilo" / "plugins" / "graphify.js").resolve().as_uri() in config.get(
         "plugin", []
     )
@@ -716,9 +720,11 @@ def test_kilo_agents_install_merges_existing_config(tmp_path):
 
     config_file = tmp_path / ".kilo" / "kilo.json"
     config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text(_json.dumps({"model": "anthropic/claude-sonnet", "plugin": []}))
+    config_file.write_text(
+        _json.dumps({"model": "anthropic/claude-sonnet", "plugin": []}), encoding="utf-8"
+    )
     _agents_install(tmp_path, "kilo")
-    config = _json.loads(config_file.read_text())
+    config = _json.loads(config_file.read_text(encoding="utf-8"))
     assert config["model"] == "anthropic/claude-sonnet"
     assert (tmp_path / ".kilo" / "plugins" / "graphify.js").resolve().as_uri() in config["plugin"]
 
@@ -729,13 +735,13 @@ def test_kilo_agents_install_preserves_existing_jsonc_config(tmp_path):
     config_file = tmp_path / ".kilo" / "kilo.jsonc"
     config_file.parent.mkdir(parents=True, exist_ok=True)
     original = """// user comment\n{\n  // preferred model\n  \"model\": \"anthropic/claude-haiku\",\n  \"plugin\": []\n}\n"""
-    config_file.write_text(original)
+    config_file.write_text(original, encoding="utf-8")
     _agents_install(tmp_path, "kilo")
     json_file = tmp_path / ".kilo" / "kilo.json"
-    config = _json.loads(json_file.read_text())
+    config = _json.loads(json_file.read_text(encoding="utf-8"))
     assert config["model"] == "anthropic/claude-haiku"
     assert (tmp_path / ".kilo" / "plugins" / "graphify.js").resolve().as_uri() in config["plugin"]
-    assert config_file.read_text() == original
+    assert config_file.read_text(encoding="utf-8") == original
 
 
 def test_kilo_agents_uninstall_preserves_existing_jsonc_config(tmp_path):
@@ -746,14 +752,14 @@ def test_kilo_agents_uninstall_preserves_existing_jsonc_config(tmp_path):
     original = (
         """// user comment\n{\n  \"model\": \"anthropic/claude-haiku\",\n  \"plugin\": []\n}\n"""
     )
-    config_file.write_text(original)
+    config_file.write_text(original, encoding="utf-8")
 
     _agents_install(tmp_path, "kilo")
     _agents_uninstall(tmp_path, platform="kilo")
 
     json_file = tmp_path / ".kilo" / "kilo.json"
-    config = _json.loads(json_file.read_text())
-    assert config_file.read_text() == original
+    config = _json.loads(json_file.read_text(encoding="utf-8"))
+    assert config_file.read_text(encoding="utf-8") == original
     assert (tmp_path / ".kilo" / "plugins" / "graphify.js").resolve().as_uri() not in config.get(
         "plugin", []
     )
@@ -764,8 +770,8 @@ def test_kilo_agents_install_idempotent(tmp_path):
 
     _agents_install(tmp_path, "kilo")
     _agents_install(tmp_path, "kilo")
-    content = (tmp_path / "AGENTS.md").read_text()
-    config = _json.loads((tmp_path / ".kilo" / "kilo.json").read_text())
+    content = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    config = _json.loads((tmp_path / ".kilo" / "kilo.json").read_text(encoding="utf-8"))
     plugin_uri = (tmp_path / ".kilo" / "plugins" / "graphify.js").resolve().as_uri()
     assert content.count("## graphify") == 1
     assert config["plugin"].count(plugin_uri) == 1
@@ -797,7 +803,7 @@ def test_kilo_uninstall_removes_plugin_registration_and_command(tmp_path):
     assert not (project_dir / ".kilo" / "plugins" / "graphify.js").exists()
     config_file = project_dir / ".kilo" / "kilo.json"
     if config_file.exists():
-        config = _json.loads(config_file.read_text())
+        config = _json.loads(config_file.read_text(encoding="utf-8"))
         assert (
             project_dir / ".kilo" / "plugins" / "graphify.js"
         ).resolve().as_uri() not in config.get("plugin", [])
@@ -813,7 +819,7 @@ def test_cursor_install_writes_rule(tmp_path):
     _cursor_install(tmp_path)
     rule = tmp_path / ".cursor" / "rules" / "graphify.mdc"
     assert rule.exists()
-    content = rule.read_text()
+    content = rule.read_text(encoding="utf-8")
     assert "alwaysApply: true" in content
     assert "graphify-out/GRAPH_REPORT.md" in content
 
@@ -824,9 +830,9 @@ def test_cursor_install_idempotent(tmp_path):
 
     _cursor_install(tmp_path)
     rule = tmp_path / ".cursor" / "rules" / "graphify.mdc"
-    original = rule.read_text()
+    original = rule.read_text(encoding="utf-8")
     _cursor_install(tmp_path)
-    assert rule.read_text() == original
+    assert rule.read_text(encoding="utf-8") == original
 
 
 def test_cursor_uninstall_removes_rule(tmp_path):
@@ -855,7 +861,7 @@ def test_gemini_install_writes_gemini_md(tmp_path):
     gemini_install(tmp_path)
     md = tmp_path / "GEMINI.md"
     assert md.exists()
-    assert "graphify-out/GRAPH_REPORT.md" in md.read_text()
+    assert "graphify-out/GRAPH_REPORT.md" in md.read_text(encoding="utf-8")
 
 
 def test_gemini_install_writes_hook(tmp_path):
@@ -863,7 +869,7 @@ def test_gemini_install_writes_hook(tmp_path):
     from graphify.__main__ import gemini_install
 
     gemini_install(tmp_path)
-    settings = _json.loads((tmp_path / ".gemini" / "settings.json").read_text())
+    settings = _json.loads((tmp_path / ".gemini" / "settings.json").read_text(encoding="utf-8"))
     hooks = settings["hooks"]["BeforeTool"]
     assert any("graphify" in str(h) for h in hooks)
 
@@ -874,15 +880,15 @@ def test_gemini_install_idempotent(tmp_path):
     gemini_install(tmp_path)
     gemini_install(tmp_path)
     md = tmp_path / "GEMINI.md"
-    assert md.read_text().count("## graphify") == 1
+    assert md.read_text(encoding="utf-8").count("## graphify") == 1
 
 
 def test_gemini_install_merges_existing_gemini_md(tmp_path):
     from graphify.__main__ import gemini_install
 
-    (tmp_path / "GEMINI.md").write_text("# My project rules\n")
+    (tmp_path / "GEMINI.md").write_text("# My project rules\n", encoding="utf-8")
     gemini_install(tmp_path)
-    content = (tmp_path / "GEMINI.md").read_text()
+    content = (tmp_path / "GEMINI.md").read_text(encoding="utf-8")
     assert "# My project rules" in content
     assert "graphify-out/GRAPH_REPORT.md" in content
 
@@ -904,7 +910,7 @@ def test_gemini_uninstall_removes_hook(tmp_path):
     gemini_uninstall(tmp_path)
     settings_path = tmp_path / ".gemini" / "settings.json"
     if settings_path.exists():
-        settings = _json.loads(settings_path.read_text())
+        settings = _json.loads(settings_path.read_text(encoding="utf-8"))
         hooks = settings.get("hooks", {}).get("BeforeTool", [])
         assert not any("graphify" in str(h) for h in hooks)
 

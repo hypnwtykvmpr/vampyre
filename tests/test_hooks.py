@@ -19,7 +19,7 @@ def test_install_creates_hook(tmp_path):
     result = install(repo)
     hook = repo / ".git" / "hooks" / "post-commit"
     assert hook.exists()
-    assert _HOOK_MARKER in hook.read_text()
+    assert _HOOK_MARKER in hook.read_text(encoding="utf-8")
     assert "installed" in result
 
 
@@ -40,16 +40,16 @@ def test_install_idempotent(tmp_path):
     assert "already installed" in result
     # marker appears only once
     hook = repo / ".git" / "hooks" / "post-commit"
-    assert hook.read_text().count(_HOOK_MARKER) == 1
+    assert hook.read_text(encoding="utf-8").count(_HOOK_MARKER) == 1
 
 
 def test_install_appends_to_existing_hook(tmp_path):
     repo = _make_git_repo(tmp_path)
     hook = repo / ".git" / "hooks" / "post-commit"
-    hook.write_text("#!/bin/bash\necho existing\n")
+    hook.write_text("#!/bin/bash\necho existing\n", encoding="utf-8")
     hook.chmod(0o755)
     install(repo)
-    content = hook.read_text()
+    content = hook.read_text(encoding="utf-8")
     assert "existing" in content
     assert _HOOK_MARKER in content
 
@@ -104,7 +104,7 @@ def test_install_creates_post_checkout_hook(tmp_path):
     install(repo)
     hook = repo / ".git" / "hooks" / "post-checkout"
     assert hook.exists()
-    assert _CHECKOUT_MARKER in hook.read_text()
+    assert _CHECKOUT_MARKER in hook.read_text(encoding="utf-8")
 
 
 def test_install_post_checkout_is_executable(tmp_path):
@@ -192,8 +192,8 @@ def test_install_embeds_pinned_interpreter(tmp_path):
 
     repo = _make_git_repo(tmp_path)
     install(repo)
-    commit_hook = (repo / ".git" / "hooks" / "post-commit").read_text()
-    checkout_hook = (repo / ".git" / "hooks" / "post-checkout").read_text()
+    commit_hook = (repo / ".git" / "hooks" / "post-commit").read_text(encoding="utf-8")
+    checkout_hook = (repo / ".git" / "hooks" / "post-checkout").read_text(encoding="utf-8")
     # Compute the sanitized value the same way install() does.
     expected = sys.executable if not re.search(r"[^a-zA-Z0-9/_.@:\\-]", sys.executable) else ""
     if expected:
@@ -230,6 +230,7 @@ def test_hook_check_no_additionalContext(tmp_path):
         cwd=tmp_path,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
 
     assert result.returncode == 0

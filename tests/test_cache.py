@@ -17,7 +17,7 @@ from graphify.cache import check_semantic_cache, save_semantic_cache
 @pytest.fixture
 def tmp_file(tmp_path):
     f = tmp_path / "sample.txt"
-    f.write_text("hello world")
+    f.write_text("hello world", encoding="utf-8")
     return f
 
 
@@ -39,8 +39,8 @@ def test_file_hash_changes(tmp_path):
     """Different file contents give different hashes."""
     f1 = tmp_path / "a.txt"
     f2 = tmp_path / "b.txt"
-    f1.write_text("content one")
-    f2.write_text("content two")
+    f1.write_text("content one", encoding="utf-8")
+    f2.write_text("content two", encoding="utf-8")
     assert file_hash(f1) != file_hash(f2)
 
 
@@ -159,7 +159,7 @@ def test_cache_miss_on_change(tmp_file, cache_root):
     result = {"nodes": [], "edges": [{"source": "a", "target": "b"}]}
     save_cached(tmp_file, result, root=cache_root)
     # Modify the file
-    tmp_file.write_text("completely different content")
+    tmp_file.write_text("completely different content", encoding="utf-8")
     assert load_cached(tmp_file, root=cache_root) is None
 
 
@@ -167,8 +167,8 @@ def test_cached_files(tmp_path, cache_root):
     """cached_files returns the set of cached hashes."""
     f1 = tmp_path / "file1.py"
     f2 = tmp_path / "file2.py"
-    f1.write_text("alpha")
-    f2.write_text("beta")
+    f1.write_text("alpha", encoding="utf-8")
+    f2.write_text("beta", encoding="utf-8")
 
     save_cached(f1, {"nodes": [], "edges": []}, root=cache_root)
     save_cached(f2, {"nodes": [], "edges": []}, root=cache_root)
@@ -191,9 +191,9 @@ def test_clear_cache(tmp_file, cache_root):
 def test_md_frontmatter_only_change_same_hash(tmp_path):
     """Changing only frontmatter fields in a .md file does not change the hash."""
     f = tmp_path / "doc.md"
-    f.write_text("---\nreviewed: 2026-01-01\n---\n\n# Title\n\nBody text.")
+    f.write_text("---\nreviewed: 2026-01-01\n---\n\n# Title\n\nBody text.", encoding="utf-8")
     h1 = file_hash(f)
-    f.write_text("---\nreviewed: 2026-04-09\n---\n\n# Title\n\nBody text.")
+    f.write_text("---\nreviewed: 2026-04-09\n---\n\n# Title\n\nBody text.", encoding="utf-8")
     h2 = file_hash(f)
     assert h1 == h2
 
@@ -201,9 +201,9 @@ def test_md_frontmatter_only_change_same_hash(tmp_path):
 def test_md_body_change_different_hash(tmp_path):
     """Changing the body of a .md file produces a different hash."""
     f = tmp_path / "doc.md"
-    f.write_text("---\nreviewed: 2026-01-01\n---\n\n# Title\n\nOriginal body.")
+    f.write_text("---\nreviewed: 2026-01-01\n---\n\n# Title\n\nOriginal body.", encoding="utf-8")
     h1 = file_hash(f)
-    f.write_text("---\nreviewed: 2026-01-01\n---\n\n# Title\n\nChanged body.")
+    f.write_text("---\nreviewed: 2026-01-01\n---\n\n# Title\n\nChanged body.", encoding="utf-8")
     h2 = file_hash(f)
     assert h1 != h2
 
@@ -211,9 +211,9 @@ def test_md_body_change_different_hash(tmp_path):
 def test_md_no_frontmatter_hashed_normally(tmp_path):
     """A .md file with no frontmatter is hashed by its full content."""
     f = tmp_path / "doc.md"
-    f.write_text("# Just a heading\n\nNo frontmatter here.")
+    f.write_text("# Just a heading\n\nNo frontmatter here.", encoding="utf-8")
     h1 = file_hash(f)
-    f.write_text("# Just a heading\n\nDifferent content.")
+    f.write_text("# Just a heading\n\nDifferent content.", encoding="utf-8")
     h2 = file_hash(f)
     assert h1 != h2
 
@@ -221,9 +221,9 @@ def test_md_no_frontmatter_hashed_normally(tmp_path):
 def test_non_md_file_hashed_fully(tmp_path):
     """Non-.md files are still hashed by their full content."""
     f = tmp_path / "script.py"
-    f.write_text("# comment\nx = 1")
+    f.write_text("# comment\nx = 1", encoding="utf-8")
     h1 = file_hash(f)
-    f.write_text("# changed comment\nx = 1")
+    f.write_text("# changed comment\nx = 1", encoding="utf-8")
     h2 = file_hash(f)
     assert h1 != h2
 
@@ -294,9 +294,9 @@ def test_md_edit_above_hr_changes_hash(tmp_path):
     """Editing content above a mid-document ``----`` break must change the
     hash -- previously that region was silently excluded from hashing."""
     f = tmp_path / "doc.md"
-    f.write_text("----\nIntro paragraph.\n\n---\nbody")
+    f.write_text("----\nIntro paragraph.\n\n---\nbody", encoding="utf-8")
     h1 = file_hash(f)
-    f.write_text("----\nEdited intro paragraph.\n\n---\nbody")
+    f.write_text("----\nEdited intro paragraph.\n\n---\nbody", encoding="utf-8")
     h2 = file_hash(f)
     assert h1 != h2
 
@@ -316,7 +316,7 @@ def test_save_cached_relativizes_source_file(tmp_path):
 
     (tmp_path / "src").mkdir()
     src = tmp_path / "src" / "foo.py"
-    src.write_text("def x(): pass\n")
+    src.write_text("def x(): pass\n", encoding="utf-8")
     abs_src = str(src.resolve())
     result = {
         "nodes": [{"id": "n1", "label": "foo", "source_file": abs_src}],
@@ -343,7 +343,7 @@ def test_load_cached_absolutizes_source_file(tmp_path):
 
     (tmp_path / "src").mkdir()
     src = tmp_path / "src" / "foo.py"
-    src.write_text("def x(): pass\n")
+    src.write_text("def x(): pass\n", encoding="utf-8")
     abs_src = str(src.resolve())
     save_cached(
         src,
@@ -381,7 +381,7 @@ def test_load_cached_passes_through_legacy_absolute_source_file(tmp_path):
 
     (tmp_path / "src").mkdir()
     src = tmp_path / "src" / "foo.py"
-    src.write_text("pass\n")
+    src.write_text("pass\n", encoding="utf-8")
     abs_src = str(src.resolve())
 
     # Hand-write a legacy-format cache entry (absolute source_file).
@@ -393,7 +393,8 @@ def test_load_cached_passes_through_legacy_absolute_source_file(tmp_path):
                 "nodes": [{"id": "n1", "source_file": abs_src}],
                 "edges": [],
             }
-        )
+        ),
+        encoding="utf-8",
     )
 
     loaded = load_cached(src, root=tmp_path, kind="ast")
@@ -412,7 +413,7 @@ def test_cache_portable_across_roots(tmp_path):
     repo_a.mkdir()
     (repo_a / "src").mkdir()
     src_a = repo_a / "src" / "foo.py"
-    src_a.write_text("def x(): pass\n")
+    src_a.write_text("def x(): pass\n", encoding="utf-8")
     save_cached(
         src_a,
         {
@@ -452,7 +453,7 @@ def test_ast_cache_invalidated_on_version_bump(tmp_path, monkeypatch):
     import graphify.cache as cache_mod
 
     f = tmp_path / "mod.py"
-    f.write_text("def f(): pass\n")
+    f.write_text("def f(): pass\n", encoding="utf-8")
 
     monkeypatch.setattr(cache_mod, "_EXTRACTOR_VERSION", "0.8.0", raising=False)
     save_cached(f, {"nodes": [{"id": "n1"}], "edges": []}, root=tmp_path, kind="ast")
@@ -470,7 +471,7 @@ def test_ast_cache_version_bump_cleans_stale_entries(tmp_path, monkeypatch):
     import graphify.cache as cache_mod
 
     f = tmp_path / "mod.py"
-    f.write_text("def f(): pass\n")
+    f.write_text("def f(): pass\n", encoding="utf-8")
 
     monkeypatch.setattr(cache_mod, "_EXTRACTOR_VERSION", "0.8.0", raising=False)
     save_cached(f, {"nodes": [{"id": "n1"}], "edges": []}, root=tmp_path, kind="ast")
@@ -491,16 +492,16 @@ def test_legacy_unversioned_ast_entries_not_served(tmp_path):
     from graphify.cache import file_hash, _GRAPHIFY_OUT
 
     f = tmp_path / "mod.py"
-    f.write_text("def f(): pass\n")
+    f.write_text("def f(): pass\n", encoding="utf-8")
     h = file_hash(f, tmp_path)
     payload = json.dumps({"nodes": [{"id": "stale"}], "edges": []})
 
     # Unversioned cache/ast/{hash}.json (pre-versioning layout)
     unversioned = tmp_path / _GRAPHIFY_OUT / "cache" / "ast"
     unversioned.mkdir(parents=True)
-    (unversioned / f"{h}.json").write_text(payload)
+    (unversioned / f"{h}.json").write_text(payload, encoding="utf-8")
     # Legacy flat cache/{hash}.json (pre-0.5.3 layout)
-    (unversioned.parent / f"{h}.json").write_text(payload)
+    (unversioned.parent / f"{h}.json").write_text(payload, encoding="utf-8")
 
     assert load_cached(f, root=tmp_path, kind="ast") is None
 
@@ -511,7 +512,7 @@ def test_semantic_cache_survives_version_bump(tmp_path, monkeypatch):
     import graphify.cache as cache_mod
 
     f = tmp_path / "doc.md"
-    f.write_text("# Title\n\nBody.\n")
+    f.write_text("# Title\n\nBody.\n", encoding="utf-8")
 
     monkeypatch.setattr(cache_mod, "_EXTRACTOR_VERSION", "0.8.0", raising=False)
     save_cached(f, {"nodes": [{"id": "n1"}], "edges": []}, root=tmp_path, kind="semantic")
@@ -536,7 +537,7 @@ def test_save_cached_in_root_symlink_keeps_symlink_name(tmp_path, path_alias):
 
     (tmp_path / "sub").mkdir()
     target = tmp_path / "sub" / "target.py"
-    target.write_text("pass\n")
+    target.write_text("pass\n", encoding="utf-8")
     alias = path_alias(tmp_path / "alias.py", target)
 
     abs_alias = str(alias)  # caller's view — the symlink path, unresolved
@@ -567,11 +568,11 @@ def test_semantic_prune_removes_orphan_entries(tmp_path):
     from graphify.cache import prune_semantic_cache
 
     f = tmp_path / "doc.md"
-    f.write_text("# A\n\nContent A.\n")
+    f.write_text("# A\n\nContent A.\n", encoding="utf-8")
     h_a = file_hash(f, tmp_path)
     save_cached(f, {"nodes": [{"id": "a"}], "edges": []}, root=tmp_path, kind="semantic")
 
-    f.write_text("# B\n\nContent B.\n")
+    f.write_text("# B\n\nContent B.\n", encoding="utf-8")
     h_b = file_hash(f, tmp_path)
     save_cached(f, {"nodes": [{"id": "b"}], "edges": []}, root=tmp_path, kind="semantic")
 
@@ -594,7 +595,7 @@ def test_semantic_prune_keeps_live_unchanged_entries(tmp_path):
     live_hashes = set()
     for i in range(5):
         f = tmp_path / f"doc{i}.md"
-        f.write_text(f"# Doc {i}\n\nBody {i}.\n")
+        f.write_text(f"# Doc {i}\n\nBody {i}.\n", encoding="utf-8")
         save_cached(f, {"nodes": [{"id": str(i)}], "edges": []}, root=tmp_path, kind="semantic")
         live_hashes.add(file_hash(f, tmp_path))
 
@@ -612,7 +613,7 @@ def test_semantic_prune_handles_deleted_file(tmp_path):
     from graphify.cache import prune_semantic_cache
 
     f = tmp_path / "gone.md"
-    f.write_text("# Gone\n\nWill be deleted.\n")
+    f.write_text("# Gone\n\nWill be deleted.\n", encoding="utf-8")
     h = file_hash(f, tmp_path)
     save_cached(f, {"nodes": [{"id": "g"}], "edges": []}, root=tmp_path, kind="semantic")
     semantic_dir = cache_dir(tmp_path, "semantic")
@@ -631,7 +632,7 @@ def test_semantic_prune_ignores_ast_and_tmp(tmp_path):
     from graphify.cache import prune_semantic_cache
 
     f = tmp_path / "doc.md"
-    f.write_text("# Doc\n\nBody.\n")
+    f.write_text("# Doc\n\nBody.\n", encoding="utf-8")
     # AST entry (different subtree) must survive.
     save_cached(f, {"nodes": [{"id": "ast"}], "edges": []}, root=tmp_path, kind="ast")
     ast_dir = cache_dir(tmp_path, "ast")
@@ -639,9 +640,9 @@ def test_semantic_prune_ignores_ast_and_tmp(tmp_path):
 
     # A semantic orphan .json (to be pruned) plus a .tmp temporary (to survive).
     semantic_dir = cache_dir(tmp_path, "semantic")
-    (semantic_dir / "deadbeef.json").write_text('{"nodes": [], "edges": []}')
+    (semantic_dir / "deadbeef.json").write_text('{"nodes": [], "edges": []}', encoding="utf-8")
     tmp_entry = semantic_dir / "deadbeef.tmp"
-    tmp_entry.write_text("partial")
+    tmp_entry.write_text("partial", encoding="utf-8")
 
     pruned = prune_semantic_cache(tmp_path, set())
     assert pruned == 1

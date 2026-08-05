@@ -450,7 +450,8 @@ def test_java_generic_parents_include_type_argument_references(tmp_path):
         "class Base<T> {}\n"
         "interface Handler<T> {}\n"
         "interface DerivedHandler extends Handler<Event> {}\n"
-        "class Service extends Base<Dependency> implements Handler<Event> {}\n"
+        "class Service extends Base<Dependency> implements Handler<Event> {}\n",
+        encoding="utf-8",
     )
 
     result = extract_java(source)
@@ -476,7 +477,8 @@ def test_java_type_parameters_do_not_emit_references(tmp_path):
         "        return null;\n"
         "    }\n"
         "    <V> Box(V value) {}\n"
-        "}\n"
+        "}\n",
+        encoding="utf-8",
     )
 
     result = extract_java(source)
@@ -508,7 +510,8 @@ def test_java_field_type_references_have_field_context(tmp_path):
         "class CheckoutService {\n"
         "    PaymentGateway gateway;\n"
         "    List<Handler> handlers;\n"
-        "}\n"
+        "}\n",
+        encoding="utf-8",
     )
     result = extract_java(source)
     assert ("CheckoutService", "PaymentGateway") in _edge_labels(result, "references", "field")
@@ -522,7 +525,8 @@ def test_java_record_component_type_references(tmp_path):
         "class Item {}\n"
         "class Attachment {}\n"
         "record Order(Payload payload, List<Item> items, int count, "
-        "Attachment... attachments) {}\n"
+        "Attachment... attachments) {}\n",
+        encoding="utf-8",
     )
 
     result = extract_java(source)
@@ -538,7 +542,8 @@ def test_java_record_components_skip_type_parameters(tmp_path):
     source.write_text(
         "class Payload {}\n"
         "class Box<X> {}\n"
-        "record Batch<T>(T value, Box<T> boxed, Box<Payload> retained) {}\n"
+        "record Batch<T>(T value, Box<T> boxed, Box<Payload> retained) {}\n",
+        encoding="utf-8",
     )
 
     result = extract_java(source)
@@ -553,7 +558,9 @@ def test_java_record_components_skip_type_parameters(tmp_path):
 
 def test_java_type_annotations_have_attribute_context(tmp_path):
     source = tmp_path / "TypeAnnotations.java"
-    source.write_text('@Service\n@Entity(name = "checkout")\nclass CheckoutService {}\n')
+    source.write_text(
+        '@Service\n@Entity(name = "checkout")\nclass CheckoutService {}\n', encoding="utf-8"
+    )
 
     result = extract_java(source)
 
@@ -568,7 +575,8 @@ def test_java_enum_and_annotation_declarations_are_type_nodes(tmp_path):
         "enum PaymentStatus { PENDING, PAID }\n"
         "@interface Audited {}\n"
         "class Order { PaymentStatus status; }\n"
-        "@Audited class CheckoutService {}\n"
+        "@Audited class CheckoutService {}\n",
+        encoding="utf-8",
     )
 
     result = extract_java(source)
@@ -1231,7 +1239,8 @@ def test_objc_class_method_labeled_with_plus(tmp_path):
     """`+ (…)shared` is a class method and must be labeled +shared, not -shared (#1475)."""
     p = tmp_path / "S.m"
     p.write_text(
-        "@implementation S\n+ (instancetype)shared { return nil; }\n- (void)go { }\n@end\n"
+        "@implementation S\n+ (instancetype)shared { return nil; }\n- (void)go { }\n@end\n",
+        encoding="utf-8",
     )
     labels = {n["label"] for n in extract_objc(p)["nodes"]}
     assert "+shared" in labels and "-go" in labels
@@ -1244,7 +1253,8 @@ def test_objc_compound_selector_call_resolves(tmp_path):
         "@implementation V\n"
         "- (void)tableView:(id)tv numberOfRowsInSection:(int)s { }\n"
         "- (void)go { [self tableView:nil numberOfRowsInSection:0]; }\n"
-        "@end\n"
+        "@end\n",
+        encoding="utf-8",
     )
     r = extract_objc(p)
     nid2label = {n["id"]: n["label"] for n in r["nodes"]}
@@ -1256,7 +1266,10 @@ def test_objc_generic_property_type_extracted(tmp_path):
     """`NSArray<Product *> *` must reference the element type Product (and the
     container NSArray); the generic wrapper made the type invisible before (#1475)."""
     p = tmp_path / "M.h"
-    p.write_text("@interface M : NSObject\n@property (strong) NSArray<Product *> *items;\n@end\n")
+    p.write_text(
+        "@interface M : NSObject\n@property (strong) NSArray<Product *> *items;\n@end\n",
+        encoding="utf-8",
+    )
     refs = _edge_labels(extract_objc(p), "references", "field")
     assert ("M", "Product") in refs
     assert ("M", "NSArray") in refs
@@ -1267,7 +1280,9 @@ def test_objc_module_import_edge(tmp_path):
     from graphify.extract import _make_id
 
     p = tmp_path / "X.m"
-    p.write_text("@import Foundation;\n@import UIKit.UIView;\n@implementation X\n@end\n")
+    p.write_text(
+        "@import Foundation;\n@import UIKit.UIView;\n@implementation X\n@end\n", encoding="utf-8"
+    )
     targets = {e["target"] for e in extract_objc(p)["edges"] if e["relation"] == "imports"}
     assert _make_id("Foundation") in targets and _make_id("UIKit") in targets
 
@@ -1278,9 +1293,13 @@ def test_objc_header_dispatch_routes_objc_not_c(tmp_path):
     from graphify.extract import _get_extractor, extract_objc as _eo, extract_c as _ec
 
     objc_h = tmp_path / "AppDelegate.h"
-    objc_h.write_text("@interface AppDelegate : NSObject <UIApplicationDelegate>\n@end\n")
+    objc_h.write_text(
+        "@interface AppDelegate : NSObject <UIApplicationDelegate>\n@end\n", encoding="utf-8"
+    )
     c_h = tmp_path / "util.h"
-    c_h.write_text("#include <stdio.h>\nint add(int a, int b);\nstruct Point { int x; };\n")
+    c_h.write_text(
+        "#include <stdio.h>\nint add(int a, int b);\nstruct Point { int x; };\n", encoding="utf-8"
+    )
     assert _get_extractor(objc_h) is _eo
     assert _get_extractor(c_h) is _ec
 
@@ -1297,7 +1316,8 @@ def test_objc_ns_assume_nonnull_macro_does_not_break_parsing(tmp_path):
         "@interface AlertManager : NSObject\n"
         "- (void)show;\n"
         "@end\n"
-        "NS_ASSUME_NONNULL_END\n"
+        "NS_ASSUME_NONNULL_END\n",
+        encoding="utf-8",
     )
     r = extract_objc(p)
     labels = {n["label"] for n in r["nodes"]}
@@ -1310,7 +1330,7 @@ def test_objc_ns_assume_nonnull_macro_does_not_break_parsing(tmp_path):
 def test_objc_macro_free_header_unchanged(tmp_path):
     """A macro-free header still parses exactly as before (regression)."""
     p = tmp_path / "Plain.h"
-    p.write_text("@interface Plain : NSObject\n- (void)go;\n@end\n")
+    p.write_text("@interface Plain : NSObject\n- (void)go;\n@end\n", encoding="utf-8")
     r = extract_objc(p)
     labels = {n["label"] for n in r["nodes"]}
     assert "Plain" in labels
@@ -1323,14 +1343,20 @@ def test_objc_quoted_import_edges_resolve_to_real_nodes(tmp_path):
     the import edge dangling (#1475)."""
     from graphify.extract import extract
 
-    (tmp_path / "Product.h").write_text("@interface Product : NSObject\n@end\n")
-    (tmp_path / "Product.m").write_text('#import "Product.h"\n@implementation Product\n@end\n')
-    (tmp_path / "Order.h").write_text("@interface Order : NSObject\n@end\n")
-    (tmp_path / "Order.m").write_text('#import "Order.h"\n@implementation Order\n@end\n')
+    (tmp_path / "Product.h").write_text("@interface Product : NSObject\n@end\n", encoding="utf-8")
+    (tmp_path / "Product.m").write_text(
+        '#import "Product.h"\n@implementation Product\n@end\n', encoding="utf-8"
+    )
+    (tmp_path / "Order.h").write_text("@interface Order : NSObject\n@end\n", encoding="utf-8")
+    (tmp_path / "Order.m").write_text(
+        '#import "Order.h"\n@implementation Order\n@end\n', encoding="utf-8"
+    )
     consumer_a = tmp_path / "ConsumerA.m"
-    consumer_a.write_text('#import "Product.h"\n@implementation ConsumerA\n@end\n')
+    consumer_a.write_text(
+        '#import "Product.h"\n@implementation ConsumerA\n@end\n', encoding="utf-8"
+    )
     consumer_b = tmp_path / "ConsumerB.m"
-    consumer_b.write_text('#import "Order.h"\n@implementation ConsumerB\n@end\n')
+    consumer_b.write_text('#import "Order.h"\n@implementation ConsumerB\n@end\n', encoding="utf-8")
     files = [
         tmp_path / "Product.h",
         tmp_path / "Product.m",
@@ -1369,14 +1395,17 @@ def test_objc_alloc_init_emits_type_reference(tmp_path):
     """`[[Foo alloc] init]` must emit a `references` edge to the project class Foo (#1475)."""
     from graphify.extract import extract
 
-    (tmp_path / "Foo.h").write_text("@interface Foo : NSObject\n@end\n")
-    (tmp_path / "Foo.m").write_text('#import "Foo.h"\n@implementation Foo\n@end\n')
+    (tmp_path / "Foo.h").write_text("@interface Foo : NSObject\n@end\n", encoding="utf-8")
+    (tmp_path / "Foo.m").write_text(
+        '#import "Foo.h"\n@implementation Foo\n@end\n', encoding="utf-8"
+    )
     user = tmp_path / "User.m"
     user.write_text(
         '#import "Foo.h"\n'
         "@implementation User\n"
         "- (void)build { Foo *x = [[Foo alloc] init]; }\n"
-        "@end\n"
+        "@end\n",
+        encoding="utf-8",
     )
     r = extract([tmp_path / "Foo.h", tmp_path / "Foo.m", user], parallel=False)
     assert ("-build", "Foo") in _edge_labels(r, "references")
@@ -1390,7 +1419,8 @@ def test_objc_alloc_init_unknown_class_no_resolved_edge(tmp_path):
         "@implementation Caller\n"
         "- (void)build { id x = [[Unknown alloc] init]; }\n"
         "- (void)other { [self build]; [x doStuff]; }\n"
-        "@end\n"
+        "@end\n",
+        encoding="utf-8",
     )
     r = extract_objc(p)
     # The single-file extractor emits the edge to a sourceless stub; assert there is
@@ -1409,7 +1439,8 @@ def test_objc_dot_syntax_property_accesses_edge(tmp_path):
         "@implementation Dog\n"
         '- (NSString *)name { return @"Rex"; }\n'
         '- (void)greet { NSLog(@"%@", self.name); }\n'
-        "@end\n"
+        "@end\n",
+        encoding="utf-8",
     )
     r = extract_objc(p)
     accesses = [(e["source"], e["target"]) for e in r["edges"] if e["relation"] == "accesses"]
@@ -1429,7 +1460,8 @@ def test_objc_dot_syntax_no_fanout_two_same_named_properties(tmp_path):
         "@implementation B\n"
         '- (NSString *)name { return @"B"; }\n'
         '- (void)show { NSLog(@"%@", self.name); }\n'
-        "@end\n"
+        "@end\n",
+        encoding="utf-8",
     )
     r = extract_objc(p)
     accesses = [e for e in r["edges"] if e["relation"] == "accesses"]
@@ -1444,7 +1476,9 @@ def test_objc_dot_syntax_no_fanout_two_same_named_properties(tmp_path):
 def test_objc_dot_syntax_unresolvable_property_zero_edges(tmp_path):
     """Accessing a property not defined in the current class produces zero accesses edges."""
     p = tmp_path / "X.m"
-    p.write_text('@implementation X\n- (void)run { NSLog(@"%@", self.missing); }\n@end\n')
+    p.write_text(
+        '@implementation X\n- (void)run { NSLog(@"%@", self.missing); }\n@end\n', encoding="utf-8"
+    )
     r = extract_objc(p)
     accesses = [e for e in r["edges"] if e["relation"] == "accesses"]
     assert len(accesses) == 0
@@ -1457,7 +1491,8 @@ def test_objc_selector_expression_calls_edge(tmp_path):
         "@implementation Sched\n"
         "- (void)fetch { }\n"
         "- (void)schedule { [self performSelector:@selector(fetch)]; }\n"
-        "@end\n"
+        "@end\n",
+        encoding="utf-8",
     )
     r = extract_objc(p)
     nid2label = {n["id"]: n["label"] for n in r["nodes"]}
@@ -1479,7 +1514,8 @@ def test_objc_selector_no_fanout_two_same_named_methods(tmp_path):
         "@end\n"
         "@implementation B\n"
         "- (void)doThing { }\n"
-        "@end\n"
+        "@end\n",
+        encoding="utf-8",
     )
     r = extract_objc(p)
     nid2label = {n["id"]: n["label"] for n in r["nodes"]}
@@ -1501,7 +1537,8 @@ def test_objc_dot_syntax_substring_sibling_exact_match(tmp_path):
         '- (NSString *)name { return @"n"; }\n'
         '- (NSString *)surname { return @"s"; }\n'
         '- (void)show { NSLog(@"%@", self.name); }\n'
-        "@end\n"
+        "@end\n",
+        encoding="utf-8",
     )
     r = extract_objc(p)
     nid2label = {n["id"]: n["label"] for n in r["nodes"]}
@@ -1523,7 +1560,8 @@ def test_objc_selector_substring_method_exact_match(tmp_path):
         "- (void)doThing { }\n"
         "- (void)reallyDoThing { }\n"
         "- (void)run { [self performSelector:@selector(doThing)]; }\n"
-        "@end\n"
+        "@end\n",
+        encoding="utf-8",
     )
     r = extract_objc(p)
     nid2label = {n["id"]: n["label"] for n in r["nodes"]}
@@ -2064,7 +2102,7 @@ def test_js_local_const_does_not_emit_phantom_node(tmp_path):
         "export const exportedConst = { a: 1 };\n"
     )
     f = tmp_path / "scope_guard.js"
-    f.write_text(src)
+    f.write_text(src, encoding="utf-8")
     r = extract_js(f)
     labels = _labels(r)
 
@@ -2084,7 +2122,7 @@ def test_js_module_level_arrow_produces_node_and_call_edges(tmp_path):
     """
     src = "function helper() { return 1; }\nconst handler = () => {\n  helper();\n};\n"
     f = tmp_path / "arrows.js"
-    f.write_text(src)
+    f.write_text(src, encoding="utf-8")
     r = extract_js(f)
     labels = _labels(r)
     relations = _relations(r)
@@ -2105,7 +2143,7 @@ def test_ts_local_const_does_not_emit_phantom_node(tmp_path):
         "export const topLevel = { a: 1 };\n"
     )
     f = tmp_path / "scope_guard.ts"
-    f.write_text(src)
+    f.write_text(src, encoding="utf-8")
     r = extract_js(f)
     labels = _labels(r)
 
@@ -2123,7 +2161,8 @@ def test_ts_constructor_injection_calls_edge(tmp_path):
         "export interface IUserRepository {\n"
         "  findById(id: string): Promise<any>;\n"
         "  save(user: any): Promise<void>;\n"
-        "}\n"
+        "}\n",
+        encoding="utf-8",
     )
     svc_ts = tmp_path / "service.ts"
     svc_ts.write_text(
@@ -2135,7 +2174,8 @@ def test_ts_constructor_injection_calls_edge(tmp_path):
         "  getUser(id: string) {\n"
         "    return this.repo.findById(id);\n"
         "  }\n"
-        "}\n"
+        "}\n",
+        encoding="utf-8",
     )
     r = extract([repo_ts, svc_ts], cache_root=tmp_path / "cache")
     edge_triples = {(e["source"], e["relation"], e["target"]) for e in r["edges"]}
@@ -2163,7 +2203,8 @@ def test_ts_this_field_receiver_not_same_file_collision(tmp_path):
         "  run() {\n"
         "    return this.db.query();\n"
         "  }\n"
-        "}\n"
+        "}\n",
+        encoding="utf-8",
     )
     r = extract_js(f)
     calls_edges = [e for e in r["edges"] if e["relation"] == "calls"]
@@ -2195,17 +2236,18 @@ def test_ts_injected_field_resolves_to_typed_class_not_same_named_collision(tmp_
     from graphify.extract import extract
 
     (tmp_path / "database.ts").write_text(
-        "export class Database {\n  query(sql: string) { return sql; }\n}\n"
+        "export class Database {\n  query(sql: string) { return sql; }\n}\n", encoding="utf-8"
     )
     (tmp_path / "http.ts").write_text(
-        "export class HttpClient {\n  query(url: string) { return url; }\n}\n"
+        "export class HttpClient {\n  query(url: string) { return url; }\n}\n", encoding="utf-8"
     )
     (tmp_path / "service.ts").write_text(
         "import { Database } from './database';\n"
         "export class Service {\n"
         "  constructor(private db: Database) {}\n"
         "  run() { return this.db.query('x'); }\n"
-        "}\n"
+        "}\n",
+        encoding="utf-8",
     )
     r = extract(
         [tmp_path / "database.ts", tmp_path / "http.ts", tmp_path / "service.ts"],
@@ -2237,16 +2279,17 @@ def test_ts_injected_field_ambiguous_type_emits_no_edge(tmp_path):
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
     (tmp_path / "a" / "database.ts").write_text(
-        "export class Database {\n  query(sql: string) { return sql; }\n}\n"
+        "export class Database {\n  query(sql: string) { return sql; }\n}\n", encoding="utf-8"
     )
     (tmp_path / "b" / "database.ts").write_text(
-        "export class Database {\n  query(sql: string) { return sql; }\n}\n"
+        "export class Database {\n  query(sql: string) { return sql; }\n}\n", encoding="utf-8"
     )
     (tmp_path / "service.ts").write_text(
         "export class Service {\n"
         "  constructor(private db: Database) {}\n"
         "  run() { return this.db.query('x'); }\n"
-        "}\n"
+        "}\n",
+        encoding="utf-8",
     )
     r = extract(sorted(tmp_path.rglob("*.ts")), cache_root=tmp_path / "cache")
     # `query` resolution must bail (2 Database defs) -> no run()->query calls edge.
@@ -2317,7 +2360,7 @@ def test_markdown_fenced_heading_not_parsed():
     src = (
         "# Real Heading\n\n```bash\n## Not A Heading\necho hello\n```\n\n## Another Real Heading\n"
     )
-    with tempfile.NamedTemporaryFile(suffix=".md", mode="w", delete=False) as fh:
+    with tempfile.NamedTemporaryFile(suffix=".md", mode="w", encoding="utf-8", delete=False) as fh:
         fh.write(src)
         fpath = fh.name
     try:
@@ -2354,11 +2397,12 @@ def _md_link_fixture(tmp_path):
         "| Unit Tests | [C# Unit Test Standards](unit-tests.md) |\n\n"
         "See also [external](https://example.com/x) and ![logo](./logo.png).\n"
         "Anchor: [section](./repository.md#setup).\n"
-        "Wikilink: [[http-client]].\n"
+        "Wikilink: [[http-client]].\n",
+        encoding="utf-8",
     )
-    (pkg / "repository.md").write_text("# C# Repository Standards\nContent.\n")
-    (pkg / "http-client.md").write_text("# C# HTTP Client Standards\nContent.\n")
-    (pkg / "unit-tests.md").write_text("# C# Unit Test Standards\nContent.\n")
+    (pkg / "repository.md").write_text("# C# Repository Standards\nContent.\n", encoding="utf-8")
+    (pkg / "http-client.md").write_text("# C# HTTP Client Standards\nContent.\n", encoding="utf-8")
+    (pkg / "unit-tests.md").write_text("# C# Unit Test Standards\nContent.\n", encoding="utf-8")
     return pkg
 
 

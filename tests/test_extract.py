@@ -1,3 +1,4 @@
+import io
 import json
 import os
 from collections import Counter
@@ -18,6 +19,32 @@ from graphify.graph_loader import load_graph
 from graphify.projections import edge_records_between
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_safe_extract_diagnostics_survive_a_strict_legacy_console(tmp_path, monkeypatch):
+    source = tmp_path / "漢.py"
+    source.write_text("broken", encoding="utf-8")
+    output = io.BytesIO()
+    stderr = io.TextIOWrapper(output, encoding="cp1252", errors="strict")
+    monkeypatch.setattr(extract_module.sys, "stderr", stderr)
+
+    def fail(_path):
+        raise ValueError("invalid 漢 source")
+
+    result = extract_module._safe_extract(fail, source)
+    stderr.flush()
+
+    assert result == {"nodes": [], "edges": [], "error": "ValueError: invalid 漢 source"}
+    assert "warning: skipped" in output.getvalue().decode("cp1252")
+
+
+def test_console_safe_survives_a_raising_encoding_property():
+    class RaisingEncodingStream:
+        @property
+        def encoding(self):
+            raise RuntimeError("encoding unavailable")
+
+    assert extract_module._console_safe("漢", RaisingEncodingStream()) == "\\u6f22"
 
 
 def test_make_id_strips_dots_and_underscores():
@@ -412,7 +439,7 @@ def test_collect_files_skips_hidden():
 def test_collect_files_follows_symlinked_directory(tmp_path, path_alias):
     real_dir = tmp_path / "real_src"
     real_dir.mkdir()
-    (real_dir / "lib.py").write_text("x = 1")
+    (real_dir / "lib.py").write_text("x = 1", encoding="utf-8")
     linked = path_alias(tmp_path / "linked_src", real_dir)
 
     files_no = collect_files(tmp_path, follow_symlinks=False)
@@ -427,7 +454,7 @@ def test_collect_files_skips_out_of_root_symlinked_directory(tmp_path, path_alia
     root.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    (outside / "secret.py").write_text("token = 'outside'")
+    (outside / "secret.py").write_text("token = 'outside'", encoding="utf-8")
     linked = path_alias(root / "linked_secret", outside)
 
     files = collect_files(root, follow_symlinks=True)
@@ -440,7 +467,7 @@ def test_collect_files_skips_out_of_root_symlinked_file_by_default(tmp_path, pat
     root.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    (outside / "secret.py").write_text("token = 'outside'")
+    (outside / "secret.py").write_text("token = 'outside'", encoding="utf-8")
     linked = path_alias(root / "secret_link.py", outside / "secret.py")
 
     files = collect_files(root)
@@ -451,7 +478,7 @@ def test_collect_files_skips_out_of_root_symlinked_file_by_default(tmp_path, pat
 def test_collect_files_handles_circular_symlinks(tmp_path, path_alias):
     sub = tmp_path / "pkg"
     sub.mkdir()
-    (sub / "mod.py").write_text("x = 1")
+    (sub / "mod.py").write_text("x = 1", encoding="utf-8")
     path_alias(sub / "cycle", tmp_path)
 
     files = collect_files(tmp_path, follow_symlinks=True)
@@ -486,28 +513,30 @@ def test_collect_files_parity_with_legacy_on_fixtures():
 
 def test_collect_files_parity_with_legacy_synthetic(tmp_path):
     (tmp_path / "src" / "deep").mkdir(parents=True)
-    (tmp_path / "src" / "app.py").write_text("x = 1")
-    (tmp_path / "src" / "deep" / "lib.ts").write_text("export const x = 1")
-    (tmp_path / "src" / "deep" / "notes.txt").write_text("not code")
+    (tmp_path / "src" / "app.py").write_text("x = 1", encoding="utf-8")
+    (tmp_path / "src" / "deep" / "lib.ts").write_text("export const x = 1", encoding="utf-8")
+    (tmp_path / "src" / "deep" / "notes.txt").write_text("not code", encoding="utf-8")
     # Fortran case distinction: .f and .F are distinct dispatch entries
-    (tmp_path / "src" / "legacy.f").write_text("      END")
-    (tmp_path / "src" / "modern.F").write_text("      END")
+    (tmp_path / "src" / "legacy.f").write_text("      END", encoding="utf-8")
+    (tmp_path / "src" / "modern.F").write_text("      END", encoding="utf-8")
     # Hidden dirs are traversed (only noise dirs are skipped)
     (tmp_path / ".github").mkdir()
-    (tmp_path / ".github" / "ci.sh").write_text("echo hi")
+    (tmp_path / ".github" / "ci.sh").write_text("echo hi", encoding="utf-8")
     # Noise dirs must be excluded entirely
     (tmp_path / "node_modules" / "pkg").mkdir(parents=True)
-    (tmp_path / "node_modules" / "pkg" / "index.js").write_text("x")
+    (tmp_path / "node_modules" / "pkg" / "index.js").write_text("x", encoding="utf-8")
     (tmp_path / "__pycache__").mkdir()
-    (tmp_path / "__pycache__" / "app.py").write_text("x")
+    (tmp_path / "__pycache__" / "app.py").write_text("x", encoding="utf-8")
     # Ignore rules incl. a negation, so directory-level pruning must not
     # swallow re-included files
     (tmp_path / "gen").mkdir()
-    (tmp_path / "gen" / "skip.py").write_text("x")
+    (tmp_path / "gen" / "skip.py").write_text("x", encoding="utf-8")
     (tmp_path / "vendored").mkdir()
-    (tmp_path / "vendored" / "drop.py").write_text("x")
-    (tmp_path / "vendored" / "keep.py").write_text("x")
-    (tmp_path / ".gitignore").write_text("gen/\nvendored/*.py\n!vendored/keep.py\n")
+    (tmp_path / "vendored" / "drop.py").write_text("x", encoding="utf-8")
+    (tmp_path / "vendored" / "keep.py").write_text("x", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text(
+        "gen/\nvendored/*.py\n!vendored/keep.py\n", encoding="utf-8"
+    )
 
     result = collect_files(tmp_path)
     assert result == _legacy_collect_files(tmp_path)
@@ -523,9 +552,9 @@ def test_collect_files_walks_each_directory_once(tmp_path, monkeypatch):
     after descending into them.
     """
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "a.py").write_text("x = 1")
+    (tmp_path / "src" / "a.py").write_text("x = 1", encoding="utf-8")
     (tmp_path / "node_modules" / "pkg").mkdir(parents=True)
-    (tmp_path / "node_modules" / "pkg" / "index.js").write_text("x")
+    (tmp_path / "node_modules" / "pkg" / "index.js").write_text("x", encoding="utf-8")
 
     scanned: list[str] = []
     real_scandir = os.scandir
@@ -634,9 +663,9 @@ def test_cross_file_calls_skip_ambiguous_duplicate_labels(tmp_path):
     caller = tmp_path / "caller.py"
     helper_a = tmp_path / "a.py"
     helper_b = tmp_path / "b.py"
-    caller.write_text("def run():\n    log()\n")
-    helper_a.write_text("def log():\n    return 'a'\n")
-    helper_b.write_text("def log():\n    return 'b'\n")
+    caller.write_text("def run():\n    log()\n", encoding="utf-8")
+    helper_a.write_text("def log():\n    return 'a'\n", encoding="utf-8")
+    helper_b.write_text("def log():\n    return 'b'\n", encoding="utf-8")
 
     result = extract([caller, helper_a, helper_b], cache_root=tmp_path)
     nodes = {n["id"]: n for n in result["nodes"]}
@@ -662,9 +691,9 @@ def test_cross_file_call_survives_same_named_test_mock(tmp_path):
     tests = tmp_path / "tests"
     src.mkdir()
     tests.mkdir()
-    (src / "service.py").write_text("def save():\n    return 'real'\n")
-    (src / "caller.py").write_text("def run():\n    save()\n")
-    (tests / "test_service.py").write_text("def save():\n    return 'mock'\n")
+    (src / "service.py").write_text("def save():\n    return 'real'\n", encoding="utf-8")
+    (src / "caller.py").write_text("def run():\n    save()\n", encoding="utf-8")
+    (tests / "test_service.py").write_text("def save():\n    return 'mock'\n", encoding="utf-8")
 
     result = extract(
         [src / "caller.py", src / "service.py", tests / "test_service.py"],
@@ -694,9 +723,9 @@ def test_cross_file_call_god_node_guard_two_real_defs(tmp_path):
     pkg_c = tmp_path / "c"
     for d in (pkg_a, pkg_b, pkg_c):
         d.mkdir()
-    (pkg_a / "svc.py").write_text("def save():\n    return 'a'\n")
-    (pkg_b / "svc.py").write_text("def save():\n    return 'b'\n")
-    (pkg_c / "caller.py").write_text("def run():\n    save()\n")
+    (pkg_a / "svc.py").write_text("def save():\n    return 'a'\n", encoding="utf-8")
+    (pkg_b / "svc.py").write_text("def save():\n    return 'b'\n", encoding="utf-8")
+    (pkg_c / "caller.py").write_text("def run():\n    save()\n", encoding="utf-8")
 
     result = extract(
         [pkg_c / "caller.py", pkg_a / "svc.py", pkg_b / "svc.py"],
@@ -719,10 +748,12 @@ def test_cross_file_call_survives_many_test_mocks(tmp_path):
     tests = tmp_path / "tests"
     src.mkdir()
     tests.mkdir()
-    (src / "service.py").write_text("def save():\n    return 'real'\n")
-    (src / "caller.py").write_text("def run():\n    save()\n")
+    (src / "service.py").write_text("def save():\n    return 'real'\n", encoding="utf-8")
+    (src / "caller.py").write_text("def run():\n    save()\n", encoding="utf-8")
     for i in range(5):
-        (tests / f"thing{i}_test.py").write_text("def save():\n    return 'mock'\n")
+        (tests / f"thing{i}_test.py").write_text(
+            "def save():\n    return 'mock'\n", encoding="utf-8"
+        )
 
     paths = [src / "caller.py", src / "service.py"] + sorted(tests.glob("*_test.py"))
     result = extract(paths, cache_root=tmp_path)
@@ -821,7 +852,7 @@ def test_extract_js_arrow_function_still_extracted():
     from graphify.extract import extract_js
 
     arrow_fixture = FIXTURES / "_arrow_only.js"
-    arrow_fixture.write_text("const greet = () => console.log('hi');\n")
+    arrow_fixture.write_text("const greet = () => console.log('hi');\n", encoding="utf-8")
     try:
         result = extract_js(arrow_fixture)
         labels = [n["label"] for n in result["nodes"]]
@@ -845,7 +876,8 @@ def test_extract_js_this_assigned_methods(tmp_path):
         "function UserDAO(db) {\n"
         "  this.addUser = (name) => { return name; };\n"
         "  this.getUser = function(id) { return id; };\n"
-        "}\n"
+        "}\n",
+        encoding="utf-8",
     )
     result = extract_js(f)
     by_label = {n["label"]: n for n in result["nodes"]}
@@ -868,7 +900,10 @@ def test_extract_js_commonjs_exports_assignment(tmp_path):
     from graphify.extract import extract_js
 
     f = tmp_path / "mod.js"
-    f.write_text("exports.alpha = (x) => x;\nmodule.exports.beta = function(y) { return y; };\n")
+    f.write_text(
+        "exports.alpha = (x) => x;\nmodule.exports.beta = function(y) { return y; };\n",
+        encoding="utf-8",
+    )
     labels = [n["label"] for n in extract_js(f)["nodes"]]
     assert "alpha()" in labels
     assert "beta()" in labels
@@ -879,7 +914,9 @@ def test_extract_js_prototype_method_assignment(tmp_path):
     from graphify.extract import extract_js
 
     f = tmp_path / "proto.js"
-    f.write_text("function Foo() {}\nFoo.prototype.bar = function() { return 1; };\n")
+    f.write_text(
+        "function Foo() {}\nFoo.prototype.bar = function() { return 1; };\n", encoding="utf-8"
+    )
     by_label = {n["label"]: n for n in extract_js(f)["nodes"]}
     assert "Foo()" in by_label
     assert ".bar()" in by_label
@@ -890,7 +927,7 @@ def test_extract_js_const_function_expression(tmp_path):
     from graphify.extract import extract_js
 
     f = tmp_path / "fnexpr.js"
-    f.write_text("const handler = function(req, res) { return res; };\n")
+    f.write_text("const handler = function(req, res) { return res; };\n", encoding="utf-8")
     labels = [n["label"] for n in extract_js(f)["nodes"]]
     assert "handler()" in labels
 
@@ -902,7 +939,8 @@ def test_extract_ts_class_arrow_field(tmp_path):
 
     f = tmp_path / "comp.ts"
     f.write_text(
-        "class Widget {\n  onClick = (e) => { return e; };\n  render() { return null; }\n}\n"
+        "class Widget {\n  onClick = (e) => { return e; };\n  render() { return null; }\n}\n",
+        encoding="utf-8",
     )
     by_label = {n["label"]: n for n in extract_js(f)["nodes"]}
     assert "Widget" in by_label
@@ -917,7 +955,7 @@ def test_extract_js_arbitrary_member_assignment_not_captured(tmp_path):
     from graphify.extract import extract_js
 
     f = tmp_path / "noise.js"
-    f.write_text("const obj = {};\nobj.whatever = () => 1;\n")
+    f.write_text("const obj = {};\nobj.whatever = () => 1;\n", encoding="utf-8")
     labels = [n["label"] for n in extract_js(f)["nodes"]]
     assert "whatever()" not in labels
     assert ".whatever()" not in labels
@@ -935,8 +973,12 @@ def test_cross_file_call_promoted_to_extracted_with_import_evidence(tmp_path):
     an `imports` or `imports_from` edge linking it to the callee."""
     caller = tmp_path / "caller.js"
     callee = tmp_path / "lib.js"
-    caller.write_text("const { doWork } = require('./lib');\nfunction run() { doWork(); }\n")
-    callee.write_text("function doWork() { return 1; }\nmodule.exports = { doWork };\n")
+    caller.write_text(
+        "const { doWork } = require('./lib');\nfunction run() { doWork(); }\n", encoding="utf-8"
+    )
+    callee.write_text(
+        "function doWork() { return 1; }\nmodule.exports = { doWork };\n", encoding="utf-8"
+    )
     result = extract([caller, callee], cache_root=tmp_path)
     nodes = {n["id"]: n for n in result["nodes"]}
     call_edges = [
@@ -957,8 +999,10 @@ def test_cross_file_call_remains_inferred_without_import_evidence(tmp_path):
     caller = tmp_path / "caller.js"
     callee = tmp_path / "lib.js"
     # Caller does NOT require lib — same-name function happens to exist elsewhere
-    caller.write_text("function run() { doUnique(); }\n")
-    callee.write_text("function doUnique() { return 1; }\nmodule.exports = { doUnique };\n")
+    caller.write_text("function run() { doUnique(); }\n", encoding="utf-8")
+    callee.write_text(
+        "function doUnique() { return 1; }\nmodule.exports = { doUnique };\n", encoding="utf-8"
+    )
     result = extract([caller, callee], cache_root=tmp_path)
     nodes = {n["id"]: n for n in result["nodes"]}
     call_edges = [
@@ -978,13 +1022,15 @@ def test_python_qualified_class_method_call_resolves_extracted(tmp_path):
     actions = tmp_path / "actions.py"
     viewset = tmp_path / "viewset.py"
     actions.write_text(
-        "class TaskActions:\n    @staticmethod\n    def approve(pk):\n        return pk\n"
+        "class TaskActions:\n    @staticmethod\n    def approve(pk):\n        return pk\n",
+        encoding="utf-8",
     )
     viewset.write_text(
         "from actions import TaskActions\n\n"
         "class TaskViewSet:\n"
         "    def handle(self, request):\n"
-        "        return TaskActions.approve(request)\n"
+        "        return TaskActions.approve(request)\n",
+        encoding="utf-8",
     )
     result = extract([viewset, actions], cache_root=tmp_path)
     nodes = {n["id"]: n for n in result["nodes"]}
@@ -1008,13 +1054,15 @@ def test_python_qualified_call_resolves_when_method_name_collides_with_caller(tm
     actions = tmp_path / "actions.py"
     viewset = tmp_path / "viewset.py"
     actions.write_text(
-        "class TaskActions:\n    @staticmethod\n    def approve(pk):\n        return pk\n"
+        "class TaskActions:\n    @staticmethod\n    def approve(pk):\n        return pk\n",
+        encoding="utf-8",
     )
     viewset.write_text(
         "from actions import TaskActions\n\n"
         "class TaskViewSet:\n"
         "    def approve(self, request):\n"  # same name as the callee
-        "        return TaskActions.approve(request)\n"
+        "        return TaskActions.approve(request)\n",
+        encoding="utf-8",
     )
     result = extract([viewset, actions], cache_root=tmp_path)
     nodes = {n["id"]: n for n in result["nodes"]}
@@ -1035,8 +1083,10 @@ def test_python_instance_member_call_not_overconnected(tmp_path):
     resolved cross-file — the #543/#1219 god-node guard stays intact (#1446)."""
     svc = tmp_path / "svc.py"
     worker = tmp_path / "worker.py"
-    svc.write_text("class Service:\n    def run(self):\n        return 1\n")
-    worker.write_text("class Worker:\n    def go(self, obj):\n        return obj.run()\n")
+    svc.write_text("class Service:\n    def run(self):\n        return 1\n", encoding="utf-8")
+    worker.write_text(
+        "class Worker:\n    def go(self, obj):\n        return obj.run()\n", encoding="utf-8"
+    )
     result = extract([worker, svc], cache_root=tmp_path)
     nodes = {n["id"]: n for n in result["nodes"]}
     bad = [
@@ -1055,10 +1105,11 @@ def test_python_qualified_call_ambiguous_class_bails(tmp_path):
     a = tmp_path / "a.py"
     b = tmp_path / "b.py"
     caller = tmp_path / "caller.py"
-    a.write_text("class Helper:\n    def do(self):\n        return 1\n")
-    b.write_text("class Helper:\n    def do(self):\n        return 2\n")
+    a.write_text("class Helper:\n    def do(self):\n        return 1\n", encoding="utf-8")
+    b.write_text("class Helper:\n    def do(self):\n        return 2\n", encoding="utf-8")
     caller.write_text(
-        "from a import Helper\n\nclass C:\n    def f(self):\n        return Helper.do(self)\n"
+        "from a import Helper\n\nclass C:\n    def f(self):\n        return Helper.do(self)\n",
+        encoding="utf-8",
     )
     result = extract([caller, a, b], cache_root=tmp_path)
     nodes = {n["id"]: n for n in result["nodes"]}
@@ -1230,9 +1281,9 @@ def test_extract_bash_calls_have_extracted_confidence():
 
 def test_extract_bash_emits_source_imports_from(tmp_path):
     helpers = tmp_path / "helpers.sh"
-    helpers.write_text("# helper\n")
+    helpers.write_text("# helper\n", encoding="utf-8")
     script = tmp_path / "deploy.sh"
-    script.write_text("#!/bin/bash\nsource ./helpers.sh\nfoo() { echo hi; }\n")
+    script.write_text("#!/bin/bash\nsource ./helpers.sh\nfoo() { echo hi; }\n", encoding="utf-8")
     result = extract_bash(script)
     import_edges = [e for e in result["edges"] if e["relation"] == "imports_from"]
     assert len(import_edges) >= 1
@@ -1296,7 +1347,7 @@ def test_extract_bash_missing_grammar_returns_error():
 def test_extract_bash_rejects_command_substitution_as_call(tmp_path):
     """`$(build)` must not be recorded as a call edge to build()."""
     script = tmp_path / "command_substitution.sh"
-    script.write_text("#!/usr/bin/env bash\nbuild() { echo build; }\n$(build)\n")
+    script.write_text("#!/usr/bin/env bash\nbuild() { echo build; }\n$(build)\n", encoding="utf-8")
     result = extract_bash(script)
     labels = {n["id"]: n["label"] for n in result["nodes"]}
     call_pairs = [
@@ -1310,7 +1361,9 @@ def test_extract_bash_rejects_command_substitution_as_call(tmp_path):
 def test_extract_bash_process_substitution_not_recorded(tmp_path):
     """`<(helper)` (process substitution) must not be recorded as a call edge."""
     script = tmp_path / "process_substitution.sh"
-    script.write_text("#!/usr/bin/env bash\nhelper() { echo h; }\ndiff <(helper) <(helper)\n")
+    script.write_text(
+        "#!/usr/bin/env bash\nhelper() { echo h; }\ndiff <(helper) <(helper)\n", encoding="utf-8"
+    )
     result = extract_bash(script)
     labels = {n["id"]: n["label"] for n in result["nodes"]}
     call_pairs = [
@@ -1324,7 +1377,10 @@ def test_extract_bash_process_substitution_not_recorded(tmp_path):
 def test_extract_bash_shadowing_function_is_recorded(tmp_path):
     """User-defined function shadowing an external command (install/find/etc.) must still produce a call edge."""
     script = tmp_path / "shadowing.sh"
-    script.write_text("#!/usr/bin/env bash\ninstall() { echo install; }\ndeploy() { install; }\n")
+    script.write_text(
+        "#!/usr/bin/env bash\ninstall() { echo install; }\ndeploy() { install; }\n",
+        encoding="utf-8",
+    )
     result = extract_bash(script)
     labels = {n["id"]: n["label"] for n in result["nodes"]}
     call_pairs = [
@@ -1340,7 +1396,7 @@ def test_extract_bash_shadowing_function_is_recorded(tmp_path):
 def test_extract_bash_creates_entrypoint_node(tmp_path):
     """Every bash file produces a `bash_entrypoint` node distinct from the file node, joined by a `contains` edge."""
     script = tmp_path / "with_entrypoint.sh"
-    script.write_text("#!/usr/bin/env bash\nfoo() { :; }\n")
+    script.write_text("#!/usr/bin/env bash\nfoo() { :; }\n", encoding="utf-8")
     result = extract_bash(script)
     kinds = [n.get("metadata", {}).get("kind") for n in result["nodes"]]
     assert "bash_entrypoint" in kinds, f"No bash_entrypoint node; kinds={kinds}"
@@ -1362,7 +1418,7 @@ def test_extract_bash_creates_entrypoint_node(tmp_path):
 def test_extract_bash_top_level_call_attributes_to_entrypoint(tmp_path):
     """Top-level function call attaches to the entrypoint node, not orphaned."""
     script = tmp_path / "top_level_call.sh"
-    script.write_text("#!/usr/bin/env bash\nbuild() { echo build; }\nbuild\n")
+    script.write_text("#!/usr/bin/env bash\nbuild() { echo build; }\nbuild\n", encoding="utf-8")
     result = extract_bash(script)
     entry_node = next(
         (n for n in result["nodes"] if n.get("metadata", {}).get("kind") == "bash_entrypoint"),
@@ -1394,7 +1450,7 @@ def test_extract_bash_entrypoint_no_collision_with_function_named_script(tmp_pat
     identical to _make_id(stem, "script") for a function named 'script'.
     """
     script = tmp_path / "deploy.sh"
-    script.write_text("#!/usr/bin/env bash\nfunction script() { echo hi; }\n")
+    script.write_text("#!/usr/bin/env bash\nfunction script() { echo hi; }\n", encoding="utf-8")
     result = extract_bash(script)
     entry_nodes = [
         n for n in result["nodes"] if n.get("metadata", {}).get("kind") == "bash_entrypoint"
@@ -1422,7 +1478,8 @@ def test_extract_bash_nested_function_calls_recorded(tmp_path):
         "        do_work\n"
         "    }\n"
         "    inner\n"
-        "}\n"
+        "}\n",
+        encoding="utf-8",
     )
     result = extract_bash(script)
     node_id_by_label = {n["label"].rstrip("()"): n["id"] for n in result["nodes"]}
@@ -1445,10 +1502,11 @@ def test_extract_bash_source_user_defined_emits_calls_not_imports_from(tmp_path)
     calls edge, not an imports_from edge.  The user-defined function shadows the
     built-in source command."""
     helpers = tmp_path / "helpers.sh"
-    helpers.write_text("#!/bin/bash\n")
+    helpers.write_text("#!/bin/bash\n", encoding="utf-8")
     script = tmp_path / "run.sh"
     script.write_text(
-        "#!/usr/bin/env bash\nfunction source() { echo 'custom source'; }\nsource ./helpers.sh\n"
+        "#!/usr/bin/env bash\nfunction source() { echo 'custom source'; }\nsource ./helpers.sh\n",
+        encoding="utf-8",
     )
     result = extract_bash(script)
     import_edges = [e for e in result["edges"] if e.get("relation") == "imports_from"]
@@ -1527,7 +1585,7 @@ def test_extract_json_large_known_config_reports_error(tmp_path):
 
 def test_extract_json_handles_invalid_json(tmp_path):
     bad = tmp_path / "broken.json"
-    bad.write_text("{this is not: valid json!!!")
+    bad.write_text("{this is not: valid json!!!", encoding="utf-8")
     result = extract_json(bad)
     # Should not crash — returns empty or error result
     assert isinstance(result, dict)
@@ -1555,7 +1613,8 @@ def test_extract_json_data_file_skipped(tmp_path):
                 "prompt_inputs_spec": {"a": 1, "b": 2},
                 "suite": [{"name": "x"}, {"name": "y"}],
             }
-        )
+        ),
+        encoding="utf-8",
     )
     result = extract_json(data)
     assert result["nodes"] == []
@@ -1566,7 +1625,7 @@ def test_extract_json_data_file_skipped(tmp_path):
 def test_extract_json_top_level_array_skipped(tmp_path):
     """A JSON file whose root is an array is data, never a config/manifest."""
     data = tmp_path / "records.json"
-    data.write_text(json.dumps([{"id": 1}, {"id": 2}]))
+    data.write_text(json.dumps([{"id": 1}, {"id": 2}]), encoding="utf-8")
     result = extract_json(data)
     assert result["nodes"] == []
     assert result["edges"] == []
@@ -1575,7 +1634,7 @@ def test_extract_json_top_level_array_skipped(tmp_path):
 def test_extract_json_config_by_filename_still_extracted(tmp_path):
     """tsconfig.json must still be AST-extracted even without telltale keys."""
     cfg = tmp_path / "tsconfig.json"
-    cfg.write_text(json.dumps({"compilerOptions": {"strict": True}}))
+    cfg.write_text(json.dumps({"compilerOptions": {"strict": True}}), encoding="utf-8")
     result = extract_json(cfg)
     assert len(result["nodes"]) > 0
     assert "skipped" not in result
@@ -1584,7 +1643,7 @@ def test_extract_json_config_by_filename_still_extracted(tmp_path):
 def test_extract_json_config_by_key_probe(tmp_path):
     """An arbitrarily-named JSON with config keys (dependencies) is still extracted."""
     cfg = tmp_path / "weird-name.json"
-    cfg.write_text(json.dumps({"dependencies": {"lodash": "^4"}}))
+    cfg.write_text(json.dumps({"dependencies": {"lodash": "^4"}}), encoding="utf-8")
     result = extract_json(cfg)
     import_edges = [e for e in result["edges"] if e["relation"] == "imports"]
     assert any("lodash" in e["target"] for e in import_edges)
@@ -1766,8 +1825,8 @@ def test_separator_collision_paths_get_distinct_ids(tmp_path):
     b = tmp_path / "foo_bar/baz.py"
     a.parent.mkdir(parents=True)
     b.parent.mkdir(parents=True)
-    a.write_text("class Widget:\n    pass\n")
-    b.write_text("class Gadget:\n    pass\n")
+    a.write_text("class Widget:\n    pass\n", encoding="utf-8")
+    b.write_text("class Gadget:\n    pass\n", encoding="utf-8")
 
     result = extract([a, b], cache_root=tmp_path)
     # file-level nodes are labeled with the filename; both files must survive as
@@ -1787,7 +1846,7 @@ def test_non_colliding_path_id_is_not_salted(tmp_path):
 
     p = tmp_path / "src/auth/session.py"
     p.parent.mkdir(parents=True)
-    p.write_text("class Session:\n    pass\n")
+    p.write_text("class Session:\n    pass\n", encoding="utf-8")
     result = extract([p], cache_root=tmp_path)
     file_id = next(n["id"] for n in result["nodes"] if n.get("source_location") == "L1")
     assert file_id == make_id(_file_stem(Path("src/auth/session.py"))) == "src_auth_session"

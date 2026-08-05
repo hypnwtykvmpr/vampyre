@@ -348,8 +348,8 @@ def test_resolve_python_import_guided_calls_emits_extracted_edge(tmp_path: Path)
 def test_bash_call_resolver_emits_source_edges(tmp_path: Path) -> None:
     a_sh = tmp_path / "a.sh"
     b_sh = tmp_path / "b.sh"
-    a_sh.write_text("#!/usr/bin/env bash\nsource ./b.sh\n")
-    b_sh.write_text("#!/usr/bin/env bash\nb_func() { echo ok; }\n")
+    a_sh.write_text("#!/usr/bin/env bash\nsource ./b.sh\n", encoding="utf-8")
+    b_sh.write_text("#!/usr/bin/env bash\nb_func() { echo ok; }\n", encoding="utf-8")
 
     per_file = [
         {
@@ -395,8 +395,8 @@ def test_bash_call_resolver_emits_source_edges(tmp_path: Path) -> None:
 def test_bash_call_resolver_emits_call_edges_from_sourced_files(tmp_path: Path) -> None:
     a_sh = tmp_path / "a.sh"
     b_sh = tmp_path / "b.sh"
-    a_sh.write_text("#!/usr/bin/env bash\nsource ./b.sh\nmain() { b_func; }\n")
-    b_sh.write_text("#!/usr/bin/env bash\nb_func() { echo ok; }\n")
+    a_sh.write_text("#!/usr/bin/env bash\nsource ./b.sh\nmain() { b_func; }\n", encoding="utf-8")
+    b_sh.write_text("#!/usr/bin/env bash\nb_func() { echo ok; }\n", encoding="utf-8")
 
     per_file = [
         {
@@ -454,8 +454,8 @@ def test_bash_call_resolver_emits_call_edges_from_sourced_files(tmp_path: Path) 
 def test_bash_call_resolver_skips_existing_pair(tmp_path: Path) -> None:
     a_sh = tmp_path / "a.sh"
     b_sh = tmp_path / "b.sh"
-    a_sh.write_text("#!/usr/bin/env bash\nsource ./b.sh\nmain() { b_func; }\n")
-    b_sh.write_text("#!/usr/bin/env bash\nb_func() { echo ok; }\n")
+    a_sh.write_text("#!/usr/bin/env bash\nsource ./b.sh\nmain() { b_func; }\n", encoding="utf-8")
+    b_sh.write_text("#!/usr/bin/env bash\nb_func() { echo ok; }\n", encoding="utf-8")
 
     per_file = [
         {
@@ -513,9 +513,11 @@ def test_bash_call_resolver_skips_ambiguous_multiple_candidates(tmp_path: Path) 
     a_sh = tmp_path / "a.sh"
     b_sh = tmp_path / "b.sh"
     c_sh = tmp_path / "c.sh"
-    a_sh.write_text("#!/usr/bin/env bash\nsource ./b.sh\nsource ./c.sh\nmain() { helper; }\n")
-    b_sh.write_text("#!/usr/bin/env bash\nhelper() { echo b; }\n")
-    c_sh.write_text("#!/usr/bin/env bash\nhelper() { echo c; }\n")
+    a_sh.write_text(
+        "#!/usr/bin/env bash\nsource ./b.sh\nsource ./c.sh\nmain() { helper; }\n", encoding="utf-8"
+    )
+    b_sh.write_text("#!/usr/bin/env bash\nhelper() { echo b; }\n", encoding="utf-8")
+    c_sh.write_text("#!/usr/bin/env bash\nhelper() { echo c; }\n", encoding="utf-8")
 
     per_file = [
         {
@@ -587,7 +589,7 @@ def test_bash_call_resolver_skips_ambiguous_multiple_candidates(tmp_path: Path) 
 def test_bash_call_resolver_skips_non_bash_raw_calls(tmp_path: Path) -> None:
     """Non-bash raw_calls inside sourced-file per_file entries are ignored."""
     a_sh = tmp_path / "a.sh"
-    a_sh.write_text("#!/usr/bin/env bash\n")
+    a_sh.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
 
     per_file = [
         {
@@ -661,7 +663,8 @@ def test_parse_python_import_aliases_skips_function_local_imports(tmp_path):
         "    return transform()\n"
         "\n"
         "def two():\n"
-        "    return transform()\n"
+        "    return transform()\n",
+        encoding="utf-8",
     )
     aliases = parse_python_import_aliases(py)
     assert "transform" not in aliases, (
@@ -674,7 +677,9 @@ def test_parse_python_import_aliases_accepts_top_level_import(tmp_path):
     from graphify.symbol_resolution import parse_python_import_aliases
 
     py = tmp_path / "toplevel.py"
-    py.write_text("from helper import transform\n\ndef one():\n    return transform()\n")
+    py.write_text(
+        "from helper import transform\n\ndef one():\n    return transform()\n", encoding="utf-8"
+    )
     aliases = parse_python_import_aliases(py)
     assert "transform" in aliases
     assert aliases["transform"].module_stem == "helper"
@@ -730,7 +735,7 @@ def test_resolve_bash_source_edges_skips_malformed_source(tmp_path):
         }
     ]
     a = tmp_path / "a.sh"
-    a.write_text("# noop\n")
+    a.write_text("# noop\n", encoding="utf-8")
     edges = resolve_bash_source_edges(per_file, [a], tmp_path)
     assert edges == []
 
@@ -749,7 +754,7 @@ def test_resolve_bash_source_edges_skips_bash_function_node_missing_id(tmp_path)
         }
     ]
     a = tmp_path / "a.sh"
-    a.write_text("# noop\n")
+    a.write_text("# noop\n", encoding="utf-8")
     # Should not raise
     edges = resolve_bash_source_edges(per_file, [a], tmp_path)
     assert edges == []
@@ -761,8 +766,8 @@ def test_resolve_bash_source_edges_skips_raw_call_missing_caller_nid(tmp_path):
 
     a = tmp_path / "a.sh"
     b = tmp_path / "b.sh"
-    a.write_text("# noop\n")
-    b.write_text("# noop\n")
+    a.write_text("# noop\n", encoding="utf-8")
+    b.write_text("# noop\n", encoding="utf-8")
     per_file = [
         {
             "nodes": [],
@@ -789,7 +794,7 @@ def test_resolve_bash_source_edges_accepts_none_per_file_entries(tmp_path):
     from graphify.symbol_resolution import resolve_bash_source_edges
 
     a = tmp_path / "a.sh"
-    a.write_text("# noop\n")
+    a.write_text("# noop\n", encoding="utf-8")
     edges = resolve_bash_source_edges([None], [a], tmp_path)
     assert edges == []
 
@@ -799,7 +804,7 @@ def test_resolve_bash_source_edges_skips_non_dict_lists(tmp_path):
     from graphify.symbol_resolution import resolve_bash_source_edges
 
     a = tmp_path / "a.sh"
-    a.write_text("# noop\n")
+    a.write_text("# noop\n", encoding="utf-8")
     per_file = [
         {
             "nodes": ["not a dict", 42, None],
@@ -821,8 +826,8 @@ def test_resolve_bash_source_edges_relative_path_resolves_against_source_dir(tmp
     sub.mkdir()
     main = sub / "main.sh"
     helper = sub / "helper.sh"
-    main.write_text("# main\n")
-    helper.write_text("# helper\n")
+    main.write_text("# main\n", encoding="utf-8")
+    helper.write_text("# helper\n", encoding="utf-8")
 
     per_file = [
         {
@@ -884,7 +889,7 @@ def test_resolve_python_import_guided_calls_survives_malformed_raw_calls(tmp_pat
     from graphify.symbol_resolution import resolve_python_import_guided_calls
 
     py = tmp_path / "caller.py"
-    py.write_text("from helper import transform\n")
+    py.write_text("from helper import transform\n", encoding="utf-8")
     per_file = [{"raw_calls": "not a list"}]
     paths = [py]
     nodes = [
@@ -908,8 +913,8 @@ def test_resolve_bash_source_edges_skips_unhashable_callee(tmp_path):
 
     a = tmp_path / "a.sh"
     b = tmp_path / "b.sh"
-    a.write_text("# noop\n")
-    b.write_text("# noop\n")
+    a.write_text("# noop\n", encoding="utf-8")
+    b.write_text("# noop\n", encoding="utf-8")
     per_file = [
         {
             "nodes": [],
@@ -941,7 +946,7 @@ def test_resolve_python_import_guided_calls_non_dict_per_file_slot(tmp_path):
     from graphify.symbol_resolution import resolve_python_import_guided_calls
 
     py = tmp_path / "caller.py"
-    py.write_text("from helper import transform\n")
+    py.write_text("from helper import transform\n", encoding="utf-8")
     # per_file slot is a STRING, not a dict — used to crash with AttributeError
     edges = resolve_python_import_guided_calls(["not a dict"], [py], [], [])
     assert edges == []
@@ -953,8 +958,8 @@ def test_resolve_python_import_guided_calls_per_file_shorter_than_paths(tmp_path
 
     a = tmp_path / "a.py"
     b = tmp_path / "b.py"
-    a.write_text("from helper import transform\n")
-    b.write_text("from helper import transform\n")
+    a.write_text("from helper import transform\n", encoding="utf-8")
+    b.write_text("from helper import transform\n", encoding="utf-8")
     # Only ONE per_file entry but TWO paths — used to crash with IndexError
     edges = resolve_python_import_guided_calls([{}], [a, b], [], [])
     assert edges == []
@@ -965,7 +970,7 @@ def test_resolve_python_import_guided_calls_per_file_none_slot(tmp_path):
     from graphify.symbol_resolution import resolve_python_import_guided_calls
 
     py = tmp_path / "caller.py"
-    py.write_text("from helper import transform\n")
+    py.write_text("from helper import transform\n", encoding="utf-8")
     edges = resolve_python_import_guided_calls([None], [py], [], [])
     assert edges == []
 

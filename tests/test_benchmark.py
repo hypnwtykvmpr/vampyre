@@ -35,7 +35,7 @@ def _make_graph() -> nx.Graph:
 
 def _write_graph(G: nx.Graph, path) -> None:
     data = json_graph.node_link_data(G, edges="links")
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
 
 
 # --- _query_subgraph_tokens ---

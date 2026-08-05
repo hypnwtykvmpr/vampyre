@@ -9,7 +9,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def make_inputs():
-    extraction = json.loads((FIXTURES / "extraction.json").read_text())
+    extraction = json.loads((FIXTURES / "extraction.json").read_text(encoding="utf-8"))
     G = build_from_json(extraction)
     communities = cluster(G)
     cohesion = score_all(G, communities)

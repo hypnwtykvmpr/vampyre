@@ -22,7 +22,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def make_graph():
-    return build_from_json(json.loads((FIXTURES / "extraction.json").read_text()))
+    return build_from_json(json.loads((FIXTURES / "extraction.json").read_text(encoding="utf-8")))
 
 
 def test_god_nodes_returns_list():

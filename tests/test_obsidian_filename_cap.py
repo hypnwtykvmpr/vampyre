@@ -53,7 +53,7 @@ def test_obsidian_wikilink_resolves_after_truncation(tmp_path):
     to_obsidian(G, comms, str(tmp_path))
 
     # The note for "neighbor" should link to the truncated filename of long_label.
-    neighbor_note = (tmp_path / "neighbor.md").read_text()
+    neighbor_note = (tmp_path / "neighbor.md").read_text(encoding="utf-8")
     # Extract the [[target]] from the neighbor's Connections section.
     import re
 
@@ -70,7 +70,7 @@ def test_canvas_long_label_file_ref_capped(tmp_path):
     G, comms = _graph(["c" * 300, "ok"])
     out = tmp_path / "graph.canvas"
     to_canvas(G, comms, str(out))
-    data = json.loads(out.read_text())
+    data = json.loads(out.read_text(encoding="utf-8"))
     for node in data.get("nodes", []):
         if node.get("type") == "file":
             assert len(node["file"].encode("utf-8")) <= 255, node["file"]

@@ -8,7 +8,7 @@ from graphify.build import build_from_json
 
 def _write_py(tmp_path: Path, code: str) -> Path:
     p = tmp_path / "sample.py"
-    p.write_text(textwrap.dedent(code))
+    p.write_text(textwrap.dedent(code), encoding="utf-8")
     return p
 
 

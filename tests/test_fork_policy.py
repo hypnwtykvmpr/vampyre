@@ -19,6 +19,7 @@ def _tracked_guidance_files() -> list[Path]:
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     ).stdout.splitlines()
     paths: list[Path] = []
     for name in tracked:
@@ -80,8 +81,25 @@ def test_ci_runs_full_strict_suite_on_windows_macos_and_linux() -> None:
     assert "windows-latest" in test_job
     assert 'python-version: ["3.10", "3.13"]' in test_job
     assert "fail-fast: false" in test_job
-    assert "pytest tests/ -n auto --dist loadgroup" in test_job
+    assert "pytest tests/ -n auto" in test_job
     assert "-k " not in test_job
+    assert "PYTHONUTF8" not in test_job
+    assert "PYTHONIOENCODING" not in test_job
+
+
+def test_pytest_parallel_scheduler_preserves_xdist_groups_by_default() -> None:
+    metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    pytest_config = metadata.split("[tool.pytest.ini_options]", 1)[1].split("\n[tool.", 1)[0]
+
+    assert "--dist loadgroup" in pytest_config
+
+
+def test_ci_enforces_explicit_text_encodings_across_the_tracked_python_tree() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    quality_job = workflow.split("\n  quality:", 1)[1].split("\n  security-scan:", 1)[0]
+
+    assert "ruff check . --select PLW1514 --preview" in quality_job
+    assert "python -m tools.text_encoding_check --check" in quality_job
 
 
 def test_parallel_ci_jobs_have_a_single_uv_cache_writer_per_python_version() -> None:

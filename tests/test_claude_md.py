@@ -17,13 +17,13 @@ def test_install_creates_claude_md(tmp_path):
     claude_install(tmp_path)
     target = tmp_path / "CLAUDE.md"
     assert target.exists()
-    assert _CLAUDE_MD_MARKER in target.read_text()
+    assert _CLAUDE_MD_MARKER in target.read_text(encoding="utf-8")
 
 
 def test_install_contains_expected_rules(tmp_path):
     """Written section includes the three rules."""
     claude_install(tmp_path)
-    content = (tmp_path / "CLAUDE.md").read_text()
+    content = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
     assert "GRAPH_REPORT.md" in content
     assert "wiki/index.md" in content
     assert "graphify update" in content
@@ -32,9 +32,9 @@ def test_install_contains_expected_rules(tmp_path):
 def test_install_appends_to_existing_claude_md(tmp_path):
     """Appends to an existing CLAUDE.md without clobbering it."""
     target = tmp_path / "CLAUDE.md"
-    target.write_text("# Existing content\n\nSome rules here.\n")
+    target.write_text("# Existing content\n\nSome rules here.\n", encoding="utf-8")
     claude_install(tmp_path)
-    content = target.read_text()
+    content = target.read_text(encoding="utf-8")
     assert "Existing content" in content
     assert _CLAUDE_MD_MARKER in content
 
@@ -43,7 +43,7 @@ def test_install_is_idempotent(tmp_path, capsys):
     """Running install twice does not duplicate the section."""
     claude_install(tmp_path)
     claude_install(tmp_path)
-    content = (tmp_path / "CLAUDE.md").read_text()
+    content = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
     assert content.count(_CLAUDE_MD_MARKER) == 1
     captured = capsys.readouterr()
     assert "already configured" in captured.out
@@ -70,17 +70,17 @@ def test_uninstall_removes_section(tmp_path):
     target = tmp_path / "CLAUDE.md"
     # File may or may not exist depending on whether it was empty
     if target.exists():
-        assert _CLAUDE_MD_MARKER not in target.read_text()
+        assert _CLAUDE_MD_MARKER not in target.read_text(encoding="utf-8")
 
 
 def test_uninstall_preserves_other_content(tmp_path):
     """Uninstall keeps pre-existing content outside the graphify section."""
     target = tmp_path / "CLAUDE.md"
-    target.write_text("# My Project\n\nSome rules.\n")
+    target.write_text("# My Project\n\nSome rules.\n", encoding="utf-8")
     claude_install(tmp_path)
     claude_uninstall(tmp_path)
     assert target.exists()
-    content = target.read_text()
+    content = target.read_text(encoding="utf-8")
     assert "My Project" in content
     assert "Some rules" in content
     assert _CLAUDE_MD_MARKER not in content
@@ -89,7 +89,7 @@ def test_uninstall_preserves_other_content(tmp_path):
 def test_uninstall_no_op_when_not_installed(tmp_path, capsys):
     """Uninstall on a CLAUDE.md without graphify section prints a message and exits cleanly."""
     target = tmp_path / "CLAUDE.md"
-    target.write_text("# Other stuff\n")
+    target.write_text("# Other stuff\n", encoding="utf-8")
     claude_uninstall(tmp_path)
     out = capsys.readouterr().out
     assert "not found" in out or "nothing to do" in out
@@ -114,7 +114,7 @@ def test_install_creates_settings_json(tmp_path):
     claude_install(tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     assert settings_path.exists()
-    settings = json.loads(settings_path.read_text())
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
     hooks = settings.get("hooks", {}).get("PreToolUse", [])
     assert any(h.get("matcher") == "Bash" for h in hooks)
 
@@ -126,7 +126,7 @@ def test_install_settings_json_idempotent(tmp_path):
     claude_install(tmp_path)
     claude_install(tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
-    settings = json.loads(settings_path.read_text())
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
     hooks = settings.get("hooks", {}).get("PreToolUse", [])
     bash_hooks = [h for h in hooks if h.get("matcher") == "Bash" and "graphify" in str(h)]
     assert len(bash_hooks) == 1
@@ -140,6 +140,6 @@ def test_uninstall_removes_settings_hook(tmp_path):
     claude_uninstall(tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     if settings_path.exists():
-        settings = json.loads(settings_path.read_text())
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
         hooks = settings.get("hooks", {}).get("PreToolUse", [])
         assert not any(h.get("matcher") == "Bash" and "graphify" in str(h) for h in hooks)

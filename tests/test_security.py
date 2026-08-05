@@ -170,7 +170,7 @@ def test_validate_graph_path_allows_inside_base(tmp_path):
     base = tmp_path / "graphify-out"
     base.mkdir()
     graph = base / "graph.json"
-    graph.write_text("{}")
+    graph.write_text("{}", encoding="utf-8")
     result = validate_graph_path(str(graph), base=base)
     assert result == graph.resolve()
 
@@ -202,7 +202,7 @@ def test_validate_graph_path_default_base_discovers_output_dir(tmp_path):
     base = tmp_path / "graphify-out"
     base.mkdir()
     graph = base / "graph.json"
-    graph.write_text("{}")
+    graph.write_text("{}", encoding="utf-8")
     assert validate_graph_path(str(graph)) == graph.resolve()
 
 
@@ -215,7 +215,7 @@ def test_validate_graph_path_default_base_honours_graphify_out_override(tmp_path
     out = tmp_path / "custom-out"
     out.mkdir()
     graph = out / "graph.json"
-    graph.write_text("{}")
+    graph.write_text("{}", encoding="utf-8")
     # No base passed → must discover custom-out by name rather than graphify-out.
     assert validate_graph_path(str(graph)) == graph.resolve()
 

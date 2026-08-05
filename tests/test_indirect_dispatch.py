@@ -44,7 +44,7 @@ def via_map(xs):
 
 
 def _build(tmp_path):
-    (tmp_path / "dispatch.py").write_text(SRC)
+    (tmp_path / "dispatch.py").write_text(SRC, encoding="utf-8")
     r = extract_python(tmp_path / "dispatch.py")
     nid = {n["label"].rstrip("()"): n["id"] for n in r["nodes"]}  # labels are "handler()"
     return r, nid
@@ -94,7 +94,7 @@ def test_affected_includes_indirect_callers(tmp_path):
 
 
 def _extract(tmp_path, src):
-    (tmp_path / "m.py").write_text(src)
+    (tmp_path / "m.py").write_text(src, encoding="utf-8")
     r = extract_python(tmp_path / "m.py")
     nid = {n["label"].rstrip("()"): n["id"] for n in r["nodes"]}
     return r, nid
@@ -190,7 +190,7 @@ def _extract_dir(tmp_path, files: dict[str, str]):
     base = tmp_path / "pkg"
     base.mkdir()
     for name, body in files.items():
-        (base / name).write_text(body)
+        (base / name).write_text(body, encoding="utf-8")
     old = os.getcwd()
     try:
         os.chdir(tmp_path)
@@ -214,9 +214,12 @@ def test_cross_file_indirect_survives_id_relativization(tmp_path):
     in-file ones survive). This is the exact shape the CLI hit."""
     base = tmp_path / "proj"
     (base / "handlers").mkdir(parents=True)
-    (base / "handlers" / "__init__.py").write_text("def on_event(x):\n    return x\n")
+    (base / "handlers" / "__init__.py").write_text(
+        "def on_event(x):\n    return x\n", encoding="utf-8"
+    )
     (base / "scheduler.py").write_text(
-        "from handlers import on_event\n\n\ndef schedule(pool):\n    pool.submit(on_event)\n"
+        "from handlers import on_event\n\n\ndef schedule(pool):\n    pool.submit(on_event)\n",
+        encoding="utf-8",
     )
     old = os.getcwd()
     try:
@@ -400,7 +403,7 @@ def _extract_js_dir(tmp_path, files: dict[str, str]):
     base = tmp_path / "src"
     base.mkdir()
     for name, body in files.items():
-        (base / name).write_text(body)
+        (base / name).write_text(body, encoding="utf-8")
     old = os.getcwd()
     try:
         os.chdir(tmp_path)

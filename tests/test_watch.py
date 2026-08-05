@@ -17,7 +17,7 @@ def test_notify_only_creates_flag(tmp_path):
     _notify_only(tmp_path)
     flag = tmp_path / "graphify-out" / "needs_update"
     assert flag.exists()
-    assert flag.read_text().strip()
+    assert flag.read_text(encoding="utf-8").strip()
 
 
 def test_notify_only_creates_flag_dir(tmp_path):
@@ -91,7 +91,7 @@ def test_check_update_with_flag_returns_true_and_prints(tmp_path, capsys):
 
     flag = tmp_path / "graphify-out" / "needs_update"
     flag.parent.mkdir(parents=True, exist_ok=True)
-    flag.write_text("1")
+    flag.write_text("1", encoding="utf-8")
     result = check_update(tmp_path)
     assert result is True
     out = capsys.readouterr().out
@@ -123,7 +123,7 @@ def test_check_update_does_not_clear_flag(tmp_path):
 
     flag = tmp_path / "graphify-out" / "needs_update"
     flag.parent.mkdir(parents=True, exist_ok=True)
-    flag.write_text("1")
+    flag.write_text("1", encoding="utf-8")
     check_update(tmp_path)
     assert flag.exists()
 
@@ -2043,6 +2043,181 @@ def test_watch_full_rebuild_prunes_stale_semantic_sources_and_hyperedges(tmp_pat
     assert any(edge.get("source") == "semantic_live" for edge in rebuilt_links)
     assert not any(edge.get("source") == "semantic_stale" for edge in rebuilt_links)
     assert [edge.get("id") for edge in rebuilt["hyperedges"]] == ["live_group"]
+
+
+@pytest.mark.parametrize("no_cluster", [False, True])
+def test_full_rebuild_prunes_sources_newly_excluded_by_graphifyignore(tmp_path, no_cluster):
+    """A full update must evict previously indexed records once their source is ignored."""
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "app.py").write_text(
+        "def first():\n    return 1\n\ndef second():\n    return 2\n",
+        encoding="utf-8",
+    )
+    private_dir = corpus / "private"
+    private_dir.mkdir()
+    private_doc = private_dir / "notes.md"
+    private_doc.write_text("# Private notes\n", encoding="utf-8")
+    (private_dir / "manifest-only.txt").write_text("ignored later\n", encoding="utf-8")
+
+    assert _rebuild_code(
+        corpus,
+        no_cluster=no_cluster,
+        no_viz=True,
+        acquire_lock=False,
+    )
+    graph_path = corpus / "graphify-out" / "graph.json"
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
+    live_ids = [
+        node["id"] for node in data["nodes"] if node.get("label") in {"first()", "second()"}
+    ]
+    assert len(live_ids) == 2
+
+    private_source = "private/notes.md"
+    data["nodes"].append(
+        {
+            "id": "private_semantic_node",
+            "label": "Private semantic node",
+            "file_type": "concept",
+            "source_file": private_source,
+            "_origin": "semantic",
+        }
+    )
+    links = data.get("links", data.get("edges", []))
+    links.append(
+        {
+            "source": live_ids[0],
+            "target": live_ids[1],
+            "relation": "documents",
+            "confidence": "INFERRED",
+            "source_file": private_source,
+            "_origin": "semantic",
+        }
+    )
+    data["links"] = links
+    data["hyperedges"] = [
+        {
+            "id": "private_group",
+            "nodes": live_ids,
+            "source_file": private_source,
+        }
+    ]
+    graph_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    (corpus / ".graphifyignore").write_text("/private/\n", encoding="utf-8")
+
+    assert _rebuild_code(
+        corpus,
+        no_cluster=no_cluster,
+        no_viz=True,
+        acquire_lock=False,
+    )
+    cleaned = json.loads(graph_path.read_text(encoding="utf-8"))
+    cleaned_links = cleaned.get("links", cleaned.get("edges", []))
+    manifest = json.loads((corpus / "graphify-out" / "manifest.json").read_text(encoding="utf-8"))
+    assert all(node.get("source_file") != private_source for node in cleaned["nodes"])
+    assert all(edge.get("source_file") != private_source for edge in cleaned_links)
+    assert all(
+        hyperedge.get("source_file") != private_source
+        for hyperedge in cleaned.get("hyperedges", [])
+    )
+    assert private_source not in manifest
+    assert "private/manifest-only.txt" not in manifest
+
+    stable_bytes = graph_path.read_bytes()
+    assert _rebuild_code(
+        corpus,
+        no_cluster=no_cluster,
+        no_viz=True,
+        acquire_lock=False,
+    )
+    assert graph_path.read_bytes() == stable_bytes
+
+
+@pytest.mark.parametrize("no_cluster", [False, True])
+def test_full_rebuild_preserves_foreign_absolute_semantic_sources(tmp_path, no_cluster):
+    from graphify.paths import is_absolute_path
+    from graphify.watch import _rebuild_code
+
+    foreign_source = (
+        "/foreign-posix/repo/context.py"
+        if os.name == "nt"
+        else r"C:\foreign-windows\repo\context.py"
+    )
+    assert is_absolute_path(foreign_source)
+    assert not Path(foreign_source).is_absolute()
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "app.py").write_text(
+        "def first():\n    return 1\n\ndef second():\n    return 2\n",
+        encoding="utf-8",
+    )
+    assert _rebuild_code(
+        corpus,
+        no_cluster=no_cluster,
+        no_viz=True,
+        acquire_lock=False,
+    )
+
+    graph_path = corpus / "graphify-out" / "graph.json"
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
+    live_ids = [
+        node["id"] for node in data["nodes"] if node.get("label") in {"first()", "second()"}
+    ]
+    assert len(live_ids) == 2
+    data["nodes"].append(
+        {
+            "id": "foreign_semantic_node",
+            "label": "Foreign semantic node",
+            "file_type": "concept",
+            "source_file": foreign_source,
+            "_origin": "semantic",
+        }
+    )
+    links = data.get("links", data.get("edges", []))
+    links.append(
+        {
+            "source": live_ids[0],
+            "target": live_ids[1],
+            "relation": "documents",
+            "confidence": "INFERRED",
+            "source_file": foreign_source,
+            "_origin": "semantic",
+        }
+    )
+    data["links"] = links
+    data["hyperedges"] = [
+        {
+            "id": "foreign_group",
+            "nodes": live_ids,
+            "source_file": foreign_source,
+        }
+    ]
+    graph_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    assert _rebuild_code(
+        corpus,
+        no_cluster=no_cluster,
+        no_viz=True,
+        acquire_lock=False,
+    )
+    rebuilt = json.loads(graph_path.read_text(encoding="utf-8"))
+    rebuilt_links = rebuilt.get("links", rebuilt.get("edges", []))
+    canonical_source = foreign_source.replace("\\", "/")
+    assert any(
+        str(node.get("source_file", "")).replace("\\", "/") == canonical_source
+        for node in rebuilt["nodes"]
+    )
+    assert any(
+        str(edge.get("source_file", "")).replace("\\", "/") == canonical_source
+        for edge in rebuilt_links
+    )
+    assert any(
+        str(hyperedge.get("source_file", "")).replace("\\", "/") == canonical_source
+        for hyperedge in rebuilt.get("hyperedges", [])
+    )
 
 
 def test_watch_repairs_carried_hyperedge_alias_before_restoring_metadata(tmp_path):

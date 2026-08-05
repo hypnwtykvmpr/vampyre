@@ -40,10 +40,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.13"]
-    env:
-      PYTHONUTF8: "1"
-      PYTHONIOENCODING: "utf-8"
-
     steps:
       - uses: actions/checkout@v6
 
@@ -58,7 +54,7 @@ jobs:
         run: uv sync --all-extras --frozen
 
       - name: Run tests
-        run: uv run --frozen pytest tests/ -n auto --dist loadgroup -q --tb=short
+        run: uv run --frozen pytest tests/ -n auto -q --tb=short
 
       - name: Verify install works end-to-end
         run: |
@@ -83,7 +79,10 @@ jobs:
         run: uv run --frozen ruff check .
 
       - name: Explicit encodings in shipped code
-        run: uv run --frozen ruff check graphify tools --select PLW1514 --preview
+        run: uv run --frozen ruff check . --select PLW1514 --preview
+
+      - name: Locale-independent Path text I/O
+        run: uv run --frozen python -m tools.text_encoding_check --check
 
       - name: Pyright
         run: uv run --frozen pyright

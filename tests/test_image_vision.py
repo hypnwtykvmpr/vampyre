@@ -40,9 +40,9 @@ def _make_corpus(tmp_path):
     img = tmp_path / "sub" / "diagram.png"
     img.write_bytes(_PNG_BYTES)
     svg = tmp_path / "icon.svg"
-    svg.write_text("<svg><rect/></svg>")
+    svg.write_text("<svg><rect/></svg>", encoding="utf-8")
     doc = tmp_path / "README.md"
-    doc.write_text("# Title\nbody")
+    doc.write_text("# Title\nbody", encoding="utf-8")
     return img, svg, doc
 
 
@@ -72,7 +72,7 @@ def test_pdf_is_not_treated_as_vision_image(tmp_path):
 
 def test_non_pdf_still_read_as_plain_text(tmp_path):
     md = tmp_path / "a.md"
-    md.write_text("# hello")
+    md.write_text("# hello", encoding="utf-8")
     assert "# hello" in llm._file_to_text(md)
 
 
@@ -82,7 +82,7 @@ def test_read_files_skips_out_of_root_symlink(tmp_path, path_alias):
     outside = tmp_path / "outside"
     outside.mkdir()
     secret = outside / "secret.md"
-    secret.write_text("SECRET SHOULD NOT REACH THE PROMPT")
+    secret.write_text("SECRET SHOULD NOT REACH THE PROMPT", encoding="utf-8")
     link = path_alias(root / "secret.md", secret)
 
     out = llm._read_files([link], root)

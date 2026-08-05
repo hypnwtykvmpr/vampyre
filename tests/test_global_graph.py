@@ -162,7 +162,7 @@ def test_global_add_creates_global_graph(tmp_path):
     assert result["nodes_added"] > 0
     manifest_path = global_dir / "global-manifest.json"
     assert manifest_path.exists()
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert "repoA" in manifest["repos"]
 
 
@@ -364,7 +364,7 @@ def test_merge_graphs_prefixes_ids(tmp_path):
     graphs = []
     graph_paths = [g1_path, g2_path]
     for gp in graph_paths:
-        data = json.loads(gp.read_text())
+        data = json.loads(gp.read_text(encoding="utf-8"))
         if "links" not in data and "edges" in data:
             data = dict(data, links=data["edges"])
         try:

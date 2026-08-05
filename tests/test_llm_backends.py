@@ -64,7 +64,7 @@ def test_extract_files_direct_routes_gemini_through_openai_compat(tmp_path, monk
     _clear_backend_env(monkeypatch)
     monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
     source = tmp_path / "note.md"
-    source.write_text("# Architecture\n\nThe runner emits a snapshot.\n")
+    source.write_text("# Architecture\n\nThe runner emits a snapshot.\n", encoding="utf-8")
     result = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 1, "output_tokens": 1}
 
     with patch("graphify.llm._call_openai_compat", return_value=result) as call:
@@ -104,7 +104,7 @@ def test_openai_compat_backends_resolve_full_output_cap(tmp_path, monkeypatch, b
     monkeypatch.delenv("GRAPHIFY_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.setenv(env_key, "test-key")
     source = tmp_path / "note.md"
-    source.write_text("# Architecture\n")
+    source.write_text("# Architecture\n", encoding="utf-8")
     result = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 1, "output_tokens": 1}
 
     with patch("graphify.llm._call_openai_compat", return_value=result) as call:
@@ -118,7 +118,7 @@ def test_gemini_model_can_be_overridden_by_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
     monkeypatch.setenv("GRAPHIFY_GEMINI_MODEL", "gemini-3.1-pro-preview")
     source = tmp_path / "note.md"
-    source.write_text("# Architecture\n")
+    source.write_text("# Architecture\n", encoding="utf-8")
     result = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 1, "output_tokens": 1}
 
     with patch("graphify.llm._call_openai_compat", return_value=result) as call:
@@ -145,7 +145,7 @@ def test_extract_files_direct_accepts_str_paths(tmp_path, monkeypatch):
     _clear_backend_env(monkeypatch)
     monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
     source = tmp_path / "note.md"
-    source.write_text("# Architecture\n\nThe runner emits a snapshot.\n")
+    source.write_text("# Architecture\n\nThe runner emits a snapshot.\n", encoding="utf-8")
     result = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 1, "output_tokens": 1}
 
     # str path must not raise AttributeError: 'str' object has no attribute 'suffix'
@@ -157,9 +157,9 @@ def test_extract_corpus_parallel_accepts_str_and_mixed_paths(tmp_path, monkeypat
     _clear_backend_env(monkeypatch)
     monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
     f1 = tmp_path / "a.md"
-    f1.write_text("# A\n\nNode one.\n")
+    f1.write_text("# A\n\nNode one.\n", encoding="utf-8")
     f2 = tmp_path / "b.md"
-    f2.write_text("# B\n\nNode two.\n")
+    f2.write_text("# B\n\nNode two.\n", encoding="utf-8")
     result = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 1, "output_tokens": 1}
 
     with patch("graphify.llm._call_openai_compat", return_value=result):
@@ -180,8 +180,10 @@ def test_corpus_parallel_oversized_markdown_does_not_crash_on_fileslice(tmp_path
     _clear_backend_env(monkeypatch)
     monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
     big = tmp_path / "big.md"
-    big.write_text(("# Section\n\n" + "lorem ipsum dolor sit amet " * 60 + "\n\n") * 30)
-    assert len(big.read_text()) > _FILE_CHAR_CAP  # guarantees slicing kicks in
+    big.write_text(
+        ("# Section\n\n" + "lorem ipsum dolor sit amet " * 60 + "\n\n") * 30, encoding="utf-8"
+    )
+    assert len(big.read_text(encoding="utf-8")) > _FILE_CHAR_CAP  # guarantees slicing kicks in
     result = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 1, "output_tokens": 1}
 
     with patch("graphify.llm._call_openai_compat", return_value=result):
@@ -207,7 +209,7 @@ def test_str_path_entry_points_handle_edge_cases(tmp_path, monkeypatch):
             pass
 
         sub = _SubPath(tmp_path / "c.md")
-        sub.write_text("# C\n\nNode.\n")
+        sub.write_text("# C\n\nNode.\n", encoding="utf-8")
         assert llm.extract_files_direct([sub], backend="gemini", root=tmp_path) is result
 
 
@@ -248,7 +250,7 @@ def test_looks_like_context_exceeded_ignores_unrelated_errors():
 def test_adaptive_retry_splits_on_context_exceeded(tmp_path):
     files = [tmp_path / f"f{i}.md" for i in range(4)]
     for f in files:
-        f.write_text("hello")
+        f.write_text("hello", encoding="utf-8")
 
     calls = {"n": 0}
 
@@ -272,7 +274,7 @@ def test_adaptive_retry_splits_on_context_exceeded(tmp_path):
 
 def test_adaptive_retry_gives_up_on_single_file_overflow(tmp_path):
     f = tmp_path / "huge.md"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
 
     def fake_extract(*_, **__):
         raise RuntimeError("context_length_exceeded")
@@ -292,7 +294,7 @@ def test_adaptive_retry_gives_up_on_single_file_overflow(tmp_path):
 
 def test_adaptive_retry_re_raises_unrelated_errors(tmp_path):
     f = tmp_path / "f.md"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
 
     def fake_extract(*_, **__):
         raise RuntimeError("rate limit hit")
@@ -680,7 +682,7 @@ def test_extract_corpus_parallel_ollama_runs_serially(tmp_path, monkeypatch):
     # are processed and no pool is spun up.
     files = [tmp_path / f"f{i}.md" for i in range(6)]
     for f in files:
-        f.write_text("hello")
+        f.write_text("hello", encoding="utf-8")
 
     call_order = []
 
@@ -710,7 +712,7 @@ def test_extract_corpus_parallel_ollama_runs_serially(tmp_path, monkeypatch):
 def test_extract_corpus_parallel_ollama_parallel_env_restores_concurrency(tmp_path, monkeypatch):
     files = [tmp_path / f"f{i}.md" for i in range(4)]
     for f in files:
-        f.write_text("hello")
+        f.write_text("hello", encoding="utf-8")
 
     monkeypatch.setenv("GRAPHIFY_OLLAMA_PARALLEL", "1")
 
@@ -746,7 +748,7 @@ def test_adaptive_retry_bisects_on_hollow_ollama_response(tmp_path):
     # bisection path recovers the full 4 nodes.
     files = [tmp_path / f"f{i}.md" for i in range(4)]
     for f in files:
-        f.write_text("hello")
+        f.write_text("hello", encoding="utf-8")
 
     calls = {"n": 0}
 
@@ -935,7 +937,7 @@ def test_openai_compat_omits_temperature_for_o3_model(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("GRAPHIFY_OPENAI_MODEL", "o3-mini")
     captured = _install_capturing_openai(monkeypatch)
-    (tmp_path / "f.py").write_text("x = 1\n")
+    (tmp_path / "f.py").write_text("x = 1\n", encoding="utf-8")
 
     llm.extract_files_direct([tmp_path / "f.py"], backend="openai", root=tmp_path)
 
@@ -951,7 +953,7 @@ def test_openai_compat_sends_temperature_for_normal_model(tmp_path, monkeypatch)
     monkeypatch.delenv("GRAPHIFY_OPENAI_MODEL", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     captured = _install_capturing_openai(monkeypatch)
-    (tmp_path / "f.py").write_text("x = 1\n")
+    (tmp_path / "f.py").write_text("x = 1\n", encoding="utf-8")
 
     llm.extract_files_direct([tmp_path / "f.py"], backend="openai", root=tmp_path)
 
@@ -964,7 +966,7 @@ def test_openai_compat_env_var_temperature_applied(tmp_path, monkeypatch):
     monkeypatch.delenv("GRAPHIFY_OPENAI_MODEL", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     captured = _install_capturing_openai(monkeypatch)
-    (tmp_path / "f.py").write_text("x = 1\n")
+    (tmp_path / "f.py").write_text("x = 1\n", encoding="utf-8")
 
     llm.extract_files_direct([tmp_path / "f.py"], backend="openai", root=tmp_path)
 
@@ -1023,6 +1025,7 @@ def _backend_base_url(backend: str, env_extra: dict) -> str:
         capture_output=True,
         text=True,
         check=True,
+        encoding="utf-8",
     )
     return out.stdout.strip()
 
@@ -1062,6 +1065,7 @@ def test_base_url_defaults_without_env(backend, default):
         capture_output=True,
         text=True,
         check=True,
+        encoding="utf-8",
     )
     assert out.stdout.strip() == default
 

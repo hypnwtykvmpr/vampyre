@@ -144,7 +144,7 @@ def test_json_roundtrip_preserves_all_parallel_edges():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.json"
         to_json(G, COMMUNITIES, str(out), force=True)
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         # node_link_data stamps multigraph/directed flags so the loader
         # reconstructs a MultiDiGraph automatically.
         assert data.get("multigraph") is True
@@ -176,7 +176,7 @@ def test_cypher_emits_distinct_edge_per_parallel():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "cypher.txt"
         to_cypher(G, str(out))
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
 
     merge_lines = [ln for ln in content.splitlines() if ln.startswith("MATCH")]
     # One MERGE per parallel edge — no Neo4j-side collapse.
@@ -208,7 +208,7 @@ def test_canvas_edge_ids_unique():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.canvas"
         to_canvas(G, COMMUNITIES, str(out))
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
 
     edge_ids = [e["id"] for e in data["edges"]]
     assert edge_ids, "canvas should contain edges"
@@ -232,7 +232,7 @@ def test_canvas_edge_ids_unique_when_node_ids_contain_underscores():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.canvas"
         to_canvas(G, {0: list(G.nodes)}, str(out))
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
 
     edge_ids = [edge["id"] for edge in data["edges"]]
     assert len(edge_ids) == 2
@@ -247,7 +247,7 @@ def test_canvas_visual_cap_summary():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.canvas"
         to_canvas(G, COMMUNITIES, str(out))
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
 
     cd_edges = [e for e in data["edges"] if e["fromNode"] == "n_c" and e["toNode"] == "n_d"]
     # 5 parallel edges -> cap drawn + 1 summary edge.
@@ -270,8 +270,8 @@ def test_obsidian_shows_all_relations():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp)
         to_obsidian(G, COMMUNITIES, str(out))
-        a_note = (out / "A.md").read_text()
-        c_note = (out / "C.md").read_text()
+        a_note = (out / "A.md").read_text(encoding="utf-8")
+        c_note = (out / "C.md").read_text(encoding="utf-8")
 
     a_conn = [ln for ln in a_note.splitlines() if ln.startswith("- [[")]
     assert len(a_conn) == 1
@@ -301,11 +301,11 @@ def test_html_svg_visual_cap():
     with tempfile.TemporaryDirectory() as tmp:
         html_out = Path(tmp) / "graph.html"
         to_html(G, COMMUNITIES, str(html_out))
-        html = html_out.read_text()
+        html = html_out.read_text(encoding="utf-8")
 
         svg_out = Path(tmp) / "graph.svg"
         to_svg(G, COMMUNITIES, str(svg_out), community_labels={0: "Group 0"})
-        svg = svg_out.read_text()
+        svg = svg_out.read_text(encoding="utf-8")
 
     # Summary label for the 5-parallel C->D pair appears in both surfaces.
     assert "5 total" in html
@@ -381,7 +381,7 @@ def test_canvas_summary_does_not_displace_real_edges_over_cap():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.canvas"
         to_canvas(G, {0: members}, str(out))
-        edges = json.loads(out.read_text())["edges"]
+        edges = json.loads(out.read_text(encoding="utf-8"))["edges"]
 
     real = [e for e in edges if not e["id"].endswith("_summary")]
     # Real edges are capped at EXACTLY 200 — a summary never consumed a real slot.
@@ -430,7 +430,7 @@ def test_canvas_summary_additive_when_overflow_pair_survives():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "graph.canvas"
         to_canvas(G, {0: members}, str(out))
-        edges = json.loads(out.read_text())["edges"]
+        edges = json.loads(out.read_text(encoding="utf-8"))["edges"]
 
     real = [e for e in edges if not e["id"].endswith("_summary")]
     summary = [e for e in edges if e["id"].endswith("_summary")]
@@ -478,7 +478,7 @@ def test_cypher_distinguishes_parallels_with_identical_identity_fields():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "cypher.txt"
         to_cypher(G, str(out))
-        content = out.read_text()
+        content = out.read_text(encoding="utf-8")
 
     merge_lines = [ln for ln in content.splitlines() if ln.startswith("MATCH")]
     assert len(merge_lines) == G.number_of_edges() == 3
@@ -508,7 +508,11 @@ def test_export_simple_graph_regression():
         # Cypher — exact line including the new edge_key property.
         cypher_out = Path(tmp) / "cypher.txt"
         to_cypher(G, str(cypher_out))
-        cypher_lines = [ln for ln in cypher_out.read_text().splitlines() if ln.startswith("MATCH")]
+        cypher_lines = [
+            ln
+            for ln in cypher_out.read_text(encoding="utf-8").splitlines()
+            if ln.startswith("MATCH")
+        ]
         assert cypher_lines == [
             "MATCH (a {id: 'A'}), (b {id: 'B'}) "
             f"MERGE (a)-[:CALLS {{edge_key: '{expected_key}', confidence: 'EXTRACTED'}}]->(b);"
@@ -517,7 +521,7 @@ def test_export_simple_graph_regression():
         # Canvas — single edge keeps deterministic `_0` parallel suffix.
         canvas_out = Path(tmp) / "graph.canvas"
         to_canvas(G, comm, str(canvas_out))
-        canvas_edges = json.loads(canvas_out.read_text())["edges"]
+        canvas_edges = json.loads(canvas_out.read_text(encoding="utf-8"))["edges"]
         assert canvas_edges == [
             {
                 "id": "e_A_B_0",
@@ -531,14 +535,16 @@ def test_export_simple_graph_regression():
         obs_out = Path(tmp) / "vault"
         to_obsidian(G, comm, str(obs_out))
         conn_lines = [
-            ln for ln in (obs_out / "Alpha.md").read_text().splitlines() if ln.startswith("- [[")
+            ln
+            for ln in (obs_out / "Alpha.md").read_text(encoding="utf-8").splitlines()
+            if ln.startswith("- [[")
         ]
         assert conn_lines == ["- [[Beta]] - `calls` [EXTRACTED]"]
 
         # HTML — single edge, no summary edge injected.
         html_out = Path(tmp) / "graph.html"
         to_html(G, comm, str(html_out))
-        html = html_out.read_text()
+        html = html_out.read_text(encoding="utf-8")
         m = re.search(r"const RAW_EDGES = (\[.*?\]);", html, re.DOTALL)
         assert m
         raw_edges = json.loads(m.group(1))

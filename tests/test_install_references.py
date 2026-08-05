@@ -74,8 +74,10 @@ def test_install_stages_references_sidecar(tmp_path, fake_bundle):
     assert (skill_dir / "SKILL.md").exists()
     refs = skill_dir / "references"
     assert refs.is_dir()
-    assert (refs / "extraction-spec.md").read_text() == "# extraction spec fragment\n"
-    assert (refs / "query.md").read_text() == "# query fragment\n"
+    assert (refs / "extraction-spec.md").read_text(
+        encoding="utf-8"
+    ) == "# extraction spec fragment\n"
+    assert (refs / "query.md").read_text(encoding="utf-8") == "# query fragment\n"
     # No leftover staging dir.
     assert not (skill_dir / "references.tmp").exists()
 
@@ -88,7 +90,7 @@ def test_single_version_stamp_covers_skill_and_references(tmp_path, fake_bundle)
     stamps = list(skill_dir.rglob(".graphify_version"))
     assert len(stamps) == 1
     assert stamps[0] == skill_dir / ".graphify_version"
-    assert stamps[0].read_text() == mainmod.__version__
+    assert stamps[0].read_text(encoding="utf-8") == mainmod.__version__
 
 
 def test_reinstall_replaces_references_atomically(tmp_path, fake_bundle):
@@ -232,7 +234,7 @@ def test_claude_install_ships_lean_core_and_references(tmp_path):
     # The lean core is materially smaller than the old ~1156-line monolith.
     assert len(body.splitlines()) < 800
     # The version stamp covers SKILL.md + references/ together.
-    assert (skill_dir / ".graphify_version").read_text() == mainmod.__version__
+    assert (skill_dir / ".graphify_version").read_text(encoding="utf-8") == mainmod.__version__
     # The eight on-demand fragments all landed.
     names = sorted(p.name for p in refs.glob("*.md"))
     assert names == [
@@ -391,6 +393,7 @@ def _build_wheel_names(repo_root):
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
         assert result.returncode == 0, (
             "wheel build failed:\n"
