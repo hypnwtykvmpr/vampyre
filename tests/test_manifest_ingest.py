@@ -6,6 +6,7 @@ from graphify.build import build_from_json
 from graphify.detect import FileType, classify_file
 from graphify.extract import extract
 from graphify.manifest_ingest import (
+    _pkg_id,
     extract_package_manifest,
     is_package_manifest_path,
 )
@@ -44,7 +45,7 @@ def test_apm_parses_name_and_deps(tmp_path):
     pkg = _pkg_nodes(r)[0]
     assert pkg["label"] == "my-pkg" and pkg["version"] == "1.2.3"
     deps = {e["target"] for e in r["edges"] if e["relation"] == "depends_on"}
-    assert {"pkg_dep_a", "pkg_dep_b"} <= deps
+    assert {_pkg_id("apm", "dep-a"), _pkg_id("apm", "dep-b")} <= deps
 
 
 def test_pyproject_parses_pep508_deps(tmp_path):
@@ -56,7 +57,11 @@ def test_pyproject_parses_pep508_deps(tmp_path):
     r = extract_package_manifest(p)
     assert _pkg_nodes(r)[0]["label"] == "cool-lib"
     deps = {e["target"] for e in r["edges"]}
-    assert {"pkg_requests", "pkg_rich", "pkg_tomli"} <= deps  # versions/extras/markers stripped
+    assert {
+        _pkg_id("python", "requests"),
+        _pkg_id("python", "rich"),
+        _pkg_id("python", "tomli"),
+    } <= deps  # versions/extras/markers stripped
 
 
 def test_gomod_parses_module_and_requires(tmp_path):
@@ -68,7 +73,8 @@ def test_gomod_parses_module_and_requires(tmp_path):
     r = extract_package_manifest(p)
     assert _pkg_nodes(r)[0]["label"] == "example.com/me/app"
     deps = {e["target"] for e in r["edges"]}
-    assert "pkg_github_com_x_y" in deps and "pkg_github_com_a_b" in deps
+    assert _pkg_id("go", "github.com/x/y") in deps
+    assert _pkg_id("go", "github.com/a/b") in deps
 
 
 def test_pom_parses_artifact_and_deps(tmp_path):
@@ -81,7 +87,27 @@ def test_pom_parses_artifact_and_deps(tmp_path):
     )
     r = extract_package_manifest(p)
     assert _pkg_nodes(r)[0]["label"] == "com.acme:widget"
-    assert any(e["target"] == "pkg_org_lib_core" for e in r["edges"])
+    assert any(e["target"] == _pkg_id("maven", "org.lib:core") for e in r["edges"])
+
+
+def test_same_package_name_is_namespaced_by_ecosystem(tmp_path):
+    pyproject = _write(
+        tmp_path / "python/pyproject.toml",
+        '[project]\nname = "shared"\ndependencies = ["peer"]\n',
+    )
+    gomod = _write(
+        tmp_path / "go/go.mod",
+        "module shared\n\nrequire peer v1.0.0\n",
+    )
+
+    python_result = extract_package_manifest(pyproject)
+    go_result = extract_package_manifest(gomod)
+
+    assert _pkg_nodes(python_result)[0]["id"] == _pkg_id("python", "shared")
+    assert _pkg_nodes(go_result)[0]["id"] == _pkg_id("go", "shared")
+    assert _pkg_id("python", "shared") != _pkg_id("go", "shared")
+    assert {edge["target"] for edge in python_result["edges"]} == {_pkg_id("python", "peer")}
+    assert {edge["target"] for edge in go_result["edges"]} == {_pkg_id("go", "peer")}
 
 
 # ── #1377: a package referenced by N manifests is ONE node ───────────────────
@@ -107,7 +133,8 @@ def test_apm_dependency_collapses_to_single_canonical_node(tmp_path):
         if n.get("type") == "package" and n["label"] == "coding-standards-core"
     ]
     assert len(core) == 1, "core package must be a single canonical node"
-    assert core[0]["id"] == "pkg_coding_standards_core" and core[0]["source_file"]
+    assert core[0]["id"] == _pkg_id("apm", "coding-standards-core")
+    assert core[0]["source_file"]
 
     g = build_from_json(result)
     core_ids = [n for n, d in g.nodes(data=True) if d.get("label") == "coding-standards-core"]
@@ -121,7 +148,7 @@ def test_external_dependency_edge_pruned_not_orphaned(tmp_path):
     p = _write(tmp_path / "apm.yml", "name: leaf\ndependencies:\n  - some-external-pkg\n")
     result = extract([p], cache_root=tmp_path)
     g = build_from_json(result)
-    assert "pkg_some_external_pkg" not in set(g.nodes())  # no fabricated external node
+    assert _pkg_id("apm", "some-external-pkg") not in set(g.nodes())
     assert [n for n, d in g.nodes(data=True) if d.get("label") == "leaf"]
 
 

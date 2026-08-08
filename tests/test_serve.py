@@ -1,6 +1,9 @@
 """Tests for serve.py - MCP graph query helpers (no mcp package required)."""
 
 import json
+import os
+import subprocess
+import sys
 import pytest
 import networkx as nx
 from networkx.readwrite import json_graph
@@ -142,6 +145,13 @@ def test_find_node_matches_full_punctuated_unicode_label():
     G.add_node("n1", label="Skill /auditar — Auditoría inquisitiva de enlaces")
 
     assert _find_node(G, "Skill /auditar — Auditoría inquisitiva de enlaces") == ["n1"]
+
+
+def test_find_node_uses_defined_diacritic_normalizer_without_stored_norm_label():
+    graph = nx.Graph()
+    graph.add_node("n1", label="Auditoría inquisitiva")
+
+    assert _find_node(graph, "Auditoria inquisitiva") == ["n1"]
 
 
 # --- trigram candidate prefilter (the trigram index that shrinks the O(N) scan) ---
@@ -390,6 +400,85 @@ def test_filter_graph_by_context_limits_traversal():
     assert edges == [("n1", "n2")]
 
 
+def test_filter_graph_by_context_preserves_graph_metadata():
+    G = _make_graph()
+    G.graph.update(
+        graphify_profile={"graph_type": "multidigraph"},
+        corpus_name="fixture",
+        custom_meta={"owner": "tests"},
+    )
+
+    filtered = _filter_graph_by_context(G, ["call"])
+
+    assert filtered.graph == G.graph
+
+
+@pytest.mark.parametrize("traversal", [_bfs, _dfs])
+def test_traversal_hub_detection_uses_distinct_neighbors(traversal):
+    graph = nx.MultiDiGraph()
+    graph.add_nodes_from(["a", "b", "c"])
+    for index in range(100):
+        graph.add_edge("a", "b", key=f"parallel-{index}", relation="calls")
+    graph.add_edge("b", "c", key="continuation", relation="calls")
+
+    visited, _edges = traversal(graph, ["a"], depth=2)
+
+    assert visited == {"a", "b", "c"}
+
+
+def test_query_output_is_stable_across_insertion_order_and_mixed_ids():
+    def make_graph(order):
+        graph = nx.Graph()
+        graph.graph["corpus_name"] = "stable"
+        for node_id in order:
+            graph.add_node(
+                node_id,
+                label="target" if node_id == "seed" else f"peer-{node_id}",
+                source_file=f"{node_id}.py",
+                source_location="L1",
+                community=0,
+            )
+        for node_id in order:
+            if node_id != "seed":
+                graph.add_edge("seed", node_id, relation="calls", confidence="EXTRACTED")
+        return graph
+
+    first = make_graph(["seed", "z", 1, "a"])
+    second = make_graph(["seed", "a", 1, "z"])
+
+    assert _query_graph_text(first, "target", depth=1, token_budget=45) == _query_graph_text(
+        second, "target", depth=1, token_budget=45
+    )
+
+
+def test_query_truncation_is_stable_across_hash_seeds():
+    code = """
+import networkx as nx
+from graphify.serve import _query_graph_text
+
+graph = nx.Graph()
+graph.add_node("seed", label="target", source_file="seed.py", source_location="L1")
+for node_id in {"z", "a", "m", "q", "b", "y"}:
+    graph.add_node(node_id, label=f"peer-{node_id}", source_file=f"{node_id}.py", source_location="L1")
+    graph.add_edge("seed", node_id, relation="calls", confidence="EXTRACTED")
+print(_query_graph_text(graph, "target", depth=1, token_budget=45))
+"""
+    outputs = []
+    for seed in ("1", "2", "3", "42"):
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        outputs.append(result.stdout)
+
+    assert len(set(outputs)) == 1
+    assert "truncated" in outputs[0]
+
+
 # --- _dfs ---
 
 
@@ -514,6 +603,48 @@ def test_load_graph_roundtrip(tmp_path):
     G2 = _load_graph(str(p))
     assert G2.number_of_nodes() == G.number_of_nodes()
     assert G2.number_of_edges() == G.number_of_edges()
+
+
+def test_load_graph_preserves_keyed_multigraph_state_and_metadata(tmp_path):
+    payload = {
+        "schema_version": 1,
+        "directed": True,
+        "multigraph": True,
+        "graph": {
+            "graphify_profile": {"graph_type": "multidigraph"},
+            "corpus_name": "serve-fixture",
+        },
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "links": [
+            {
+                "source": "a",
+                "target": "b",
+                "key": "call-L5",
+                "relation": "calls",
+                "context": "first",
+                "_origin": "ast",
+            },
+            {
+                "source": "a",
+                "target": "b",
+                "key": "call-L9",
+                "relation": "calls",
+                "context": "second",
+                "_origin": "ast",
+            },
+        ],
+        "hyperedges": [{"id": "flow", "nodes": ["a", "b"], "label": "Flow"}],
+    }
+    path = tmp_path / "graph.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    graph = _load_graph(str(path))
+
+    assert type(graph) is nx.MultiDiGraph
+    assert set(graph["a"]["b"]) == {"call-L5", "call-L9"}
+    assert {data["context"] for data in graph["a"]["b"].values()} == {"first", "second"}
+    assert graph.graph["corpus_name"] == "serve-fixture"
+    assert graph.graph["hyperedges"] == [{"id": "flow", "nodes": ["a", "b"], "label": "Flow"}]
 
 
 def test_load_graph_missing_file(tmp_path):

@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 
 from graphify import llm
+from graphify.claude_cli import _REQUIRED_HELP_FLAGS, _validated_executable
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -50,6 +51,16 @@ _ENVELOPE = {
 }
 
 
+def _claude_cli_side_effect(completed):
+    _validated_executable.cache_clear()
+    compatible = MagicMock(
+        returncode=0,
+        stdout="\n".join(_REQUIRED_HELP_FLAGS),
+        stderr="",
+    )
+    return [compatible, completed]
+
+
 # ── Test A: subprocess encoding ───────────────────────────────────────────────
 
 
@@ -69,7 +80,7 @@ class TestSubprocessEncoding:
         monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
         with (
             patch("shutil.which", return_value="/fake/bin/claude"),
-            patch("subprocess.run", return_value=completed) as mock_run,
+            patch("subprocess.run", side_effect=_claude_cli_side_effect(completed)) as mock_run,
         ):
             llm._call_claude_cli(_UNICODE_CONTENT, max_tokens=8192)
         _args, kwargs = mock_run.call_args
@@ -88,7 +99,7 @@ class TestSubprocessEncoding:
         monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
         with (
             patch("shutil.which", return_value="/fake/bin/claude"),
-            patch("subprocess.run", return_value=completed) as mock_run,
+            patch("subprocess.run", side_effect=_claude_cli_side_effect(completed)) as mock_run,
         ):
             llm._call_claude_cli(_UNICODE_CONTENT, max_tokens=8192)
         _args, kwargs = mock_run.call_args
@@ -116,7 +127,7 @@ class TestSubprocessEncoding:
         monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
         with (
             patch("shutil.which", return_value="/fake/bin/claude"),
-            patch("subprocess.run", return_value=completed),
+            patch("subprocess.run", side_effect=_claude_cli_side_effect(completed)),
         ):
             # Should not raise
             result = llm.extract_files_direct(files=[f], backend="claude-cli", root=tmp_path)
@@ -131,7 +142,7 @@ class TestSubprocessEncoding:
         )
         with (
             patch("shutil.which", return_value="/fake/bin/claude"),
-            patch("subprocess.run", return_value=completed) as mock_run,
+            patch("subprocess.run", side_effect=_claude_cli_side_effect(completed)) as mock_run,
         ):
             llm._call_llm(_UNICODE_CONTENT, backend="claude-cli", max_tokens=200)
         _args, kwargs = mock_run.call_args
@@ -202,9 +213,10 @@ class TestLoudChunkFailure:
         f.write_text("z = 1\n", encoding="utf-8")
 
         good_result = {
-            "nodes": [{"id": "n1", "label": "N1", "file_type": "code", "source_file": str(f)}],
+            "nodes": [{"id": "n1", "label": "N1", "file_type": "code", "source_file": "ok.py"}],
             "edges": [],
             "hyperedges": [],
+            "egress_decisions": [{"eligible": True, "safe_relative_path": "ok.py"}],
             "input_tokens": 1,
             "output_tokens": 1,
             "elapsed_seconds": 0.1,
@@ -215,7 +227,7 @@ class TestLoudChunkFailure:
             lambda *a, **kw: good_result,
         )
 
-        result = llm.extract_corpus_parallel([f], backend="claude-cli")
+        result = llm.extract_corpus_parallel([f], backend="claude-cli", root=tmp_path)
         assert result.get("failed_chunks", 0) == 0
         captured = capsys.readouterr()
         # "WARNING:" should NOT appear on a fully-successful run
@@ -329,7 +341,7 @@ class TestSubstitutionValidation:
 
         with (
             patch("shutil.which", return_value="/fake/bin/claude"),
-            patch("subprocess.run", return_value=completed) as mock_run,
+            patch("subprocess.run", side_effect=_claude_cli_side_effect(completed)) as mock_run,
         ):
             result = llm.extract_files_direct(files=[f], backend="claude-cli", root=tmp_path)
 

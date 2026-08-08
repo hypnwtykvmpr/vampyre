@@ -5,12 +5,17 @@ Seven required PR 2 scenarios from the Wave 3 handoff guardrails.
 
 from __future__ import annotations
 
+import json
+import ast
+from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import networkx as nx
 import pytest
 
 from graphify.graph_loader import GRAPHIFY_PROFILE_KEY, load_graph
+from graphify.graph_state import DecodeMode, GraphStateError
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -29,6 +34,7 @@ _SIMPLE_EDGE = {
     "confidence_score": 1.0,
     "source_file": "a.py",
     "weight": 1.0,
+    "_origin": "ast",
 }
 
 _KEYED_EDGE = {**_SIMPLE_EDGE, "key": "calls:a.py:L1"}
@@ -42,7 +48,158 @@ _KEYED_EDGE_2 = {
     "source_file": "a.py",
     "key": "imports:a.py:L5",
     "weight": 1.0,
+    "_origin": "ast",
 }
+
+
+def _current_multidigraph_payload() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "directed": True,
+        "multigraph": True,
+        "graph": {
+            "graphify_profile": {"graph_type": "multidigraph", "extension": "kept"},
+            "corpus_name": "reader-contract",
+        },
+        "nodes": _NODES,
+        "links": [_KEYED_EDGE, _KEYED_EDGE_2],
+        "hyperedges": [{"id": "flow", "nodes": ["a", "b"], "label": "Flow"}],
+        "custom_top": {"owner": "fixture"},
+        "graphify_state_diagnostics": [],
+    }
+
+
+def test_product_readers_agree_on_canonical_multidigraph_state(tmp_path):
+    from graphify.affected import load_graph as load_affected_graph
+    from graphify.callflow_html import load_graph as load_callflow_graph
+    from graphify.diagnostics import _read_json_file
+    from graphify.graph_loader import load_graph_file, load_graph_state_file
+    from graphify.prs import _load_graph_json
+    from graphify.serve import _load_graph as load_served_graph
+
+    path = tmp_path / "graph.json"
+    path.write_text(json.dumps(_current_multidigraph_payload()), encoding="utf-8")
+
+    state = load_graph_state_file(path, mode=DecodeMode.STRICT_CURRENT)
+    graphs = [load_graph_file(path), load_affected_graph(path), load_served_graph(str(path))]
+    for graph in graphs:
+        assert type(graph) is nx.MultiDiGraph
+        assert graph.number_of_edges() == 2
+        assert graph.graph[GRAPHIFY_PROFILE_KEY] == state.graph_metadata[GRAPHIFY_PROFILE_KEY]
+        assert graph.graph["corpus_name"] == "reader-contract"
+        assert graph.graph["hyperedges"] == list(state.hyperedges)
+        assert set(graph["a"]["b"]) == {"calls:a.py:L1", "imports:a.py:L5"}
+
+    nodes, edges, hyperedges, metadata = load_callflow_graph(path)
+    assert {node["id"] for node in nodes} == {"a", "b"}
+    assert {edge["key"] for edge in edges} == {"calls:a.py:L1", "imports:a.py:L5"}
+    assert hyperedges == list(state.hyperedges)
+    assert metadata[GRAPHIFY_PROFILE_KEY] == state.graph_metadata[GRAPHIFY_PROFILE_KEY]
+    assert metadata["corpus_name"] == "reader-contract"
+
+    for payload in (_load_graph_json(path), _read_json_file(path)):
+        assert payload is not None
+        assert payload["multigraph"] is True
+        assert payload["directed"] is True
+        assert payload["graph"][GRAPHIFY_PROFILE_KEY]["extension"] == "kept"
+        assert payload["hyperedges"] == list(state.hyperedges)
+        assert {edge["key"] for edge in payload["links"]} == {
+            "calls:a.py:L1",
+            "imports:a.py:L5",
+        }
+
+
+def test_product_readers_refuse_conflicting_current_edge_lists(tmp_path, capsys):
+    from graphify.affected import load_graph as load_affected_graph
+    from graphify.callflow_html import load_graph as load_callflow_graph
+    from graphify.diagnostics import _read_json_file
+    from graphify.graph_loader import load_graph_file
+    from graphify.prs import _load_graph_json
+    from graphify.serve import _load_graph as load_served_graph
+
+    payload = _current_multidigraph_payload()
+    payload["edges"] = [{**_KEYED_EDGE, "relation": "conflicts"}]
+    path = tmp_path / "graph.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(GraphStateError, match="edges and links contain conflicting records"):
+        load_graph_file(path)
+    with pytest.raises(RuntimeError, match="conflicting records"):
+        load_affected_graph(path)
+    with pytest.raises(SystemExit):
+        load_served_graph(str(path))
+    assert "conflicting records" in capsys.readouterr().err
+    with pytest.raises(GraphStateError, match="conflicting records"):
+        load_callflow_graph(path)
+    with pytest.raises(GraphStateError, match="conflicting records"):
+        _read_json_file(path)
+    assert _load_graph_json(path) is None
+
+
+def test_graph_state_reader_policy_allows_only_classified_adapters():
+    project_root = Path(__file__).resolve().parents[1]
+    allowed_node_link = {"callflow_html.py", "multigraph_compat.py"}
+    offenders: list[str] = []
+    for source_path in sorted((project_root / "graphify").glob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr == "node_link_graph" and source_path.name not in allowed_node_link:
+                offenders.append(f"{source_path.name}:{node.lineno}:node_link_graph")
+            if node.func.attr != "loads" or not node.args:
+                continue
+            argument = node.args[0]
+            if not isinstance(argument, ast.Call) or not isinstance(argument.func, ast.Attribute):
+                continue
+            if argument.func.attr != "read_text":
+                continue
+            receiver = argument.func.value
+            receiver_names = {
+                child.id for child in ast.walk(receiver) if isinstance(child, ast.Name)
+            }
+            graph_names = {
+                "graph_path",
+                "graph_json",
+                "existing_graph",
+                "existing_graph_path",
+                "_GLOBAL_GRAPH",
+            }
+            if receiver_names & graph_names and source_path.name not in {
+                "graph_state.py",
+                "callflow_html.py",
+                "diagnostics.py",
+            }:
+                offenders.append(f"{source_path.name}:{node.lineno}:raw graph JSON")
+    assert offenders == []
+
+
+def test_load_graph_state_file_preserves_full_state_and_legacy_diagnostics(tmp_path):
+    from graphify.graph_loader import load_graph_state_file
+
+    path = tmp_path / "graph.json"
+    payload = {
+        "directed": True,
+        "multigraph": True,
+        "graph": {"graphify_profile": {"graph_type": "multidigraph", "extra": "kept"}},
+        "nodes": _NODES,
+        "links": [_KEYED_EDGE],
+        "hyperedges": [{"nodes": ["a", "b"], "label": "Flow"}],
+        "custom_top": "kept",
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    state = load_graph_state_file(path, mode=DecodeMode.MIGRATE_LEGACY)
+
+    assert type(state.graph) is nx.MultiDiGraph
+    profile = state.graph_metadata["graphify_profile"]
+    assert isinstance(profile, dict)
+    assert profile["extra"] == "kept"
+    assert state.top_level_metadata["custom_top"] == "kept"
+    hyperedge_id = state.hyperedges[0]["id"]
+    assert isinstance(hyperedge_id, str)
+    assert hyperedge_id.startswith("hyperedge:v1:")
+    assert state.diagnostics
 
 
 def _simple_links() -> dict:
@@ -83,7 +240,7 @@ def test_load_graph_rejects_non_object_payload():
 def test_load_graph_rejects_non_list_nodes():
     data = {**_simple_links(), "nodes": 123}
 
-    with pytest.raises(TypeError, match="'nodes' must be a list, got int"):
+    with pytest.raises(GraphStateError, match="nodes must be a list"):
         load_graph(data)
 
 
@@ -278,14 +435,14 @@ def test_directed_true_profile_graph_type():
 
 
 # ---------------------------------------------------------------------------
-# Blocker 4: malformed JSON must fail cleanly or skip under documented policy
+# Blocker 4: malformed JSON must fail cleanly without dropping records
 # ---------------------------------------------------------------------------
 
 
-def test_non_dict_edge_entries_are_skipped():
+def test_non_dict_edge_entries_are_rejected():
     data = {"nodes": _NODES, "edges": ["not-a-dict", None, 42]}
-    G = load_graph(data)
-    assert G.number_of_edges() == 0
+    with pytest.raises(GraphStateError, match="must be an object"):
+        load_graph(data)
 
 
 def test_edges_value_not_a_list_raises():
@@ -294,18 +451,17 @@ def test_edges_value_not_a_list_raises():
         load_graph(data)
 
 
-def test_non_dict_graphify_profile_is_ignored():
+def test_non_dict_graphify_profile_is_rejected():
     data = {
         "nodes": _NODES,
         "edges": [_SIMPLE_EDGE],
         GRAPHIFY_PROFILE_KEY: "bad-profile",
     }
-    G = load_graph(data)
-    assert isinstance(G.graph[GRAPHIFY_PROFILE_KEY], dict)
-    assert "graph_type" in G.graph[GRAPHIFY_PROFILE_KEY]
+    with pytest.raises(GraphStateError, match="profile must be an object"):
+        load_graph(data)
 
 
-def test_edge_missing_source_or_target_skipped():
+def test_edge_missing_source_or_target_rejected():
     data = {
         "nodes": _NODES,
         "edges": [
@@ -313,8 +469,8 @@ def test_edge_missing_source_or_target_skipped():
             {"source": "a", "relation": "calls"},
         ],
     }
-    G = load_graph(data)
-    assert G.number_of_edges() == 0
+    with pytest.raises(GraphStateError, match="missing source or target"):
+        load_graph(data)
 
 
 # ---------------------------------------------------------------------------
@@ -340,9 +496,9 @@ def test_multigraph_dict_key_raises():
         load_graph(_multigraph_with_key({"bad": 1}))
 
 
-def test_multigraph_int_key_raises():
-    with pytest.raises((TypeError, ValueError)):
-        load_graph(_multigraph_with_key(123))
+def test_multigraph_int_key_is_preserved():
+    graph = cast(nx.MultiDiGraph, load_graph(_multigraph_with_key(123)))
+    assert list(graph.edges(keys=True))[0][2] == 123
 
 
 def test_load_simple_edge_with_empty_string_source_not_shadowed_by_from():
@@ -352,8 +508,8 @@ def test_load_simple_edge_with_empty_string_source_not_shadowed_by_from():
         "nodes": _NODES,
         "links": [{"source": "", "from": "a", "target": "b", "relation": "calls"}],
     }
-    G = load_graph(data)
-    assert G.number_of_edges() == 0
+    with pytest.raises(GraphStateError, match="dangling endpoint"):
+        load_graph(data)
 
 
 def test_load_simple_edge_with_from_key_loaded():
@@ -433,7 +589,8 @@ def test_graph_attributes_round_trip_through_node_link_data():
     G_in = load_graph(data)
 
     assert G_in.graph["graphify_profile"]["extra"] == "value"
-    assert G_in.graph["hyperedges"] == [{"members": ["a", "b"]}]
+    assert G_in.graph["hyperedges"][0]["nodes"] == ["a", "b"]
+    assert G_in.graph["hyperedges"][0]["id"].startswith("hyperedge:v1:")
     assert G_in.graph["graphify_multigraph_diagnostics"] == {"collapsed": 0}
 
 
@@ -458,22 +615,18 @@ def test_graph_attributes_round_trip_through_multigraph_node_link_data():
     assert G_in.number_of_edges() == 2
 
 
-def test_load_skips_unhashable_node_ids(capsys):
-    """Corrupted graph.json with unhashable node ids must not crash; skip + warn."""
+def test_load_rejects_unhashable_node_ids():
     data = {
         "directed": True,
         "multigraph": False,
         "nodes": [{"id": "ok"}, {"id": ["unhashable"]}, {"id": {"also": "unhashable"}}],
         "links": [{"source": "ok", "target": "ok", "relation": "self"}],
     }
-    G = load_graph(data)
-    captured = capsys.readouterr()
-    assert G.number_of_nodes() == 1
-    assert "unhashable" in captured.err.lower()
+    with pytest.raises(GraphStateError, match="hashable"):
+        load_graph(data)
 
 
-def test_load_skips_edges_with_unhashable_endpoints():
-    """Edges with unhashable source/target must be skipped, not raise TypeError."""
+def test_load_rejects_edges_with_unhashable_endpoints():
     data = {
         "directed": True,
         "multigraph": False,
@@ -484,12 +637,11 @@ def test_load_skips_edges_with_unhashable_endpoints():
             {"source": "a", "target": {"also": "unhashable"}, "relation": "bogus"},
         ],
     }
-    G = load_graph(data)
-    assert G.number_of_edges() == 1
+    with pytest.raises(GraphStateError, match="unhashable endpoint"):
+        load_graph(data)
 
 
-def test_load_multigraph_skips_unhashable_endpoints():
-    """Same protection in the multigraph loader."""
+def test_load_multigraph_rejects_unhashable_endpoints():
     data = {
         "directed": True,
         "multigraph": True,
@@ -499,12 +651,11 @@ def test_load_multigraph_skips_unhashable_endpoints():
             {"source": ["bad"], "target": "b", "key": "k2", "relation": "calls"},
         ],
     }
-    G = load_graph(data, require_capabilities=False)
-    assert G.number_of_edges() == 1
+    with pytest.raises(GraphStateError, match="unhashable endpoint"):
+        load_graph(data, require_capabilities=False)
 
 
-def test_load_multigraph_duplicate_keys_repaired_not_overwritten(capsys):
-    """Two parallel edges with same (src, tgt, key) but different attrs must both survive."""
+def test_load_multigraph_duplicate_keys_with_conflicting_attrs_are_rejected():
     data = {
         "directed": True,
         "multigraph": True,
@@ -514,22 +665,20 @@ def test_load_multigraph_duplicate_keys_repaired_not_overwritten(capsys):
             {"source": "a", "target": "b", "key": "same", "relation": "calls", "context": "two"},
         ],
     }
-    G = load_graph(data, require_capabilities=False)
-    assert G.number_of_edges() == 2, "duplicate-key edges must both be preserved via repair keys"
-    captured = capsys.readouterr()
-    assert "duplicate" in captured.err.lower()
+    with pytest.raises(GraphStateError, match="duplicate keyed edge identity"):
+        load_graph(data, require_capabilities=False)
 
 
 def test_load_graph_rejects_non_bool_multigraph_field():
     """String 'false' or other non-bool 'multigraph' must be rejected, not coerced."""
     data = {**_simple_links(), "multigraph": "false"}
-    with pytest.raises(TypeError, match="'multigraph' must be a boolean"):
+    with pytest.raises(GraphStateError, match="multigraph must be a boolean"):
         load_graph(data)
 
 
 def test_load_graph_rejects_non_bool_directed_field():
     data = {**_simple_links(), "directed": "true"}
-    with pytest.raises(TypeError, match="'directed' must be a boolean"):
+    with pytest.raises(GraphStateError, match="directed must be a boolean"):
         load_graph(data)
 
 
@@ -545,13 +694,12 @@ def test_load_multigraph_with_omitted_directed_does_not_warn(capsys):
     assert "multigraph=true but directed=false" not in captured.err
 
 
-def test_load_graph_overwrites_stale_graph_type_in_profile():
-    """Stale graph_type from serialized profile must not survive when loading."""
+def test_load_graph_rejects_stale_graph_type_in_profile():
     data = {
         "multigraph": True,
         "nodes": [{"id": "a"}, {"id": "b"}],
         "links": [{"source": "a", "target": "b", "key": "k", "relation": "calls"}],
         "graph": {"graphify_profile": {"graph_type": "simple"}},
     }
-    G = load_graph(data, require_capabilities=False)
-    assert G.graph[GRAPHIFY_PROFILE_KEY]["graph_type"] == "multidigraph"
+    with pytest.raises(GraphStateError, match="profile conflicts"):
+        load_graph(data, require_capabilities=False)

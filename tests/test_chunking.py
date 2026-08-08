@@ -159,14 +159,24 @@ def test_estimate_file_tokens_falls_back_to_chars_when_no_tokenizer(tmp_path):
 # ---- Parallel execution ------------------------------------------------------
 
 
-def _stub_chunk_result(file_count: int, idx: int) -> dict:
+def _stub_chunk_result(chunk, idx: int) -> dict:
     """Build a deterministic fake extraction result for a chunk."""
+    paths = [Path(item) for item in chunk]
     return {
-        "nodes": [{"id": f"chunk_{idx}_node_{i}"} for i in range(file_count)],
+        "nodes": [
+            {
+                "id": f"chunk_{idx}_node_{i}",
+                "label": path.stem,
+                "file_type": "code",
+                "source_file": path.name,
+            }
+            for i, path in enumerate(paths)
+        ],
         "edges": [],
         "hyperedges": [],
-        "input_tokens": 100 * file_count,
-        "output_tokens": 50 * file_count,
+        "egress_decisions": [{"eligible": True, "safe_relative_path": path.name} for path in paths],
+        "input_tokens": 100 * len(paths),
+        "output_tokens": 50 * len(paths),
     }
 
 
@@ -183,13 +193,18 @@ def test_corpus_parallel_runs_chunks_concurrently(tmp_path):
 
     def slow_extract(chunk, **kwargs):
         time.sleep(0.3)
-        return _stub_chunk_result(len(chunk), 0)
+        return _stub_chunk_result(chunk, 0)
 
     with patch("graphify.llm.extract_files_direct", side_effect=slow_extract):
         t0 = time.time()
         # Force 4 chunks of 2 files each by setting a tight token budget.
         result = extract_corpus_parallel(
-            files, backend="kimi", token_budget=None, chunk_size=2, max_concurrency=4
+            files,
+            backend="kimi",
+            root=tmp_path,
+            token_budget=None,
+            chunk_size=2,
+            max_concurrency=4,
         )
         elapsed = time.time() - t0
 
@@ -212,11 +227,16 @@ def test_corpus_parallel_sequential_when_max_concurrency_is_one(tmp_path):
 
     def record(chunk, **kwargs):
         call_order.append(tuple(p.name for p in chunk))
-        return _stub_chunk_result(len(chunk), len(call_order))
+        return _stub_chunk_result(chunk, len(call_order))
 
     with patch("graphify.llm.extract_files_direct", side_effect=record):
         extract_corpus_parallel(
-            files, backend="kimi", token_budget=None, chunk_size=1, max_concurrency=1
+            files,
+            backend="kimi",
+            root=tmp_path,
+            token_budget=None,
+            chunk_size=1,
+            max_concurrency=1,
         )
 
     # Sequential => we see calls in submission order
@@ -240,11 +260,16 @@ def test_corpus_parallel_continues_after_chunk_failure(tmp_path, capsys):
         call_count["n"] += 1
         if call_count["n"] == 2:
             raise RuntimeError("simulated API error")
-        return _stub_chunk_result(len(chunk), call_count["n"])
+        return _stub_chunk_result(chunk, call_count["n"])
 
     with patch("graphify.llm.extract_files_direct", side_effect=maybe_fail):
         result = extract_corpus_parallel(
-            files, backend="kimi", token_budget=None, chunk_size=1, max_concurrency=1
+            files,
+            backend="kimi",
+            root=tmp_path,
+            token_budget=None,
+            chunk_size=1,
+            max_concurrency=1,
         )
 
     # 4 chunks dispatched, 1 failed → 3 chunks contributed nodes
@@ -267,11 +292,16 @@ def test_corpus_parallel_legacy_mode_when_token_budget_is_none(tmp_path):
 
     def record(chunk, **kwargs):
         chunks_seen.append(len(chunk))
-        return _stub_chunk_result(len(chunk), len(chunks_seen))
+        return _stub_chunk_result(chunk, len(chunks_seen))
 
     with patch("graphify.llm.extract_files_direct", side_effect=record):
         extract_corpus_parallel(
-            files, backend="kimi", token_budget=None, chunk_size=20, max_concurrency=1
+            files,
+            backend="kimi",
+            root=tmp_path,
+            token_budget=None,
+            chunk_size=20,
+            max_concurrency=1,
         )
 
     # 45 files / chunk_size=20 = 3 chunks of 20, 20, 5
@@ -292,10 +322,10 @@ def test_corpus_parallel_token_budget_default_packs_files(tmp_path):
 
     def record(chunk, **kwargs):
         chunks_seen.append(len(chunk))
-        return _stub_chunk_result(len(chunk), len(chunks_seen))
+        return _stub_chunk_result(chunk, len(chunks_seen))
 
     with patch("graphify.llm.extract_files_direct", side_effect=record):
-        extract_corpus_parallel(files, backend="kimi", max_concurrency=1)
+        extract_corpus_parallel(files, backend="kimi", root=tmp_path, max_concurrency=1)
 
     # 50 tiny files at default 60k token budget should pack into 1 chunk
     assert len(chunks_seen) == 1
@@ -355,7 +385,9 @@ def test_adaptive_retry_splits_when_finish_reason_length(tmp_path):
     def stub(chunk, **kwargs):
         calls.append(len(chunk))
         finish = "length" if len(chunk) == 4 else "stop"
-        return _stub_with_finish(len(chunk), finish_reason=finish)
+        result = _stub_chunk_result(chunk, len(calls))
+        result["finish_reason"] = finish
+        return result
 
     with patch("graphify.llm.extract_files_direct", side_effect=stub):
         result = _extract_with_adaptive_retry(
@@ -463,13 +495,16 @@ def test_corpus_parallel_uses_adaptive_retry(tmp_path):
     def stub(chunk, **kwargs):
         calls.append(len(chunk))
         finish = "length" if len(chunk) == 4 else "stop"
-        return _stub_with_finish(len(chunk), finish_reason=finish)
+        result = _stub_chunk_result(chunk, len(calls))
+        result["finish_reason"] = finish
+        return result
 
     chunk_done_args = []
     with patch("graphify.llm.extract_files_direct", side_effect=stub):
         result = extract_corpus_parallel(
             files,
             backend="kimi",
+            root=tmp_path,
             token_budget=None,
             chunk_size=4,
             max_concurrency=1,
@@ -494,9 +529,17 @@ def test_corpus_parallel_counts_incomplete_chunks(tmp_path):
     with patch(
         "graphify.llm._extract_with_adaptive_retry",
         return_value={
-            "nodes": [{"id": "partial"}],
+            "nodes": [
+                {
+                    "id": "partial",
+                    "label": "Partial",
+                    "file_type": "document",
+                    "source_file": "huge.md",
+                }
+            ],
             "edges": [],
             "hyperedges": [],
+            "egress_decisions": [{"eligible": True, "safe_relative_path": "huge.md"}],
             "input_tokens": 1,
             "output_tokens": 1,
             "finish_reason": "length",
@@ -506,6 +549,7 @@ def test_corpus_parallel_counts_incomplete_chunks(tmp_path):
         result = extract_corpus_parallel(
             [source],
             backend="kimi",
+            root=tmp_path,
             token_budget=None,
             max_concurrency=1,
         )

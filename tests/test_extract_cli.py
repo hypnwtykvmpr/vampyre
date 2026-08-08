@@ -16,6 +16,7 @@ import graphify.__main__ as mainmod
 from graphify.build import build_from_json
 from graphify.export import to_json
 from graphify.graph_loader import load_graph
+from graphify.ids import make_id
 from graphify.llm import BACKENDS, _backend_env_keys
 
 
@@ -483,6 +484,7 @@ def test_update_remap_routes_to_full_extract_and_stamps_ast(tmp_path):
     assert seeded_links, "fixture must contain AST edges before provenance is removed"
     for edge in seeded_links:
         edge.pop("_origin", None)
+    seeded_data.pop("schema_version", None)
     graph.write_text(json.dumps(seeded_data, indent=2), encoding="utf-8")
 
     r = _run(["update", "--remap", "--no-viz", str(corpus)], corpus)
@@ -500,6 +502,33 @@ def test_update_remap_routes_to_full_extract_and_stamps_ast(tmp_path):
     assert all(e.get("_origin") == "ast" for e in links), (
         "every edge must be stamped _origin='ast' after a remap re-extraction"
     )
+
+
+def test_incremental_extract_refuses_legacy_semantic_identity_without_mutation(tmp_path):
+    corpus = _make_code_corpus(tmp_path)
+    seeded = _run(["extract", str(corpus), "--no-cluster"], corpus)
+    assert seeded.returncode == 0, seeded.stdout + seeded.stderr
+    output = corpus / "graphify-out"
+    graph_path = output / "graph.json"
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    graph["graph"]["graphify_profile"]["semantic_node_id_schema"] = "legacy-preserved"
+    graph_path.write_text(json.dumps(graph, indent=2) + "\n", encoding="utf-8")
+    before = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+
+    refused = _run(["extract", str(corpus), "--no-cluster"], corpus)
+
+    assert refused.returncode == 1
+    assert "update --remap" in refused.stderr
+    after = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
 
 
 def test_update_remap_forwards_semantic_reproducibility_options(monkeypatch, tmp_path):
@@ -805,9 +834,14 @@ def test_extract_out_preserves_ids_and_cross_file_edges(monkeypatch, tmp_path):
     plain_signature = _topology_signature(plain / "graphify-out" / "graph.json")
     external_signature = _topology_signature(external_root / "graphify-out" / "graph.json")
     assert plain_signature == external_signature
-    assert plain_signature[0] == ["a", "a_alpha", "b", "b_beta"]
+    assert plain_signature[0] == [
+        "a",
+        make_id("a", "alpha"),
+        "b",
+        make_id("b", "beta"),
+    ]
     assert ("a", "b", "imports_from") in plain_signature[1]
-    assert ("a", "b_beta", "imports") in plain_signature[1]
+    assert ("a", make_id("b", "beta"), "imports") in plain_signature[1]
     assert not any(str(tmp_path) in node_id for node_id in external_signature[0])
 
 
@@ -870,9 +904,14 @@ def test_extract_out_respects_process_bound_graphify_out(tmp_path):
     assert result.returncode == 0, result.stderr
     custom_out = external_root / "custom-graph"
     nodes, edges = _topology_signature(custom_out / "graph.json")
-    assert nodes == ["a", "a_alpha", "b", "b_beta"]
+    assert nodes == [
+        "a",
+        make_id("a", "alpha"),
+        "b",
+        make_id("b", "beta"),
+    ]
     assert ("a", "b", "imports_from") in edges
-    assert ("a", "b_beta", "imports") in edges
+    assert ("a", make_id("b", "beta"), "imports") in edges
     marker = custom_out / ".graphify_root"
     assert marker.read_text(encoding="utf-8") == (
         "marker-relative:"
@@ -894,6 +933,14 @@ def test_extract_out_semantic_cache_survives_prune_and_reloads(monkeypatch, tmp_
         nonlocal calls
         calls += 1
         kwargs["on_chunk_done"](0, 1, {})
+        from graphify.llm import (
+            BACKENDS,
+            _default_model_for_backend,
+            _egress_endpoint,
+        )
+        from graphify.semantic_schema import semantic_provenance
+
+        selected_backend = kwargs["backend"]
         return {
             "nodes": [
                 {
@@ -907,6 +954,11 @@ def test_extract_out_semantic_cache_survives_prune_and_reloads(monkeypatch, tmp_
             "hyperedges": [],
             "input_tokens": 1,
             "output_tokens": 1,
+            "semantic_provenance": semantic_provenance(
+                backend=selected_backend,
+                model=_default_model_for_backend(selected_backend),
+                endpoint=_egress_endpoint(selected_backend, BACKENDS[selected_backend]),
+            ),
         }
 
     _clear_backend_keys(monkeypatch)
@@ -934,10 +986,12 @@ def test_extract_out_semantic_cache_survives_prune_and_reloads(monkeypatch, tmp_
             (external_root / "graphify-out" / "manifest.json").unlink()
 
     assert calls == 1
-    entries = list((external_root / "graphify-out" / "cache" / "semantic").glob("*.json"))
+    entries = list((external_root / "graphify-out" / "cache" / "semantic").glob("**/*.json"))
     assert len(entries) == 1
     cached = json.loads(entries[0].read_text(encoding="utf-8"))
-    assert cached["nodes"][0]["source_file"] == "notes.md"
+    assert cached["identity"]["backend"] == "claude"
+    assert cached["identity"]["prompt_schema_version"] == "semantic-v2"
+    assert cached["fragment"]["nodes"][0]["source_file"] == "notes.md"
     assert not (corpus / "graphify-out").exists()
 
 
@@ -1033,6 +1087,27 @@ def test_extract_warm_semantic_cache_does_not_require_backend_credentials(monkey
 
     assert second_exit.value.code == 0
     assert calls == 1, "a warm semantic cache must not call or require an LLM backend"
+
+    for incompatible_args in (("--mode", "deep"), ("--model", "different-model")):
+        monkeypatch.setattr(
+            mainmod.sys,
+            "argv",
+            [
+                "graphify",
+                "extract",
+                str(corpus),
+                "--out",
+                str(out_dir),
+                "--no-cluster",
+                "--full",
+                *incompatible_args,
+            ],
+        )
+        with pytest.raises(SystemExit) as incompatible_exit:
+            mainmod.main()
+        assert incompatible_exit.value.code == 1
+
+    assert calls == 1, "an incompatible semantic cache identity must remain a cache miss"
 
 
 @pytest.mark.parametrize("new_event_during_extract", [False, True])
@@ -1201,6 +1276,57 @@ def _make_code_corpus(tmp_path: Path) -> Path:
     return corpus
 
 
+def test_extract_and_cluster_git_provenance_use_corpus_not_caller(tmp_path):
+    corpus = _make_code_corpus(tmp_path)
+    subprocess.run(["git", "init", "-q", str(corpus)], check=True)
+    subprocess.run(
+        ["git", "-C", str(corpus), "config", "user.email", "test@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(corpus), "config", "user.name", "Test"], check=True)
+    subprocess.run(["git", "-C", str(corpus), "add", "--", "app.py"], check=True)
+    subprocess.run(["git", "-C", str(corpus), "commit", "-qm", "corpus"], check=True)
+    corpus_commit = subprocess.run(
+        ["git", "-C", str(corpus), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.strip()
+
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    subprocess.run(["git", "init", "-q", str(caller)], check=True)
+    subprocess.run(
+        ["git", "-C", str(caller), "config", "user.email", "test@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(caller), "config", "user.name", "Test"], check=True)
+    (caller / "caller.txt").write_text("caller\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(caller), "add", "--", "caller.txt"], check=True)
+    subprocess.run(["git", "-C", str(caller), "commit", "-qm", "caller"], check=True)
+
+    extracted = _run(["extract", str(corpus), "--no-cluster"], caller)
+    assert extracted.returncode == 0, extracted.stdout + extracted.stderr
+    graph_path = corpus / "graphify-out" / "graph.json"
+    assert json.loads(graph_path.read_text(encoding="utf-8"))["built_at_commit"] == corpus_commit
+
+    clustered = _run(
+        ["cluster-only", str(corpus), "--no-viz", "--no-label"],
+        caller,
+    )
+    assert clustered.returncode == 0, clustered.stdout + clustered.stderr
+    assert json.loads(graph_path.read_text(encoding="utf-8"))["built_at_commit"] == corpus_commit
+    assert f"Built from commit: `{corpus_commit[:8]}`" in (
+        corpus / "graphify-out" / "GRAPH_REPORT.md"
+    ).read_text(encoding="utf-8")
+
+    explicit = _run(
+        ["cluster-only", "--graph", str(graph_path), "--no-viz", "--no-label"],
+        caller,
+    )
+    assert explicit.returncode == 0, explicit.stdout + explicit.stderr
+    assert json.loads(graph_path.read_text(encoding="utf-8"))["built_at_commit"] == corpus_commit
+
+
 def _write_multidigraph_graph_json(corpus: Path) -> Path:
     """Seed corpus/graphify-out/graph.json as a multidigraph with parallel edges.
 
@@ -1231,6 +1357,14 @@ def _write_multidigraph_graph_json(corpus: Path) -> Path:
         for i, rel in enumerate(["calls", "imports"])
     ]
     G = build_from_json({"nodes": nodes, "edges": edges}, multigraph=True)
+    from graphify.ids import CURRENT_AST_NODE_ID_SCHEMA
+    from graphify.semantic_schema import PROMPT_SCHEMA_VERSION
+
+    G.graph["graphify_profile"] = {
+        "graph_type": "multidigraph",
+        "ast_node_id_schema": CURRENT_AST_NODE_ID_SCHEMA,
+        "semantic_node_id_schema": PROMPT_SCHEMA_VERSION,
+    }
     assert isinstance(G, nx.MultiDiGraph)
     assert G.number_of_edges("main", "helper") == 2
     out = corpus / "graphify-out"
@@ -1246,9 +1380,108 @@ def _graph_type(graph_data: dict) -> str | None:
     return graph_data.get("graph", {}).get("graphify_profile", {}).get("graph_type")
 
 
+def _ast_node_id_schema(graph_data: dict) -> str | None:
+    return graph_data.get("graph", {}).get("graphify_profile", {}).get("ast_node_id_schema")
+
+
+def _semantic_node_id_schema(graph_data: dict) -> str | None:
+    return graph_data.get("graph", {}).get("graphify_profile", {}).get("semantic_node_id_schema")
+
+
 def _parallel_edges(graph_data: dict, src: str, tgt: str) -> list[dict]:
     links = graph_data.get("links", graph_data.get("edges", []))
     return [e for e in links if e.get("source") == src and e.get("target") == tgt]
+
+
+@pytest.mark.parametrize(
+    "class_flag,expected_type",
+    [
+        ("--simple", "simple"),
+        ("--directed", "digraph"),
+        ("--multigraph", "multidigraph"),
+    ],
+)
+@pytest.mark.parametrize("no_cluster", [False, True], ids=["clustered", "no-cluster"])
+def test_extract_force_accepts_only_nonempty_shrink_across_graph_profiles(
+    tmp_path, class_flag, expected_type, no_cluster
+):
+    corpus = _make_code_corpus(tmp_path)
+    mode_args = [class_flag, *(["--no-cluster"] if no_cluster else [])]
+
+    initial = _run(["extract", str(corpus), *mode_args], tmp_path)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    graph_path = corpus / "graphify-out" / "graph.json"
+    initial_bytes = graph_path.read_bytes()
+    initial_data = json.loads(initial_bytes)
+    initial_nodes = len(initial_data["nodes"])
+    assert initial_nodes >= 4
+    assert _graph_type(initial_data) == expected_type
+    from graphify.ids import CURRENT_AST_NODE_ID_SCHEMA
+    from graphify.semantic_schema import PROMPT_SCHEMA_VERSION
+
+    assert _ast_node_id_schema(initial_data) == CURRENT_AST_NODE_ID_SCHEMA
+    assert _semantic_node_id_schema(initial_data) == PROMPT_SCHEMA_VERSION
+
+    (corpus / "app.py").write_text(
+        "def helper():\n    return 1\n\n\ndef main():\n    return helper()\n",
+        encoding="utf-8",
+    )
+    refused = _run(["extract", str(corpus), "--full", *mode_args], tmp_path)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "Refusing to overwrite" in refused.stderr
+    assert graph_path.read_bytes() == initial_bytes
+
+    if expected_type == "digraph":
+        env = _clean_env()
+        env["GRAPHIFY_FORCE"] = "1"
+        accepted = _run(["extract", str(corpus), "--full", *mode_args], tmp_path, env=env)
+    else:
+        accepted = _run(
+            ["extract", str(corpus), "--full", "--force", *mode_args],
+            tmp_path,
+        )
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    accepted_data = json.loads(graph_path.read_text(encoding="utf-8"))
+    assert 0 < len(accepted_data["nodes"]) < initial_nodes
+    assert _graph_type(accepted_data) == expected_type
+
+
+def test_extract_force_does_not_imply_full_or_touch_cache(tmp_path):
+    corpus = _make_code_corpus(tmp_path)
+    args = ["extract", str(corpus), "--no-cluster", "--multigraph"]
+    initial = _run(args, tmp_path)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+
+    output = corpus / "graphify-out"
+    graph_path = output / "graph.json"
+    cache_sentinel = output / "cache" / "force-sentinel.bin"
+    cache_sentinel.parent.mkdir(exist_ok=True)
+    cache_sentinel.write_bytes(b"cache remains authoritative")
+    graph_before = graph_path.read_bytes()
+
+    for _ in range(3):
+        repeated = _run([*args, "--force"], tmp_path)
+        assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+        assert "no incremental changes detected" in repeated.stdout
+        assert graph_path.read_bytes() == graph_before
+        assert cache_sentinel.read_bytes() == b"cache remains authoritative"
+
+
+def test_extract_force_never_overrides_empty_over_populated_floor(tmp_path):
+    corpus = _make_code_corpus(tmp_path)
+    args = ["extract", str(corpus), "--no-cluster", "--multigraph"]
+    initial = _run(args, tmp_path)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+
+    graph_path = corpus / "graphify-out" / "graph.json"
+    graph_before = graph_path.read_bytes()
+    (corpus / "app.py").unlink()
+
+    refused = _run([*args, "--full", "--force"], tmp_path)
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "EMPTY (0-node) graph" in refused.stderr
+    assert graph_path.read_bytes() == graph_before
 
 
 # ── Multigraph CLI tests (forked additions) ─────────────────────────────────
@@ -1271,6 +1504,11 @@ def test_extract_simple_default(tmp_path):
     data = json.loads(graph_json.read_text(encoding="utf-8"))
     assert data.get("multigraph") is False, "default fresh build must be a simple graph"
     assert _graph_type(data) == "simple"
+    from graphify.ids import CURRENT_AST_NODE_ID_SCHEMA
+    from graphify.semantic_schema import PROMPT_SCHEMA_VERSION
+
+    assert _ast_node_id_schema(data) == CURRENT_AST_NODE_ID_SCHEMA
+    assert _semantic_node_id_schema(data) == PROMPT_SCHEMA_VERSION
 
 
 def test_extract_multigraph_flag(tmp_path):
@@ -1290,6 +1528,11 @@ def test_extract_multigraph_flag(tmp_path):
     assert data.get("multigraph") is True, "--multigraph must produce a multigraph graph.json"
     assert data.get("directed") is True, "a MultiDiGraph is always directed"
     assert _graph_type(data) == "multidigraph"
+    from graphify.ids import CURRENT_AST_NODE_ID_SCHEMA
+    from graphify.semantic_schema import PROMPT_SCHEMA_VERSION
+
+    assert _ast_node_id_schema(data) == CURRENT_AST_NODE_ID_SCHEMA
+    assert _semantic_node_id_schema(data) == PROMPT_SCHEMA_VERSION
     # Reloads as a real MultiDiGraph.
     G = load_graph(data)
     assert G.is_multigraph(), "graph.json must reload as a MultiDiGraph"

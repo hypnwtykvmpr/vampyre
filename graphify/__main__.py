@@ -8,9 +8,11 @@ import platform
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 from graphify.installation import uv_tool_install_command as _uv_tool_install_command
+from graphify.persistence import atomic_write_text
 
 try:
     from importlib.metadata import version as _pkg_version
@@ -254,19 +256,6 @@ def _version_tuple(version: str) -> tuple[int, ...]:
     return tuple(parts)
 
 
-def _refresh_all_version_stamps() -> None:
-    """After a successful install, update .graphify_version in all other known skill dirs.
-
-    Prevents stale-version warnings from platforms that were installed previously
-    but not explicitly re-installed during this upgrade.
-    """
-    for name in _PLATFORM_CONFIG:
-        skill_dst = _platform_skill_destination(name)
-        vf = skill_dst.parent / ".graphify_version"
-        if skill_dst.exists():
-            vf.write_text(__version__, encoding="utf-8")
-
-
 def _platform_skill_destination(
     platform_name: str, *, project: bool = False, project_dir: Path | None = None
 ) -> Path:
@@ -384,6 +373,61 @@ def _install_skill_references(skill_dst: Path, refs_src: Path) -> None:
         raise
 
 
+def _installed_skill_matches_package(
+    skill_src: Path,
+    skill_dst: Path,
+    refs_src: Path | None,
+) -> bool:
+    """Return whether an installed skill body and sidecar match the package."""
+    try:
+        if skill_dst.read_bytes() != skill_src.read_bytes():
+            return False
+        refs_dst = skill_dst.parent / "references"
+        if refs_src is None:
+            return not refs_dst.exists()
+        if not refs_dst.is_dir():
+            return False
+
+        def _contents(root: Path) -> dict[str, bytes]:
+            return {
+                path.relative_to(root).as_posix(): path.read_bytes()
+                for path in sorted(root.rglob("*"), key=lambda item: item.as_posix())
+                if path.is_file()
+            }
+
+        return _contents(refs_dst) == _contents(refs_src)
+    except OSError:
+        return False
+
+
+def _remove_owned_skill_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _restore_owned_skill_bundle(
+    skill_dst: Path,
+    version_file: Path,
+    references: Path,
+    backup: Path,
+    existed: dict[str, bool],
+) -> None:
+    for target, name in (
+        (skill_dst, "SKILL.md"),
+        (version_file, ".graphify_version"),
+        (references, "references"),
+    ):
+        _remove_owned_skill_path(target)
+        if existed[name]:
+            source = backup / name
+            if source.is_dir():
+                shutil.copytree(source, target, copy_function=shutil.copy2)
+            else:
+                shutil.copy2(source, target)
+
+
 def _copy_skill_file(
     platform_name: str, *, project: bool = False, project_dir: Path | None = None
 ) -> Path:
@@ -416,33 +460,52 @@ def _copy_skill_file(
 
     skill_dst = _platform_skill_destination(platform_name, project=project, project_dir=project_dir)
     skill_dst.parent.mkdir(parents=True, exist_ok=True)
+    version_file = skill_dst.parent / ".graphify_version"
+    references = skill_dst.parent / "references"
+    existed = {
+        "SKILL.md": skill_dst.exists(),
+        ".graphify_version": version_file.exists(),
+        "references": references.exists(),
+    }
 
-    # Install the references/ sidecar (or clear an orphan one) BEFORE writing
-    # SKILL.md, so SKILL.md is the last artifact laid down. An install that is
-    # interrupted partway then leaves no SKILL.md rather than a SKILL.md that
-    # points at an absent references/ dir.
-    if refs_src is not None:
-        _install_skill_references(skill_dst, refs_src)
-        print(f"  references       ->  {skill_dst.parent / 'references'}")
-    else:
-        # Monolith (or progressive-with-no-refs): clear any orphan references/.
-        orphan_refs = skill_dst.parent / "references"
-        if orphan_refs.exists():
-            shutil.rmtree(orphan_refs)
+    with tempfile.TemporaryDirectory(prefix=".graphify-install-", dir=skill_dst.parent) as raw:
+        backup = Path(raw)
+        if existed["SKILL.md"]:
+            shutil.copy2(skill_dst, backup / "SKILL.md")
+        if existed[".graphify_version"]:
+            shutil.copy2(version_file, backup / ".graphify_version")
+        if existed["references"]:
+            shutil.copytree(references, backup / "references", copy_function=shutil.copy2)
 
-    # SKILL.md last (crash-safety), via an atomic temp + rename.
-    tmp_dst = skill_dst.with_suffix(skill_dst.suffix + ".tmp")
-    try:
-        shutil.copy(skill_src, tmp_dst)
-        os.replace(tmp_dst, skill_dst)
-    except Exception:
         try:
-            tmp_dst.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
+            # Invalidate the previous certification before mutating its bundle.
+            # A process crash remains fail-closed; handled failures restore the
+            # complete previously certified bundle below.
+            version_file.unlink(missing_ok=True)
 
-    (skill_dst.parent / ".graphify_version").write_text(__version__, encoding="utf-8")
+            if refs_src is not None:
+                _install_skill_references(skill_dst, refs_src)
+                print(f"  references       ->  {references}")
+            elif references.exists():
+                _remove_owned_skill_path(references)
+
+            tmp_dst = skill_dst.with_suffix(skill_dst.suffix + ".tmp")
+            try:
+                shutil.copy(skill_src, tmp_dst)
+                os.replace(tmp_dst, skill_dst)
+            finally:
+                tmp_dst.unlink(missing_ok=True)
+
+            if not _installed_skill_matches_package(skill_src, skill_dst, refs_src):
+                raise OSError(
+                    f"skill installation verification failed for '{platform_name}': "
+                    "installed content does not match the package"
+                )
+            atomic_write_text(version_file, __version__)
+        except BaseException:
+            _restore_owned_skill_bundle(skill_dst, version_file, references, backup, existed)
+            raise
+
     print(f"  skill installed  ->  {skill_dst}")
     return skill_dst
 
@@ -890,12 +953,8 @@ def install(
     if platform == "opencode":
         _install_opencode_plugin(project_dir if project else Path("."))
 
-    # Refresh version stamps in all other previously-installed skill dirs so
-    # stale-version warnings don't fire for platforms not explicitly re-installed.
     if project:
         _print_project_git_add_hint([_project_scope_root(skill_dst, project_dir)])
-    else:
-        _refresh_all_version_stamps()
 
     print()
     print("Done. Open your AI coding assistant and type:")
@@ -2352,6 +2411,10 @@ def _clone_repo(url: str, branch: str | None = None, out_dir: Path | None = None
 
 
 def _cmd_extract() -> None:
+    _cmd_extract_locked()
+
+
+def _cmd_extract_locked() -> None:
     """Handle the full ``graphify extract`` pipeline."""
     # Headless full-pipeline extraction for CI / scripts (#698).
     # Runs detect -> AST extraction on code -> semantic LLM extraction on
@@ -2363,7 +2426,7 @@ def _cmd_extract() -> None:
         print(
             "Usage: graphify extract <path> [--backend gemini|kimi|claude|openai|deepseek|ollama] "
             "[--model M] [--mode deep] [--out DIR] [--google-workspace] [--no-cluster] "
-            "[--multigraph|--directed|--simple] [--full] "
+            "[--multigraph|--directed|--simple] [--full] [--force] "
             "[--max-workers N] [--token-budget N] [--max-concurrency N] "
             "[--api-timeout S] [--postgres DSN] [--cargo] [--timing]",
             file=sys.stderr,
@@ -2388,6 +2451,7 @@ def _cmd_extract() -> None:
     cli_cargo: bool = False
     no_cluster = False
     full_scan = False
+    force = os.environ.get("GRAPHIFY_FORCE", "").lower() in ("1", "true", "yes")
     dedup_llm = False
     google_workspace = False
     global_merge = False
@@ -2462,6 +2526,9 @@ def _cmd_extract() -> None:
             i += 1
         elif a == "--full":
             full_scan = True
+            i += 1
+        elif a == "--force":
+            force = True
             i += 1
         elif a == "--dedup-llm":
             dedup_llm = True
@@ -2588,6 +2655,14 @@ def _cmd_extract() -> None:
     # the skill.md pipeline.
     out_root = out_dir.resolve() if out_dir else target
     graphify_out = out_root / _GRAPHIFY_OUT
+    from graphify.persistence import holds_output_state_lock, output_state_lock
+
+    if not holds_output_state_lock(graphify_out):
+        with output_state_lock(graphify_out) as lease:
+            if lease is None:  # blocking acquisition cannot normally return None
+                raise RuntimeError("could not acquire extraction publication lock")
+            _cmd_extract_locked()
+        return
     graphify_out.mkdir(parents=True, exist_ok=True)
 
     from graphify.persistence import acknowledge_pending_signal, capture_pending_signal
@@ -2602,6 +2677,9 @@ def _cmd_extract() -> None:
         _persist_scan_root_marker(graphify_out / ".graphify_root", target)
 
     stages = _StageTimer(cli_timing)
+    from graphify.provenance import git_head as _git_head_for_root
+
+    built_at_commit = _git_head_for_root(target)
 
     from graphify.detect import (
         changed_source_files as _changed_source_files,
@@ -2618,6 +2696,18 @@ def _cmd_extract() -> None:
         if has_path
         else False
     )
+    if incremental_mode:
+        from graphify.graph_state import read_graph_state_payload
+        from graphify.update_state import UpdateStateError, require_identity_schemas
+
+        try:
+            require_identity_schemas(
+                read_graph_state_payload(existing_graph_path),
+                require_current_semantic=True,
+            )
+        except (UpdateStateError, ValueError) as exc:
+            print(f"[graphify extract] error: {exc}", file=sys.stderr)
+            sys.exit(1)
 
     if not has_path:
         code_files = []
@@ -2658,6 +2748,7 @@ def _cmd_extract() -> None:
         deleted_files = []
         unchanged_total = 0
 
+    blocked_egress_files = list(detection.get("blocked_egress", [])) if has_path else []
     source_paths = [path for paths in files_by_type.values() for path in paths]
     try:
         source_snapshot = _snapshot_source_hashes(source_paths)
@@ -2718,11 +2809,46 @@ def _cmd_extract() -> None:
     cached_edges: list[dict] = []
     cached_hyperedges: list[dict] = []
     uncached_paths: list[str] = []
+    requested_semantic_provenance: dict[str, str] | None = None
+    requested_semantic_requirements: dict[str, str] = {
+        "extraction_mode": "deep" if deep_mode else "standard",
+        "token_budget": str(cli_token_budget if cli_token_budget is not None else 60_000),
+        "chunk_size": "20",
+        "max_retry_depth": "3",
+    }
+    if model is not None:
+        requested_semantic_requirements["model"] = model
+    from graphify.llm import detect_backend as _detect_cache_backend
+
+    cache_backend = backend or _detect_cache_backend()
+    if cache_backend is not None:
+        from graphify.llm import (
+            BACKENDS as _CACHE_BACKENDS,
+            _default_model_for_backend as _cache_default_model,
+            _egress_endpoint as _cache_egress_endpoint,
+        )
+        from graphify.semantic_schema import semantic_provenance as _semantic_provenance
+
+        if cache_backend in _CACHE_BACKENDS:
+            _cache_cfg = _CACHE_BACKENDS[cache_backend]
+            requested_semantic_provenance = _semantic_provenance(
+                backend=cache_backend,
+                model=model or _cache_default_model(cache_backend),
+                endpoint=_cache_egress_endpoint(cache_backend, _cache_cfg),
+                deep_mode=deep_mode,
+                token_budget=cli_token_budget if cli_token_budget is not None else 60_000,
+            )
     if sem_paths_str:
         cached_nodes, cached_edges, cached_hyperedges, uncached_paths = _check_semantic_cache(
             sem_paths_str,
             root=out_root,
             source_root=target,
+            semantic_provenance=requested_semantic_provenance,
+            semantic_requirements=(
+                None
+                if requested_semantic_provenance is not None
+                else requested_semantic_requirements
+            ),
         )
 
     # Resolve the LLM backend only now that we know whether the corpus
@@ -2879,6 +3005,8 @@ def _cmd_extract() -> None:
                 "backend": backend,
                 "model": model,
                 "root": target,
+                "egress_manifest_path": graphify_out / "egress-manifest.json",
+                "preblocked_files": blocked_egress_files,
             }
             if deep_mode:
                 corpus_kwargs["deep_mode"] = True
@@ -2984,6 +3112,7 @@ def _cmd_extract() -> None:
                     fresh_semantic_result.get("hyperedges", []),
                     root=out_root,
                     source_root=target,
+                    semantic_provenance=fresh_semantic_result.get("semantic_provenance"),
                 )
 
             # Semantic entries are content-addressed but unversioned. Prune
@@ -3115,13 +3244,16 @@ def _cmd_extract() -> None:
     # Resolve one exact graph class. With no class flag, extraction inherits
     # the existing profile; an explicit flag selects that class even on a full
     # rebuild. This includes directed simple graphs, not only multidigraphs.
-    from graphify.watch import _existing_graph_type as _detect_graph_type
-
     _existing_graph_type = "simple"
     if existing_graph_path.exists():
         try:
-            _existing_data = json.loads(existing_graph_path.read_text(encoding="utf-8"))
-            _existing_graph_type = _detect_graph_type(_existing_data)
+            from graphify.graph_loader import load_graph_state_file as _load_existing_state
+            from graphify.graph_state import DecodeMode as _ExistingDecodeMode
+
+            _existing_graph_type = _load_existing_state(
+                existing_graph_path,
+                mode=_ExistingDecodeMode.MIGRATE_LEGACY,
+            ).graph_type
         except Exception as exc:
             print(
                 f"[graphify extract] error: could not inspect existing graph.json profile: {exc}",
@@ -3252,18 +3384,18 @@ def _cmd_extract() -> None:
                 multigraph=multigraph_flag,
             )
             state_transaction = _new_state_transaction()
-            # RISK 4 — Guard 1 signaling: to_json's empty-merge floor returns
-            # False (and PRESERVES the populated graph.json) when the merged
-            # graph has 0 nodes over a populated file. force=True bypasses the
-            # shrink guard (Guard 2), so under force the ONLY False return is
-            # that 0-node floor — never a legitimate non-zero shrink. Honor the
-            # refusal: do NOT fall through to the success line. A 0-node merge
-            # over a populated graph is an aborted extraction, so signal it
-            # (exit 1) instead of falsely reporting "wrote ... 0 nodes".
+            # Honor any replacement refusal (empty floor or unapproved non-empty
+            # shrink) instead of falling through to a false success line.
             try:
                 if _nc_graph.number_of_nodes() > 0:
                     _backup(graphify_out, transaction=state_transaction)
-                json_written = _nc_to_json(_nc_graph, {}, str(graph_json_path), force=True)
+                json_written = _nc_to_json(
+                    _nc_graph,
+                    {},
+                    str(graph_json_path),
+                    force=force,
+                    built_at_commit=built_at_commit,
+                )
             except Exception as exc:
                 state_transaction.rollback()
                 print(
@@ -3274,8 +3406,8 @@ def _cmd_extract() -> None:
             if not json_written:
                 state_transaction.rollback()
                 print(
-                    "[graphify extract] extraction aborted: the merge produced an "
-                    "empty (0-node) graph; the previous graph.json was preserved.",
+                    "[graphify extract] extraction aborted: graph publication was "
+                    "refused; the previous graph.json was preserved.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -3292,19 +3424,33 @@ def _cmd_extract() -> None:
             from graphify.export import to_json as _nc_to_json
 
             _nc_graph = _build_from_json(merged, multigraph=True, root=target)
+            from graphify.ids import (
+                AST_NODE_ID_SCHEMA_PROFILE_KEY,
+                CURRENT_AST_NODE_ID_SCHEMA,
+            )
+            from graphify.semantic_schema import (
+                PROMPT_SCHEMA_VERSION,
+                SEMANTIC_NODE_ID_SCHEMA_PROFILE_KEY,
+            )
+
+            _nc_profile = _nc_graph.graph.get("graphify_profile")
+            _nc_profile = dict(_nc_profile) if isinstance(_nc_profile, dict) else {}
+            _nc_profile[AST_NODE_ID_SCHEMA_PROFILE_KEY] = CURRENT_AST_NODE_ID_SCHEMA
+            _nc_profile[SEMANTIC_NODE_ID_SCHEMA_PROFILE_KEY] = PROMPT_SCHEMA_VERSION
+            _nc_graph.graph["graphify_profile"] = _nc_profile
             state_transaction = _new_state_transaction()
-            # RISK 4 — Guard 1 signaling (multigraph sibling): identical to the
-            # incremental site above. A non-incremental run can still see a
-            # populated graph.json on disk (graph.json present, manifest.json
-            # absent), so to_json's 0-node floor can refuse and preserve it.
-            # Honor the False return — exit 1 rather than print the misleading
-            # "wrote ... 0 nodes" success line. Under force=True the only False
-            # return is the 0-node floor, so a legitimate non-zero multigraph
-            # build (True) is completely unaffected.
+            # A non-incremental run can still see a populated graph.json on disk
+            # (graph present, manifest absent). Honor any replacement refusal.
             try:
                 if _nc_graph.number_of_nodes() > 0:
                     _backup(graphify_out, transaction=state_transaction)
-                json_written = _nc_to_json(_nc_graph, {}, str(graph_json_path), force=True)
+                json_written = _nc_to_json(
+                    _nc_graph,
+                    {},
+                    str(graph_json_path),
+                    force=force,
+                    built_at_commit=built_at_commit,
+                )
             except Exception as exc:
                 state_transaction.rollback()
                 print(
@@ -3315,8 +3461,8 @@ def _cmd_extract() -> None:
             if not json_written:
                 state_transaction.rollback()
                 print(
-                    "[graphify extract] extraction aborted: the merge produced an "
-                    "empty (0-node) graph; the previous graph.json was preserved.",
+                    "[graphify extract] extraction aborted: graph publication was "
+                    "refused; the previous graph.json was preserved.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -3334,37 +3480,51 @@ def _cmd_extract() -> None:
             # (missing/corrupt file) is treated as 0 nodes so a fresh or
             # unreadable target leaves the floor inert and the write proceeds
             # exactly as before (no new exit on a legitimately-empty fresh run).
-            if len(merged.get("nodes", [])) == 0 and graph_json_path.exists():
-                try:
-                    _existing_n = len(
-                        json.loads(graph_json_path.read_text(encoding="utf-8")).get("nodes", [])
-                    )
-                except Exception:
-                    _existing_n = 0
-                if _existing_n > 0:
-                    print(
-                        f"[graphify] ERROR: refusing to overwrite a populated "
-                        f"graph.json ({_existing_n} nodes) with an EMPTY (0-node) "
-                        f"graph - this is a failed/aborted extraction, not a real "
-                        f"result. The previous graph is preserved.",
-                        file=sys.stderr,
-                    )
-                    sys.exit(1)
+            from graphify.export import graph_replacement_allowed
+
+            if not graph_replacement_allowed(
+                graph_json_path,
+                len(merged.get("nodes", [])),
+                force=force,
+            ):
+                sys.exit(1)
             merged["multigraph"] = False
             merged["directed"] = resolved_directed
+            merged["schema_version"] = 1
+            merged["links"] = merged.pop("edges", [])
             graph_meta = merged.get("graph")
             if not isinstance(graph_meta, dict):
                 graph_meta = {}
             from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
+            from graphify.ids import (
+                AST_NODE_ID_SCHEMA_PROFILE_KEY,
+                CURRENT_AST_NODE_ID_SCHEMA,
+            )
+            from graphify.semantic_schema import (
+                PROMPT_SCHEMA_VERSION,
+                SEMANTIC_NODE_ID_SCHEMA_PROFILE_KEY,
+            )
 
-            graph_meta[GRAPHIFY_PROFILE_KEY] = {"graph_type": resolved_graph_type}
+            graph_meta[GRAPHIFY_PROFILE_KEY] = {
+                "graph_type": resolved_graph_type,
+                AST_NODE_ID_SCHEMA_PROFILE_KEY: CURRENT_AST_NODE_ID_SCHEMA,
+                SEMANTIC_NODE_ID_SCHEMA_PROFILE_KEY: PROMPT_SCHEMA_VERSION,
+            }
             merged["graph"] = graph_meta
+            if built_at_commit:
+                merged["built_at_commit"] = built_at_commit
+            else:
+                merged.pop("built_at_commit", None)
             state_transaction = _new_state_transaction()
-            from graphify.persistence import atomic_write_text as _atomic_write_text
+            from graphify.graph_state import DecodeMode, decode_graph_state
+            from graphify.persistence import publish_graph_state
 
             try:
                 _backup(graphify_out, transaction=state_transaction)
-                _atomic_write_text(graph_json_path, json.dumps(merged, indent=2))
+                publish_graph_state(
+                    graph_json_path,
+                    decode_graph_state(merged, mode=DecodeMode.STRICT_CURRENT),
+                )
             except Exception as exc:
                 state_transaction.rollback()
                 print(
@@ -3373,7 +3533,7 @@ def _cmd_extract() -> None:
                 )
                 sys.exit(1)
             n_nodes = len(merged["nodes"])
-            n_edges = len(merged["edges"])
+            n_edges = len(merged["links"])
         stages.mark("write")
         cost = _estimate_cost(backend or "", merged["input_tokens"], merged["output_tokens"])
         print(
@@ -3466,6 +3626,17 @@ def _cmd_extract() -> None:
             root=target,
             multigraph=resolved_multigraph,
         )
+    from graphify.ids import AST_NODE_ID_SCHEMA_PROFILE_KEY, CURRENT_AST_NODE_ID_SCHEMA
+    from graphify.semantic_schema import (
+        PROMPT_SCHEMA_VERSION,
+        SEMANTIC_NODE_ID_SCHEMA_PROFILE_KEY,
+    )
+
+    _current_profile = G.graph.get("graphify_profile")
+    _current_profile = dict(_current_profile) if isinstance(_current_profile, dict) else {}
+    _current_profile[AST_NODE_ID_SCHEMA_PROFILE_KEY] = CURRENT_AST_NODE_ID_SCHEMA
+    _current_profile[SEMANTIC_NODE_ID_SCHEMA_PROFILE_KEY] = PROMPT_SCHEMA_VERSION
+    G.graph["graphify_profile"] = _current_profile
     stages.mark("build")
     if G.number_of_nodes() == 0:
         print(
@@ -3491,6 +3662,7 @@ def _cmd_extract() -> None:
     from graphify.persistence import atomic_write_text as _atomic_write_text
 
     analysis = {
+        "built_at_commit": built_at_commit,
         "communities": {str(k): v for k, v in communities.items()},
         "cohesion": {str(k): v for k, v in cohesion.items()},
         "gods": gods,
@@ -3503,8 +3675,23 @@ def _cmd_extract() -> None:
     state_transaction = _new_state_transaction()
     try:
         _backup(graphify_out, transaction=state_transaction)
-        if not _to_json(G, communities, str(graph_json_path), force=True):
+        if not _to_json(
+            G,
+            communities,
+            str(graph_json_path),
+            force=force,
+            built_at_commit=built_at_commit,
+        ):
             raise OSError("graph.json exporter refused the clustered graph")
+        from graphify.graph_loader import load_graph_state_file as _load_graph_state_file
+        from graphify.graph_state import (
+            DecodeMode as _DecodeMode,
+            graph_analysis_fingerprint as _graph_analysis_fingerprint,
+        )
+
+        analysis["graph_fingerprint"] = _graph_analysis_fingerprint(
+            _load_graph_state_file(graph_json_path, mode=_DecodeMode.STRICT_CURRENT)
+        )
         if merged.get("output_tokens", 0) > 0:
             _atomic_write_text(
                 graphify_out / ".graphify_semantic_marker",
@@ -3728,7 +3915,7 @@ def _cmd_provider(argv: list[str]) -> None:
             sys.exit(1)
 
 
-def main() -> None:
+def _main_dispatch() -> None:
     for _stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(_stream, "reconfigure", None)
         if callable(reconfigure):
@@ -3805,11 +3992,9 @@ def main() -> None:
         print(
             "                            (without <path>, the saved scan-root marker is required)"
         )
+        print("    --force                 accept a verified non-empty shrink of graph.json")
         print(
-            "    --force                 overwrite graph.json even if the rebuild has fewer nodes"
-        )
-        print(
-            "                            (also: GRAPHIFY_FORCE=1 env var; use after refactors that delete code)"
+            "                            (also: GRAPHIFY_FORCE=1; does not imply --full or bypass caches)"
         )
         print("    --no-cluster            skip clustering, write raw extraction only")
         print("    --no-viz                skip graph.html generation")
@@ -3937,6 +4122,10 @@ def main() -> None:
             "    --google-workspace      export .gdoc/.gsheet/.gslides shortcuts via gws before extraction"
         )
         print("    --no-cluster            skip clustering, write raw extraction only")
+        print(
+            "    --force                 accept a verified non-empty shrink; never permits an empty wipe"
+        )
+        print("                            (also: GRAPHIFY_FORCE=1; does not imply --full)")
         print("    --postgres DSN          extract schema from a live PostgreSQL database")
         print("                            maps tables, views, functions + FK relationships;")
         print("                            column-level detail is not represented in the graph")
@@ -4038,7 +4227,15 @@ def main() -> None:
     # (e.g. "cursor install --help" was silently installing into Cursor, #821).
     # Exempt: free-text commands (user string may contain these tokens), and
     # "install"/"uninstall" which have their own per-subcommand help handlers.
-    _FREE_TEXT_CMDS = {"query", "explain", "path", "save-result", "install", "uninstall"}
+    _FREE_TEXT_CMDS = {
+        "query",
+        "explain",
+        "path",
+        "save-result",
+        "install",
+        "uninstall",
+        "serve",
+    }
     if cmd not in _FREE_TEXT_CMDS and any(a in {"-h", "--help", "-?"} for a in sys.argv[2:]):
         print("Run 'graphify --help' for full usage.")
         return
@@ -4330,7 +4527,6 @@ def main() -> None:
             )
             sys.exit(1)
         from graphify.serve import _query_graph_text
-        from networkx.readwrite import json_graph
         from graphify import querylog
 
         question = sys.argv[2]
@@ -4375,23 +4571,18 @@ def main() -> None:
             sys.exit(1)
         _enforce_graph_size_cap_or_exit(gp)
         try:
-            import json as _json
-            import networkx as _nx
+            from graphify.graph_loader import load_graph_state_file
+            from graphify.graph_state import DecodeMode
 
-            _raw = _json.loads(gp.read_text(encoding="utf-8"))
-            if "links" not in _raw and "edges" in _raw:
-                _raw = dict(_raw, links=_raw["edges"])
-            try:
-                G = json_graph.node_link_graph(_raw, edges="links")
-            except TypeError:
-                G = json_graph.node_link_graph(_raw)
+            _state = load_graph_state_file(gp, mode=DecodeMode.READ_ONLY_LEGACY)
+            G = _state.graph
             try:
                 from graphify.build import graph_has_legacy_ids as _legacy
 
-                if _legacy(_raw.get("nodes", [])):
+                if _legacy(list(_state.nodes)):
                     print(
                         "[graphify] note: this graph uses the pre-#1504 node-ID scheme; "
-                        "rebuild with `graphify extract --force` to get path-qualified IDs "
+                        "rebuild with `graphify extract --full --force` to get path-qualified IDs "
                         "(fixes same-name-file collisions).",
                         file=sys.stderr,
                     )
@@ -4596,7 +4787,6 @@ def main() -> None:
             )
             sys.exit(1)
         from graphify.serve import _score_nodes
-        from networkx.readwrite import json_graph
         import networkx as _nx
 
         source_label = sys.argv[2]
@@ -4611,15 +4801,9 @@ def main() -> None:
             print(f"error: graph file not found: {gp}", file=sys.stderr)
             sys.exit(1)
         _enforce_graph_size_cap_or_exit(gp)
-        _raw = json.loads(gp.read_text(encoding="utf-8"))
-        if "links" not in _raw and "edges" in _raw:
-            _raw = dict(_raw, links=_raw["edges"])
-        # Force directed so the renderer can recover stored caller→callee direction.
-        _raw = {**_raw, "directed": True}
-        try:
-            G = json_graph.node_link_graph(_raw, edges="links")
-        except TypeError:
-            G = json_graph.node_link_graph(_raw)
+        from graphify.graph_loader import load_graph_file
+
+        G = load_graph_file(gp)
         src_scored = _score_nodes(G, [t.lower() for t in source_label.split()])
         tgt_scored = _score_nodes(G, [t.lower() for t in target_label.split()])
         if not src_scored:
@@ -4649,13 +4833,14 @@ def main() -> None:
                         file=sys.stderr,
                     )
         try:
-            path_nodes = _nx.shortest_path(G.to_undirected(as_view=True), src_nid, tgt_nid)
+            from graphify.projections import stable_shortest_path
+
+            path_nodes = stable_shortest_path(G, src_nid, tgt_nid)
         except (_nx.NetworkXNoPath, _nx.NodeNotFound):
             print(f"No path found between '{source_label}' and '{target_label}'.")
             sys.exit(0)
         hops = len(path_nodes) - 1
         segments = []
-        from graphify.build import edge_data
         from graphify.projections import (
             format_relationship_envelope,
             relationship_envelope,
@@ -4675,14 +4860,14 @@ def main() -> None:
             # directed_only=True isolates this hop's stored direction (src->tgt)
             # so a reverse edge (tgt->src) never bleeds into the arrow's bundle.
             env = relationship_envelope(G, src, tgt, directed_only=True)
-            if len(env["relations"]) > 1:
+            if env["count"] > 1:
                 # Multiple parallel relations: render the capped bundle; the
                 # envelope omits per-relation confidence for stability.
                 rel_str = format_relationship_envelope(G, src, tgt, directed_only=True)
             else:
                 # Single relation (always true for simple DiGraph/Graph): keep
                 # the historical "rel [CONFIDENCE]" form byte-for-byte stable.
-                edata = edge_data(G, src, tgt)
+                edata = env["shown"][0] if env["shown"] else {}
                 rel = edata.get("relation", "")
                 conf = edata.get("confidence", "")
                 rel_str = f"{rel} [{conf}]" if conf else rel
@@ -4707,7 +4892,6 @@ def main() -> None:
             print('Usage: graphify explain "<node>" [--graph path]', file=sys.stderr)
             sys.exit(1)
         from graphify.serve import _find_node
-        from networkx.readwrite import json_graph
 
         label = sys.argv[2]
         graph_path = _default_graph_path()
@@ -4720,15 +4904,9 @@ def main() -> None:
             print(f"error: graph file not found: {gp}", file=sys.stderr)
             sys.exit(1)
         _enforce_graph_size_cap_or_exit(gp)
-        _raw = json.loads(gp.read_text(encoding="utf-8"))
-        if "links" not in _raw and "edges" in _raw:
-            _raw = dict(_raw, links=_raw["edges"])
-        # Force directed so the renderer can recover stored caller→callee direction.
-        _raw = {**_raw, "directed": True}
-        try:
-            G = json_graph.node_link_graph(_raw, edges="links")
-        except TypeError:
-            G = json_graph.node_link_graph(_raw)
+        from graphify.graph_loader import load_graph_file
+
+        G = load_graph_file(gp)
         matches = _find_node(G, label)
         if not matches:
             print(f"No node matching '{label}' found.")
@@ -4771,24 +4949,38 @@ def main() -> None:
                 print(_line)
         except Exception:
             pass
-        print(f"  Degree:    {G.degree(nid)}")
-        from graphify.build import edge_data
+        import networkx as _nx
         from graphify.projections import (
+            distinct_neighbor_degree,
             format_relationship_envelope,
             relationship_envelope,
+            stable_value_key,
         )
+
+        print(f"  Neighbors: {distinct_neighbor_degree(G, nid)} distinct")
+        print(f"  Edge records: {G.degree(nid)}")
 
         # (direction, neighbor_id, edge_src, edge_tgt) — src/tgt preserve the
         # stored edge direction so the relationship envelope reads the correct
         # parallel-edge bundle for this neighbor.
-        connections: list[tuple[str, str, str, str]] = []
-        for nb in G.successors(nid):
-            connections.append(("out", nb, nid, nb))
-        for nb in G.predecessors(nid):
-            connections.append(("in", nb, nb, nid))
+        connections: list[tuple[str, object, object, object]] = []
+        if isinstance(G, (_nx.DiGraph, _nx.MultiDiGraph)):
+            for nb in G.successors(nid):
+                connections.append(("out", nb, nid, nb))
+            for nb in G.predecessors(nid):
+                connections.append(("in", nb, nb, nid))
+        else:
+            for nb in G.neighbors(nid):
+                connections.append(("out", nb, nid, nb))
         if connections:
             print(f"\nConnections ({len(connections)}):")
-            connections.sort(key=lambda c: G.degree(c[1]), reverse=True)
+            connections.sort(
+                key=lambda connection: (
+                    -distinct_neighbor_degree(G, connection[1]),
+                    stable_value_key(connection[1]),
+                    connection[0],
+                )
+            )
             for direction, nb, e_src, e_tgt in connections[:20]:
                 arrow = "-->" if direction == "out" else "<--"
                 # Bundle every parallel relationship to this neighbor so a
@@ -4797,14 +4989,14 @@ def main() -> None:
                 # (e_src->e_tgt) so an "out" arrow never merges the reverse "in"
                 # relations and vice versa.
                 env = relationship_envelope(G, e_src, e_tgt, directed_only=True)
-                if len(env["relations"]) > 1:
+                if env["count"] > 1:
                     rel_block = (
                         f"[{format_relationship_envelope(G, e_src, e_tgt, directed_only=True)}]"
                     )
                 else:
                     # Single relation (always true for simple DiGraph/Graph):
                     # keep the historical "[rel] [conf]" form byte-stable.
-                    edata = edge_data(G, e_src, e_tgt)
+                    edata = env["shown"][0] if env["shown"] else {}
                     rel = edata.get("relation", "")
                     conf = edata.get("confidence", "")
                     rel_block = f"[{rel}] [{conf}]"
@@ -5073,12 +5265,10 @@ def main() -> None:
                 i_arg += 1
             else:
                 i_arg += 1
-        if watch_path is None:
-            watch_path = Path(".")
         graph_json = (
             graph_override
             if graph_override is not None
-            else watch_path / _GRAPHIFY_OUT / "graph.json"
+            else (watch_path or Path(".")) / _GRAPHIFY_OUT / "graph.json"
         )
         if not graph_json.exists():
             print(
@@ -5086,7 +5276,22 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
-        from networkx.readwrite import json_graph as _jg
+        # An explicit graph path selects the whole state directory, not only the
+        # graph.json read. Reports, analysis, labels, visualization, and the
+        # rewritten graph must remain co-located with that canonical graph.
+        out = (
+            graph_json.parent
+            if graph_override is not None
+            else (watch_path or Path(".")) / _GRAPHIFY_OUT
+        )
+        if watch_path is None:
+            from graphify.paths import resolve_scan_root_marker
+
+            marker_root = resolve_scan_root_marker(out / ".graphify_root", cwd=Path.cwd())
+            watch_path = marker_root if marker_root is not None else graph_json.parent
+        from graphify.provenance import git_head as _git_head_for_root
+
+        _commit = _git_head_for_root(watch_path)
         from graphify.cluster import cluster, score_all, remap_communities_to_previous
         from graphify.analyze import (
             god_nodes,
@@ -5118,29 +5323,15 @@ def main() -> None:
                 f"falling back to community-aggregation view (node_limit=5000)",
                 file=sys.stderr,
             )
-        _raw = json.loads(graph_json.read_text(encoding="utf-8"))
-        # graph.json is a SERIALIZED graph, not a raw extraction dict, so read it
-        # with the schema-aware loader rather than build_from_json. That fixes
-        # three things at once, all of which the to_json below would persist:
-        #   * class: build_from_json defaults multigraph=False, so a multidigraph
-        #     rebuilt as a simple DiGraph — collapsing every parallel edge and
-        #     re-stamping graphify_profile as "digraph", so all later updates
-        #     inherited the downgrade.
-        #   * metadata: a build_from_json round-trip drops graph-level attrs
-        #     (custom keys, extra graphify_profile fields); load_graph carries
-        #     every nested `graph` key through.
-        #   * class-detection contract: load_graph treats the top-level
-        #     `multigraph` flag as authoritative, so cluster-only agrees with
-        #     every other reader instead of trusting a stale profile marker.
-        from graphify.graph_loader import load_graph as _load_graph_payload
+        from graphify.graph_loader import load_graph_state_file
+        from graphify.graph_state import DecodeMode
 
-        G = _load_graph_payload(_raw)
-        # Hyperedges live at the TOP level of graph.json (not under `graph`), so
-        # the node-link loader does not see them while to_json re-emits them from
-        # G.graph — fold them back in or a cluster-only pass would drop them.
-        _hyperedges = _raw.get("hyperedges")
-        if isinstance(_hyperedges, list) and _hyperedges and "hyperedges" not in G.graph:
-            G.graph["hyperedges"] = _hyperedges
+        _state = load_graph_state_file(
+            graph_json,
+            mode=DecodeMode.MIGRATE_LEGACY,
+            enforce_size_cap=not _over_cap,
+        )
+        G = _state.graph
         print(f"Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
         stages.mark("load")
         print("Re-clustering...")
@@ -5150,19 +5341,26 @@ def main() -> None:
         # to the same conceptual community after re-clustering. Without this,
         # labels follow raw cid index and become misaligned whenever the
         # graph has changed between labeling and cluster-only (#1027).
-        previous_node_community = {
-            n["id"]: n["community"]
-            for n in _raw.get("nodes", [])
-            if n.get("community") is not None and n.get("id") is not None
-        }
+        previous_node_community: dict[object, int] = {}
+        for node_record in _state.nodes:
+            node_id = node_record.get("id")
+            prior_cid = node_record.get("community")
+            if (
+                node_id is not None
+                and isinstance(prior_cid, int)
+                and not isinstance(prior_cid, bool)
+            ):
+                previous_node_community[node_id] = prior_cid
         if previous_node_community:
-            communities = remap_communities_to_previous(communities, previous_node_community)
+            communities = remap_communities_to_previous(
+                communities,
+                previous_node_community,
+            )
         stages.mark("cluster")
         cohesion = score_all(G, communities)
         gods = god_nodes(G)
         surprises = surprising_connections(G, communities)
         stages.mark("analyze")
-        out = watch_path / _GRAPHIFY_OUT
         out.mkdir(parents=True, exist_ok=True)
         labels_path = out / ".graphify_labels.json"
         existing_labels: dict[int, str] = {}
@@ -5272,9 +5470,6 @@ def main() -> None:
         stages.mark("label")
         questions = suggest_questions(G, communities, labels)
         tokens = {"input": 0, "output": 0}
-        from graphify.export import _git_head as _gh
-
-        _commit = _gh()
         from graphify.report import load_learning_for_report as _llfr
 
         report = generate(
@@ -5296,6 +5491,7 @@ def main() -> None:
         from graphify.persistence import FileStateTransaction, atomic_write_text
 
         analysis = {
+            "built_at_commit": _commit,
             "communities": {str(k): v for k, v in communities.items()},
             "cohesion": {str(k): v for k, v in cohesion.items()},
             "gods": gods,
@@ -5322,17 +5518,25 @@ def main() -> None:
         try:
             _backup(out, transaction=state_transaction)
             atomic_write_text(report_path, report)
-            atomic_write_text(
-                analysis_path,
-                json.dumps(analysis, indent=2, ensure_ascii=False),
-            )
             if not to_json(
                 G,
                 communities,
                 str(output_graph_path),
+                built_at_commit=_commit,
                 community_labels=labels,
             ):
                 raise OSError("graph.json exporter refused the clustered graph")
+            from graphify.graph_state import (
+                graph_analysis_fingerprint as _graph_analysis_fingerprint,
+            )
+
+            analysis["graph_fingerprint"] = _graph_analysis_fingerprint(
+                load_graph_state_file(output_graph_path, mode=DecodeMode.STRICT_CURRENT)
+            )
+            atomic_write_text(
+                analysis_path,
+                json.dumps(analysis, indent=2, ensure_ascii=False),
+            )
             atomic_write_text(
                 labels_path,
                 json.dumps({str(k): v for k, v in labels.items()}, ensure_ascii=False),
@@ -5521,6 +5725,7 @@ def main() -> None:
             update_context = resolve_update_context(
                 Path(watch_arg) if watch_arg is not None else None,
                 output_root=output_root,
+                allow_unmarked_legacy_ast_ids=True,
             )
         except UpdateStateError as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -5567,6 +5772,8 @@ def main() -> None:
             )
             if no_cluster:
                 remap_argv.append("--no-cluster")
+            if force_requested:
+                remap_argv.append("--force")
             remap_argv.extend(remap_passthrough)
             # Restore the global sys.argv after the in-process re-dispatch so a
             # caller that invokes main() in-process (the test suite, a future
@@ -5761,8 +5968,6 @@ def main() -> None:
         # the merge so a human can investigate.
         _MERGE_MAX_BYTES = 50 * 1024 * 1024
         _MERGE_MAX_NODES = 100_000
-        import networkx as _nx
-        from networkx.readwrite import json_graph as _jg
 
         def _load_graph(p: str):
             path_obj = Path(p)
@@ -5774,97 +5979,60 @@ def main() -> None:
                 raise RuntimeError(
                     f"graph.json {p} is {size} bytes, exceeds {_MERGE_MAX_BYTES}-byte cap"
                 )
-            data = json.loads(path_obj.read_text(encoding="utf-8"))
-            try:
-                return _jg.node_link_graph(data, edges="links"), data
-            except TypeError:
-                return _jg.node_link_graph(data), data
+            from graphify.global_graph import detect_pre_profile
+            from graphify.graph_loader import load_graph_state_file
+            from graphify.graph_state import DecodeMode, read_graph_state_payload
+
+            payload = read_graph_state_payload(path_obj)
+            mode = (
+                DecodeMode.READ_ONLY_LEGACY
+                if detect_pre_profile(payload)
+                else DecodeMode.MIGRATE_LEGACY
+            )
+            state = load_graph_state_file(path_obj, mode=mode)
+            return state, payload
 
         try:
-            current_graph, current_data = _load_graph(_current_path)
-            other_graph, other_data = _load_graph(_other_path)
+            base_state, _base_payload = _load_graph(_base_path)
+            current_state, current_payload = _load_graph(_current_path)
+            other_state, _other_payload = _load_graph(_other_path)
         except Exception as exc:
             print(f"[graphify merge-driver] error loading graphs: {exc}", file=sys.stderr)
             sys.exit(1)  # surface the conflict so git doesn't accept a corrupt merge
 
-        # Class-safe union. Reuse the Phase A normalizer so a class mismatch
-        # (e.g. simple current + MultiDiGraph other) can never reach
-        # ``nx.compose`` raising NetworkXError. ``normalize_graphs_for_global``
-        # with no explicit target infers the target (multidigraph if either
-        # side is multi; else digraph if either directed; else simple) and
-        # returns BOTH inputs realized as that one class, in order.
-        from graphify.global_graph import (
-            GlobalGraphRecoveryError,
-            detect_pre_profile,
-            normalize_graphs_for_global,
-            refuse_pre_profile_upgrade,
+        from graphify.graph_state import (
+            infer_composition_target_type,
+            merge_graph_states_three_way,
         )
 
         try:
-            (current_norm, other_norm), target_type = normalize_graphs_for_global(
-                [current_graph, other_graph]
+            target_type = infer_composition_target_type([base_state, current_state, other_state])
+            from graphify.global_graph import refuse_pre_profile_upgrade
+
+            refuse_pre_profile_upgrade(
+                current_payload,
+                target_type,
+                graph_label="merge target",
+                graph_path=_current_path,
+                recovery_hint=(
+                    "regenerate the current graph by re-extracting it from source "
+                    "before retrying the merge"
+                ),
+            )
+            merged_state = merge_graph_states_three_way(
+                base_state,
+                current_state,
+                other_state,
+                target_type=target_type,
             )
         except Exception as exc:
-            print(f"[graphify merge-driver] error normalizing graphs: {exc}", file=sys.stderr)
+            print(f"[graphify merge-driver] error composing graphs: {exc}", file=sys.stderr)
             sys.exit(1)
 
-        # Recovery refusal: refuse to UPGRADE a pre-profile input (one with no
-        # graphify_profile / multigraph / directed markers — possibly already a
-        # silently-collapsed simple graph) to a multidigraph target, since the
-        # lost parallel edges cannot be reconstructed in place. Leave both files
-        # unmutated. Only the irreversible multidigraph upgrade is refused;
-        # simple/digraph merges of a pre-profile graph proceed normally.
-        # Only the OVERWRITTEN file (current) is protected: an in-place
-        # multidigraph upgrade of a pre-profile current graph is irreversible.
-        # `other` is read-only (merged in, never rewritten), so its pre-profile
-        # status implies no unreconstructable in-place loss and must not block.
-        if target_type == "multidigraph":
-            try:
-                refuse_pre_profile_upgrade(
-                    current_data,
-                    target_type,
-                    graph_label="merge target graph",
-                    graph_path=_current_path,
-                    recovery_hint=(
-                        "Regenerate or recreate this graph.json from source before retrying "
-                        "the merge, or resolve the file manually from source-backed inputs"
-                    ),
-                )
-            except GlobalGraphRecoveryError as exc:
-                print(f"[graphify merge-driver] {exc}", file=sys.stderr)
-                sys.exit(1)
-            if detect_pre_profile(current_data):
-                # Defensive: detect_pre_profile is the same predicate
-                # refuse_pre_profile_upgrade uses, so the branch above
-                # already exited; this guards against future divergence.
-                print(
-                    f"[graphify merge-driver] refusing to upgrade pre-profile graph "
-                    f"{_current_path} to multidigraph",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-
-        # KEY-AWARE compose, mirroring graphify.global_graph.global_add: start
-        # from the normalized current graph and replay the normalized other
-        # graph. For a multidigraph target iterate ``edges(keys=True)`` and
-        # ``add_edge(u, v, key=key, ...)`` so parallel edges survive distinctly
-        # AND a repeated merge of the same inputs overwrites the same
-        # ``(u, v, key)`` slots instead of accumulating fresh auto-int keys —
-        # that keyless drift is exactly what makes a naive ``nx.compose`` merge
-        # non-idempotent. Simple/digraph targets keep one edge per pair.
-        merged_graph = current_norm
-        for _node, _ndata in other_norm.nodes(data=True):
-            merged_graph.add_node(_node, **_ndata)
-        if isinstance(other_norm, (_nx.MultiGraph, _nx.MultiDiGraph)):
-            for _u, _v, _key, _edata in other_norm.edges(keys=True, data=True):
-                merged_graph.add_edge(_u, _v, key=_key, **_edata)
-        else:
-            for _u, _v, _edata in other_norm.edges(data=True):
-                merged_graph.add_edge(_u, _v, **_edata)
-
-        if merged_graph.number_of_nodes() > _MERGE_MAX_NODES:
+        if merged_state.graph.number_of_nodes() > _MERGE_MAX_NODES:
             print(
-                f"[graphify merge-driver] merged graph has {merged_graph.number_of_nodes()} nodes, "
+                f"[graphify merge-driver] merged graph has "
+                f"{merged_state.graph.number_of_nodes()} nodes, "
                 f"exceeds {_MERGE_MAX_NODES}-node cap; aborting merge.",
                 file=sys.stderr,
             )
@@ -5876,15 +6044,13 @@ def main() -> None:
         # legitimately overwrites ``current`` (the shrink-guard would otherwise
         # block a merge that drops nodes via dedup); ``communities={}`` because a
         # merged graph is not (re)clustered here.
-        from graphify.export import to_json as _to_json
-        from graphify.persistence import FileStateTransaction
+        from graphify.persistence import FileStateTransaction, publish_graph_state
 
         merge_target = Path(_current_path)
         state_transaction = FileStateTransaction([merge_target])
         try:
             _backup_merge_target(merge_target, transaction=state_transaction)
-            if not _to_json(merged_graph, {}, _current_path, force=True):
-                raise OSError("graph exporter refused the merged graph")
+            publish_graph_state(merge_target, merged_state)
         except Exception as exc:
             state_transaction.rollback()
             print(f"[graphify merge-driver] error: {exc}", file=sys.stderr)
@@ -5902,7 +6068,7 @@ def main() -> None:
         # collapses parallel edges — an explicit, audible choice); --multigraph
         # forces a keyed multidigraph.
         args = sys.argv[2:]
-        graph_paths: list[Path] = []
+        graph_specs: list[tuple[Path, str | None]] = []
         out_path = Path(_GRAPHIFY_OUT) / "merged-graph.json"
         explicit_target: str | None = None
         i = 0
@@ -5916,99 +6082,81 @@ def main() -> None:
             elif args[i] == "--simple":
                 explicit_target = "simple"
                 i += 1
+            elif args[i] == "--as" and i + 1 < len(args):
+                if not graph_specs:
+                    print("error: --as must follow a graph path", file=sys.stderr)
+                    sys.exit(1)
+                graph_path, _alias = graph_specs[-1]
+                graph_specs[-1] = (graph_path, args[i + 1])
+                i += 2
             else:
-                graph_paths.append(Path(args[i]))
+                graph_specs.append((Path(args[i]), None))
                 i += 1
+        graph_paths = [path for path, _alias in graph_specs]
         if len(graph_paths) < 2:
             print(
                 "Usage: graphify merge-graphs <graph1.json> <graph2.json> [...] "
-                "[--out merged.json] [--multigraph | --simple]",
+                "[--as alias] [--out merged.json] [--multigraph | --simple]",
                 file=sys.stderr,
             )
             sys.exit(1)
-        import networkx as _nx
-        from networkx.readwrite import json_graph as _jg
-        from graphify.build import prefix_graph_for_global as _prefix
-
-        loaded_graphs = []
+        loaded_states = []
         for gp in graph_paths:
             if not gp.exists():
                 print(f"error: not found: {gp}", file=sys.stderr)
                 sys.exit(1)
-            _enforce_graph_size_cap_or_exit(gp)
-            data = json.loads(gp.read_text(encoding="utf-8"))
-            # Normalize edges/links key before loading — graphify writes "links"
-            # via node_link_data but older runs may have used "edges" (#738).
-            if "links" not in data and "edges" in data:
-                data = dict(data, links=data["edges"])
-            try:
-                input_graph = _jg.node_link_graph(data, edges="links")
-            except TypeError:
-                input_graph = _jg.node_link_graph(data)
-            loaded_graphs.append(input_graph)
-        # Prefix every input for cross-repo isolation FIRST (relabel preserves
-        # multigraph keys), then normalize the whole batch to one common class
-        # via the Phase A helper. Replacing the old hard-coded ``_nx.Graph()``
-        # start removes the silent collapse: the resolved class is multidigraph
-        # if any input is multi (unless --simple is given, which warns + projects).
-        # This also covers upstream #1606 (mixed directed/undirected inputs
-        # crashed nx.compose): class inference lifts the batch to digraph/
-        # multidigraph instead of collapsing everything to a simple Graph.
-        from graphify.global_graph import normalize_graphs_for_global
+            from graphify.graph_loader import load_graph_state_file
+            from graphify.graph_state import DecodeMode
 
-        prefixed_graphs = []
-        for input_graph, gp in zip(loaded_graphs, graph_paths):
-            repo_tag = gp.parent.parent.name  # graphify-out/../ → repo dir name
-            prefixed_graphs.append(_prefix(input_graph, repo_tag))
+            state = load_graph_state_file(gp, mode=DecodeMode.MIGRATE_LEGACY)
+            loaded_states.append(state)
+        from graphify.graph_state import (
+            MetadataPolicy,
+            NamedGraphState,
+            compose_graph_states,
+            infer_composition_target_type,
+        )
+
+        named_states = [
+            NamedGraphState(
+                gp.parent.parent.name,
+                state,
+                alias=alias,
+            )
+            for state, (gp, alias) in zip(loaded_states, graph_specs)
+        ]
 
         try:
-            normalized_graphs, target_type = normalize_graphs_for_global(
-                prefixed_graphs, target_type=explicit_target
+            target_type = explicit_target or infer_composition_target_type(loaded_states)
+            merged_state = compose_graph_states(
+                named_states,
+                target_type=target_type,
+                metadata_policy=MetadataPolicy.NAMESPACE_CONFLICTS,
             )
         except Exception as exc:
-            print(f"[graphify merge-graphs] error normalizing graphs: {exc}", file=sys.stderr)
+            print(f"[graphify merge-graphs] error composing graphs: {exc}", file=sys.stderr)
             sys.exit(1)
-
-        # KEY-AWARE compose into the resolved class (mirrors global_add). For a
-        # multidigraph target replay ``edges(keys=True)`` so parallel edges keep
-        # distinct keys and a repeated merge of the same inputs overwrites the
-        # same ``(u, v, key)`` slots (idempotent) instead of drifting on fresh
-        # auto-int keys. Prefixing already isolates repos, so cross-graph node
-        # collisions cannot occur; same-class composition is safe.
-        target_cls = type(normalized_graphs[0]) if normalized_graphs else _nx.Graph
-        merged_graph = target_cls()
-        for ng in normalized_graphs:
-            merged_graph.graph.update(ng.graph)
-            for _node, _ndata in ng.nodes(data=True):
-                merged_graph.add_node(_node, **_ndata)
-            if isinstance(ng, (_nx.MultiGraph, _nx.MultiDiGraph)):
-                for _u, _v, _key, _edata in ng.edges(keys=True, data=True):
-                    merged_graph.add_edge(_u, _v, key=_key, **_edata)
-            else:
-                for _u, _v, _edata in ng.edges(data=True):
-                    merged_graph.add_edge(_u, _v, **_edata)
 
         # Back up an existing target before overwrite, then write via ``to_json``
         # so the graphify_profile (graph_type=target_type) persists and the class
         # round-trips on reload. ``force=True``: merge-graphs deliberately
         # (re)writes the merged output; ``communities={}``: not clustered here.
-        from graphify.export import to_json as _to_json
-        from graphify.persistence import FileStateTransaction
+        from graphify.persistence import FileStateTransaction, publish_graph_state
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
         state_transaction = FileStateTransaction([out_path])
         try:
             _backup_merge_target(out_path, transaction=state_transaction)
-            if not _to_json(merged_graph, {}, str(out_path), force=True):
-                raise OSError("graph exporter refused the merged graph")
+            publish_graph_state(out_path, merged_state)
         except Exception as exc:
             state_transaction.rollback()
             print(f"[graphify merge-graphs] error: {exc}", file=sys.stderr)
             sys.exit(1)
         state_transaction.commit()
         print(
-            f"Merged {len(loaded_graphs)} graphs -> {merged_graph.number_of_nodes()} nodes, "
-            f"{merged_graph.number_of_edges()} edges ({target_type})"
+            f"Merged {len(loaded_states)} graphs -> "
+            f"{merged_state.graph.number_of_nodes()} nodes, "
+            f"{merged_state.graph.number_of_edges()} edges ({target_type})"
         )
         print(f"Written to: {out_path}")
 
@@ -6092,6 +6240,7 @@ def main() -> None:
         node_limit = 5000
         no_viz = False
         obsidian_dir = Path(_GRAPHIFY_OUT) / "obsidian"
+        obsidian_dir_explicit = False
         # Shared push-connection settings for the Neo4j sink, parsed from the
         # generic --push/--user/--password flags below.
         push_uri: str | None = None
@@ -6161,6 +6310,7 @@ def main() -> None:
                 i += 1
             elif a == "--dir" and i + 1 < len(args):
                 obsidian_dir = Path(args[i + 1])
+                obsidian_dir_explicit = True
                 i += 2
             elif a == "--push" and i + 1 < len(args):
                 push_uri = args[i + 1]
@@ -6191,6 +6341,9 @@ def main() -> None:
                 labels_path = graph_out_dir / ".graphify_labels.json"
             if not report_path_explicit:
                 report_path = graph_out_dir / "GRAPH_REPORT.md"
+            analysis_path = graph_out_dir / ".graphify_analysis.json"
+            if not obsidian_dir_explicit:
+                obsidian_dir = graph_out_dir / "obsidian"
         labels_path = labels_path.expanduser()
         report_path = report_path.expanduser()
 
@@ -6220,8 +6373,9 @@ def main() -> None:
             print(f"callflow HTML written - open in any browser: {out}")
             sys.exit(0)
 
-        from networkx.readwrite import json_graph as _jg
         from graphify.security import check_graph_file_size_cap as _check_cap
+        from graphify.graph_loader import load_graph_state_file as _load_state_file
+        from graphify.graph_state import DecodeMode as _DecodeMode
 
         # Solution 3 (#1019): for the HTML view, an oversized graph.json should
         # not be a hard error. Detect the over-cap condition here and fall back
@@ -6245,13 +6399,12 @@ def main() -> None:
             else:
                 print(f"error: {_cap_err}", file=sys.stderr)
                 sys.exit(1)
-        _raw = json.loads(graph_path.read_text(encoding="utf-8"))
-        if "links" not in _raw and "edges" in _raw:
-            _raw = dict(_raw, links=_raw["edges"])
-        try:
-            G = _jg.node_link_graph(_raw, edges="links")
-        except TypeError:
-            G = _jg.node_link_graph(_raw)
+        _state = _load_state_file(
+            graph_path,
+            mode=_DecodeMode.READ_ONLY_LEGACY,
+            enforce_size_cap=not _over_cap,
+        )
+        G = _state.graph
 
         # Load optional analysis/labels
         communities: dict[int, list[str]] = {}
@@ -6476,6 +6629,11 @@ def main() -> None:
     elif cmd == "extract":
         _cmd_extract()
 
+    elif cmd == "serve":
+        from graphify.serve import _main as _serve_main
+
+        _serve_main(sys.argv[2:])
+
     elif cmd == "cache-check":
         # graphify cache-check <files_from> [--root <dir>]
         # Reads file paths (one per line) from <files_from>, checks semantic cache.
@@ -6635,6 +6793,82 @@ def main() -> None:
         print(f"error: unknown command '{cmd}'", file=sys.stderr)
         print("Run 'graphify --help' for usage.", file=sys.stderr)
         sys.exit(1)
+
+
+def _stateful_command_output_dir(argv: list[str]) -> Path | None:
+    """Resolve the publication directory for CLI commands with inline writers."""
+    if len(argv) < 2:
+        return None
+    command = argv[1]
+    if command in {"cluster-only", "label"}:
+        value_options = {
+            "--graph",
+            "--backend",
+            "--model",
+            "--resolution",
+            "--exclude-hubs",
+            "--max-concurrency",
+            "--batch-size",
+        }
+        scan_root: Path | None = None
+        graph_override: Path | None = None
+        index = 2
+        while index < len(argv):
+            argument = argv[index]
+            if argument in value_options and index + 1 < len(argv):
+                if argument == "--graph":
+                    graph_override = Path(argv[index + 1])
+                index += 2
+            elif argument.startswith("--graph="):
+                graph_override = Path(argument.split("=", 1)[1])
+                index += 1
+            elif argument.startswith("--"):
+                index += 1
+            elif scan_root is None:
+                scan_root = Path(argument)
+                index += 1
+            else:
+                index += 1
+        resolved_scan_root = scan_root or Path(".")
+        graph_path = graph_override or resolved_scan_root / _GRAPHIFY_OUT / "graph.json"
+        if not graph_path.exists():
+            return None
+        return graph_path.parent
+    if command == "merge-driver" and len(argv) >= 5:
+        return Path(argv[3]).parent
+    if command == "merge-graphs":
+        output_path = Path(_GRAPHIFY_OUT) / "merged-graph.json"
+        input_count = 0
+        index = 2
+        while index < len(argv):
+            argument = argv[index]
+            if argument == "--out" and index + 1 < len(argv):
+                output_path = Path(argv[index + 1])
+                index += 2
+            elif argument.startswith("--out="):
+                output_path = Path(argument.split("=", 1)[1])
+                index += 1
+            elif argument in {"--multigraph", "--simple"}:
+                index += 1
+            else:
+                input_count += 1
+                index += 1
+        if input_count >= 2:
+            return output_path.parent
+    return None
+
+
+def main() -> None:
+    output_dir = _stateful_command_output_dir(sys.argv)
+    if output_dir is None:
+        _main_dispatch()
+        return
+    from graphify.persistence import output_state_lock
+
+    with output_state_lock(output_dir) as lease:
+        if lease is None:  # blocking acquisition cannot normally return None
+            raise RuntimeError("could not acquire command publication lock")
+        _main_dispatch()
 
 
 if __name__ == "__main__":

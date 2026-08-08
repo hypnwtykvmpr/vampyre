@@ -45,7 +45,7 @@ dependencies = [
 - [ ] **Step 2: Install into venv**
 
 ```bash
-cd /home/safi/graphify
+cd /workspace/graphify
 uv add --dev datasketch rapidfuzz
 ```
 
@@ -200,7 +200,7 @@ def test_single_node_no_crash():
 - [ ] **Step 2: Run tests — verify they all fail**
 
 ```bash
-cd /home/safi/graphify
+cd /workspace/graphify
 venv/bin/python -m pytest tests/test_dedup.py -v --tb=short 2>&1 | tail -20
 ```
 
@@ -443,7 +443,7 @@ def _pick_winner(nodes: list[dict]) -> dict:
 - [ ] **Step 4: Run tests — verify they pass**
 
 ```bash
-cd /home/safi/graphify
+cd /workspace/graphify
 venv/bin/python -m pytest tests/test_dedup.py -v --tb=short 2>&1 | tail -30
 ```
 

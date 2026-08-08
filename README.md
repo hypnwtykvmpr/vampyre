@@ -81,7 +81,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ## Install
 
 The registry package named `graphifyy` is upstream Graphify, not Vampyre. Install
-this fork from its active `v9` branch:
+this fork from its accepted `v9` installation mirror:
 
 ```bash
 uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
@@ -350,15 +350,15 @@ graphify query "show the auth flow"
 graphify query "what connects DigestAuth to Response?" --graph graphify-out/graph.json
 
 # expose the graph as an MCP server (for repeated tool-call access)
-python -m graphify.serve graphify-out/graph.json
-python -m graphify.serve --graph graphify-out/graph.json  # --graph flag also accepted
+graphify serve graphify-out/graph.json
+graphify serve --graph graphify-out/graph.json  # --graph flag also accepted
 
-# register with Kimi Code:
-kimi mcp add --transport stdio graphify -- python -m graphify.serve graphify-out/graph.json
+# register the retained standalone MCP entry point with Kimi Code:
+kimi mcp add --transport stdio graphify -- graphify-mcp graphify-out/graph.json
 
 # or serve over HTTP so a whole team points at one URL (no local graphify needed):
-python -m graphify.serve graphify-out/graph.json --transport http --port 8080
-python -m graphify.serve graphify-out/graph.json --transport http --host 0.0.0.0 --api-key "$SECRET"
+graphify serve graphify-out/graph.json --transport http --port 8080
+graphify serve graphify-out/graph.json --transport http --host 0.0.0.0 --api-key "$SECRET"
 ```
 
 The MCP server gives your assistant structured access: `query_graph`, `get_node`, `get_neighbors`, `shortest_path`, `list_prs`, `get_pr_impact`, `triage_prs`.
@@ -421,7 +421,7 @@ These are only needed for **headless / CI extraction** (`graphify extract`). Whe
 | `GRAPHIFY_MAX_OUTPUT_TOKENS` | Raise output cap for dense corpora | optional — e.g. `32768` for large files |
 | `GRAPHIFY_API_TIMEOUT` | Per-call timeout in seconds for HTTP, claude-cli, and Anthropic SDK backends (default: 600) | optional — also `--api-timeout` flag |
 | `GRAPHIFY_MAX_RETRIES` | How many times to retry a rate-limited (429) request before giving up (default: 6; honors `Retry-After`) | optional — raise for strict per-org limits (e.g. kimi); `0` disables |
-| `GRAPHIFY_FORCE` | Force graph rebuild even with fewer nodes | optional — also `--force` flag |
+| `GRAPHIFY_FORCE` | Accept a verified non-empty graph shrink | optional — also `--force`; does not imply `--full` or bypass caches |
 | `GRAPHIFY_GOOGLE_WORKSPACE` | Auto-enable Google Workspace export | optional — set to `1` |
 | `GRAPHIFY_TRIAGE_BACKEND` | Backend for `graphify prs --triage` | optional — auto-detected from available keys |
 | `GRAPHIFY_TRIAGE_MODEL` | Model override for triage | optional — e.g. `claude-opus-4-7` |
@@ -429,6 +429,7 @@ These are only needed for **headless / CI extraction** (`graphify extract`). Whe
 | `GRAPHIFY_QUERY_LOG_DISABLE` | Set to `1` to disable query logging entirely | optional |
 | `GRAPHIFY_QUERY_LOG_RESPONSES` | Set to `1` to also log full subgraph responses (off by default) | optional |
 | `GRAPHIFY_MAX_GRAPH_BYTES` | Override the 512 MiB graph.json size cap — e.g. `700MB`, `2GB`, or plain bytes | optional — useful for very large corpora |
+| `GRAPHIFY_MCP_MAX_SERVERS` | Maximum MCP server entries accepted from one config file (default: 200) | positive integer; over-limit configs are refused rather than partially indexed |
 | `GRAPHIFY_LLM_TEMPERATURE` | Override LLM temperature for semantic extraction — e.g. `0.7`, or `none` to omit | optional — auto-omitted for o1/o3/o4/gpt-5 reasoning models |
 
 ---
@@ -454,12 +455,15 @@ new terminal, and retry. `uv tool dir --bin` prints that directory.
 PowerShell treats a leading `/` as a path separator. Use `graphify .` (no slash) on Windows.
 
 **Graph has fewer nodes after `--update` or rebuild**
-If a refactor deleted files, the old nodes linger. Pass `--force` (or set `GRAPHIFY_FORCE=1`) to overwrite even when the rebuild has fewer nodes.
+Graphify refuses to replace a populated graph with a smaller result unless you
+explicitly accept that verified, non-empty reduction with `--force` (or
+`GRAPHIFY_FORCE=1`). Force never permits an empty wipe, bypasses caches, or
+implies a full rescan; use `--full --force` when both behaviors are intended.
 
 **Graph has duplicate nodes for the same entity (ghost duplicates)**
 Ghost duplicates (same symbol appearing twice — once from AST extraction with a source location, once from semantic extraction without) are now automatically merged at build time. If you see this in a graph built before v0.8.33, run a full re-extract to clean up:
 ```bash
-graphify extract . --force
+graphify extract . --full --force
 ```
 
 **Ollama runs out of VRAM / context window exceeded**
@@ -611,7 +615,8 @@ graphify extract ./docs --directed             # directed graph with one edge pe
 graphify extract ./docs --simple               # explicit undirected simple graph
 graphify extract ./docs --full                 # bypass incremental detection and rebuild the full corpus
 graphify extract ./docs --timing               # print per-stage wall-clock timings to stderr (also works on cluster-only)
-graphify extract ./docs --force                # overwrite graph.json even if new graph has fewer nodes (use after refactors or to clear ghost duplicates)
+graphify extract ./docs --force                # accept a verified non-empty shrink without changing scan/cache scope
+graphify extract ./docs --full --force         # full rescan plus accepted non-empty shrink (legacy-ID/ghost recovery)
 graphify extract ./docs --dedup-llm            # LLM tiebreaker for ambiguous entity pairs (uses same API key)
 graphify extract ./docs --global --as myrepo   # extract and register into the cross-project global graph
 GRAPHIFY_MAX_OUTPUT_TOKENS=32768 graphify extract ./docs --backend claude  # raise output cap for dense corpora
@@ -663,6 +668,8 @@ graphify label ./my-project --backend=openai --model gpt-4o   # force a specific
 
 `update` and `watch` operate only on existing, explicitly profiled graph state. They never initialize a second graph or guess a missing scan root; run `graphify extract <path>` with `--multigraph`, `--directed`, or `--simple` first. When extraction used `--out`, pass the same output root or run from that output root so the saved scan-root marker selects the original sources.
 
+Node-ID provenance is recorded separately for AST and semantic producers. An ordinary full `graphify update` can migrate an older AST layer without an LLM: it remaps carried semantic and legacy references only when each old AST node has one unique source-identity match, and otherwise refuses the write. Partial watch/hook updates refuse unmarked AST state until that full update runs. The preserved semantic layer remains marked as legacy and readable; incremental semantic extraction requires `graphify update --remap`, which re-extracts semantic content and advances both producer schemas. AST and semantic caches are namespaced by their own identity inputs, so older cached IDs are not reused.
+
 `update --repair-state` restores only a missing scan-root marker. It first requires a readable, explicitly profiled graph and a manifest whose live content hashes agree with the requested source root; it does not infer a graph class, replace a conflicting marker, or recreate missing graph state.
 
 > **Community names:** inside an agent (Claude Code, Gemini CLI) the agent names communities itself. When you run the bare CLI, `cluster-only` auto-names them with the configured backend (built-in or custom OpenAI-compatible provider) — pass `--no-label` to keep `Community N`, or run `graphify label` to (re)generate names on demand.
@@ -697,7 +704,7 @@ The project uses [uv](https://docs.astral.sh/uv/) for dev workflow. Install it o
 ```bash
 git clone https://github.com/hypnwtykvmpr/vampyre.git
 cd vampyre
-git checkout v9
+git checkout main
 
 # Create the project venv and install graphify + all extras + the dev group
 # (pytest). uv installs the dev dependency group by default; pass --no-dev to
@@ -724,7 +731,7 @@ passes, and warnings fail the run.
 
 ### Git workflow
 
-- Active development happens on the `v9` branch; `main` is the integration branch.
+- Active development happens on `main`; `v9` is the accepted installation mirror.
 - Commit style: `fix: <description>` / `feat: <description>` / `docs: <description>`
 - Before opening a PR, run the complete test command above and confirm it passes.
 - Add a fixture file to `tests/fixtures/` and tests to `tests/test_languages.py` for any new language extractor.

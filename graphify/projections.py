@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
+import json
+from collections import deque
 from collections.abc import Hashable, Iterable
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypedDict, cast
 
 import networkx as nx
 
 WeightMode = Literal["confidence", "count", "sum"]
+
+
+class RelationshipEnvelope(TypedDict):
+    """Stable schema for one endpoint pair's complete relationship bundle."""
+
+    count: int
+    shown: list[dict[str, Any]]
+    truncated: int
+    relations: list[str]
+    confidences: list[str]
+
 
 # Stable default for the capped relationship display envelope. Surfaces (CLI text,
 # MCP structured arrays) may override per call, but this is the canonical default
@@ -31,14 +44,34 @@ def _confidence_score(data: dict[str, Any]) -> float:
     return 0.0
 
 
-def _edge_sort_key(data: dict[str, Any]) -> tuple:
+def _canonical_json(value: Any) -> str:
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        return repr(value)
+
+
+def stable_value_key(value: Any) -> tuple[str, str]:
+    """Return a total, type-aware key for JSON-safe graph values."""
+    value_type = type(value)
+    return (f"{value_type.__module__}.{value_type.__qualname__}", _canonical_json(value))
+
+
+def _edge_sort_key(data: dict[str, Any]) -> tuple[Any, ...]:
     return (
         -_confidence_score(data),
-        str(data.get("relation", "")),
-        str(data.get("source_file", "")),
-        str(data.get("source_location", "")),
-        str(data.get("context", "")),
-        repr(sorted((str(key), repr(value)) for key, value in data.items())),
+        stable_value_key(data.get("relation", "")),
+        stable_value_key(data.get("source_file", "")),
+        stable_value_key(data.get("source_location", "")),
+        stable_value_key(data.get("context", "")),
+        stable_value_key(data.get("key")),
+        _canonical_json(data),
     )
 
 
@@ -58,7 +91,7 @@ def _copy_graph_skeleton(G: nx.Graph, graph_type: type[nx.Graph]) -> nx.Graph:
 
 
 def _unordered_pair(u: Any, v: Any) -> tuple[Any, Any]:
-    if repr(u) <= repr(v):
+    if stable_value_key(u) <= stable_value_key(v):
         return u, v
     return v, u
 
@@ -91,7 +124,8 @@ def project_for_community(G: nx.Graph, *, weight_mode: WeightMode = "confidence"
 
     H = _copy_graph_skeleton(G, nx.Graph)
     for (u, v), records in sorted(
-        groups.items(), key=lambda item: (repr(item[0][0]), repr(item[0][1]))
+        groups.items(),
+        key=lambda item: (stable_value_key(item[0][0]), stable_value_key(item[0][1])),
     ):
         H.add_edge(u, v, **_merged_edge_attrs(records, weight_mode))
     return H
@@ -126,7 +160,8 @@ def project_for_callflow(
 
     H = cast(nx.DiGraph, _copy_graph_skeleton(G, nx.DiGraph))
     for (src, tgt), records in sorted(
-        groups.items(), key=lambda item: (repr(item[0][0]), repr(item[0][1]))
+        groups.items(),
+        key=lambda item: (stable_value_key(item[0][0]), stable_value_key(item[0][1])),
     ):
         if src not in H:
             H.add_node(src)
@@ -179,7 +214,11 @@ def edge_records_between(
         if not isinstance(raw, dict):
             return
         if isinstance(G, nx.MultiGraph | nx.MultiDiGraph):  # Python 3.10+
-            records.extend(dict(data) for data in raw.values() if isinstance(data, dict))
+            for key, data in raw.items():
+                if isinstance(data, dict):
+                    record = dict(data)
+                    record["key"] = key
+                    records.append(record)
         else:
             records.append(dict(raw))
 
@@ -212,7 +251,7 @@ def relationship_envelope(
     *,
     cap: int = DEFAULT_RELATIONSHIP_CAP,
     directed_only: bool = False,
-) -> dict[str, Any]:
+) -> RelationshipEnvelope:
     """Bundle all parallel relationships between two nodes into a capped envelope.
 
     Returns a structured dict suitable for MCP serialization (arrays, not a
@@ -272,17 +311,9 @@ def format_relationship_envelope(
         capped:                 "calls, contains, imports (+2 more, 5 total)"
         none:                   ""  # empty string when no edge exists
 
-    The displayed list is the unique sorted relations from the envelope, so a
-    relation appearing on several parallel edges is listed once. When the number
-    of UNIQUE relations exceeds ``cap``, the first ``cap`` relations are shown
-    followed by ``(+K more, N total)`` where ``N`` is the total relationship count
-    (edge records, not unique relations) and ``K`` is ``unique_relations - cap``.
-
-    Confidence is only appended in the single-relation case where exactly one
-    confidence value exists. For multi-relation lines per-relation confidence is
-    omitted to keep the line stable and deterministic; the full confidence set
-    remains available via :func:`relationship_envelope` for structured consumers.
-    A ``cap`` below 1 is clamped to zero (no leading relations are shown).
+    A single record retains the compact historical representation. Multiple
+    records are rendered individually, including their stable key and useful
+    provenance fields, so same-relation parallels cannot collapse visually.
 
     ``directed_only`` is threaded through to :func:`relationship_envelope`: with
     the default ``False`` directed graphs render the symmetric both-direction
@@ -294,25 +325,39 @@ def format_relationship_envelope(
     if count == 0:
         return ""
 
-    relations: list[str] = envelope["relations"]
-    confidences: list[str] = envelope["confidences"]
+    if count == 1:
+        record = envelope["shown"][0] if envelope["shown"] else {}
+        relation = str(record.get("relation", ""))
+        confidence = record.get("confidence")
+        return f"{relation} ({confidence})" if confidence else relation
 
-    if len(relations) == 1:
-        relation = relations[0]
-        if len(confidences) == 1:
-            return f"{relation} ({confidences[0]})"
-        return relation
+    def render_record(record: dict[str, Any]) -> str:
+        relation = str(record.get("relation", ""))
+        details: list[str] = []
+        for output_name, field_name in (
+            ("key", "key"),
+            ("location", "source_location"),
+            ("confidence", "confidence"),
+            ("context", "context"),
+        ):
+            value = record.get(field_name)
+            if value not in (None, ""):
+                details.append(f"{output_name}={value}")
+        provenance = record.get("provenance", record.get("_origin"))
+        if provenance not in (None, ""):
+            rendered = (
+                _canonical_json(provenance)
+                if isinstance(provenance, dict | list)
+                else str(provenance)
+            )
+            details.append(f"provenance={rendered}")
+        return f"{relation} [{', '.join(details)}]" if details else relation
 
-    effective_cap = cap if cap > 0 else 0
-    if len(relations) <= effective_cap:
-        return ", ".join(relations)
-
-    shown_relations = relations[:effective_cap]
-    more = len(relations) - len(shown_relations)
-    suffix = f"(+{more} more, {count} total)"
-    if not shown_relations:
-        return suffix
-    return f"{', '.join(shown_relations)} {suffix}"
+    rendered_records = " | ".join(render_record(record) for record in envelope["shown"])
+    suffix = ""
+    if envelope["truncated"]:
+        suffix = f" (+{envelope['truncated']} more, {count} total)"
+    return f"{count} records: {rendered_records}{suffix}"
 
 
 def distinct_neighbor_degree(G: nx.Graph, node: Hashable) -> int:
@@ -325,15 +370,71 @@ def distinct_neighbor_degree(G: nx.Graph, node: Hashable) -> int:
     return len(set(G.neighbors(node)))
 
 
+def stable_shortest_path(G: nx.Graph, source: Hashable, target: Hashable) -> list[Hashable]:
+    """Return the canonical shortest path over undirected topology."""
+    if source not in G or target not in G:
+        raise nx.NodeNotFound(f"source or target is not in the graph: {source!r}, {target!r}")
+    if source == target:
+        return [source]
+
+    parents: dict[Hashable, Hashable | None] = {source: None}
+    pending: deque[Hashable] = deque([source])
+    while pending:
+        node = pending.popleft()
+        if G.is_directed():
+            directed = cast(nx.DiGraph, G)
+            neighbors = set(directed.predecessors(node)) | set(directed.successors(node))
+        else:
+            neighbors = set(G.neighbors(node))
+        for neighbor in sorted(neighbors, key=stable_value_key):
+            if neighbor in parents:
+                continue
+            parents[neighbor] = node
+            if neighbor == target:
+                path: list[Hashable] = [target]
+                cursor: Hashable = target
+                while parents[cursor] is not None:
+                    cursor = cast(Hashable, parents[cursor])
+                    path.append(cursor)
+                path.reverse()
+                return path
+            pending.append(neighbor)
+    raise nx.NetworkXNoPath(f"No path between {source!r} and {target!r}")
+
+
+def directed_edge_endpoints(
+    G: nx.Graph,
+    u: Hashable,
+    v: Hashable,
+    data: dict[str, Any],
+) -> tuple[Hashable, Hashable]:
+    """Return authoritative endpoints when lifting an edge to a directed graph."""
+    if G.is_directed() or u == v:
+        return u, v
+    source = data.get("_src")
+    target = data.get("_tgt")
+    if source is None or target is None or {source, target} != {u, v}:
+        raise ValueError("undirected edge lacks unambiguous _src/_tgt direction")
+    return source, target
+
+
 def normalize_to_multidigraph(G: nx.Graph) -> nx.MultiDiGraph:
-    """Return a MultiDiGraph copy, preserving parallel keys when present."""
+    """Return a MultiDiGraph copy without guessing undirected edge direction."""
     H = nx.MultiDiGraph()
     H.graph.update(G.graph)
     H.add_nodes_from((node, attrs.copy()) for node, attrs in G.nodes(data=True))
     if isinstance(G, nx.MultiGraph | nx.MultiDiGraph):  # Python 3.10+
         for u, v, key, data in G.edges(keys=True, data=True):
-            H.add_edge(u, v, key=key, **data)
+            source, target = directed_edge_endpoints(G, u, v, data)
+            attrs = data.copy()
+            attrs.pop("_src", None)
+            attrs.pop("_tgt", None)
+            H.add_edge(source, target, key=key, **attrs)
     else:
         for u, v, data in G.edges(data=True):
-            H.add_edge(u, v, **data)
+            source, target = directed_edge_endpoints(G, u, v, data)
+            attrs = data.copy()
+            attrs.pop("_src", None)
+            attrs.pop("_tgt", None)
+            H.add_edge(source, target, **attrs)
     return H

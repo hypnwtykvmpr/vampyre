@@ -1,6 +1,7 @@
 import json
 import math
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 from graphify.build import build_from_json
 from graphify.cluster import cluster
 from graphify.export import to_json, to_cypher, to_graphml, to_html, to_canvas, to_obsidian
+from graphify.graph_state import GraphStateError, reconcile_hyperedges
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -38,6 +40,201 @@ def test_to_json_valid_json():
         data = json.loads(out.read_text(encoding="utf-8"))
         assert "nodes" in data
         assert "links" in data
+
+
+def test_tree_html_consumes_validated_nodes_without_reencoding_graph_state(tmp_path):
+    from graphify.tree_html import write_tree_html
+
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "directed": False,
+                "multigraph": False,
+                "graph": {
+                    "graphify_profile": {"graph_type": "simple"},
+                    "custom_metadata": {"preserved": True},
+                },
+                "nodes": [
+                    {
+                        "id": "src_widget",
+                        "label": "Widget",
+                        "file_type": "code",
+                        "source_file": "src/widget.py",
+                    }
+                ],
+                "links": [],
+                "hyperedges": [],
+                "custom_top_level": "preserved",
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "tree.html"
+
+    write_tree_html(graph_path, output, root=".")
+
+    rendered = output.read_text(encoding="utf-8")
+    assert "Widget" in rendered
+    assert '"name":"src"' in rendered
+    assert '"name":"widget.py"' in rendered
+
+
+def test_tree_builder_relationships_are_node_derived():
+    from graphify.tree_html import build_tree
+
+    nodes = [
+        {
+            "id": "src_widget",
+            "label": "Widget",
+            "file_type": "code",
+            "source_file": "src/widget.py",
+        }
+    ]
+
+    without_edges = build_tree({"nodes": nodes}, root=".")
+    with_edges = build_tree(
+        {
+            "nodes": nodes,
+            "links": [
+                {
+                    "source": "src_widget",
+                    "target": "src_widget",
+                    "relation": "calls",
+                }
+            ],
+        },
+        root=".",
+    )
+
+    assert with_edges == without_edges
+
+
+def test_to_json_refuses_to_overwrite_unreadable_existing_graph(tmp_path):
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text("not-json", encoding="utf-8")
+    before = graph_path.read_bytes()
+
+    assert to_json(make_graph(), {}, str(graph_path), force=True) is False
+    assert graph_path.read_bytes() == before
+
+
+def _git_commit(root: Path, relative: str = "tracked.txt") -> str:
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+    tracked = root / relative
+    tracked.parent.mkdir(parents=True, exist_ok=True)
+    tracked.write_text("tracked\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "--", relative], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+    return subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.strip()
+
+
+def test_git_provenance_is_bound_to_corpus_root(tmp_path, monkeypatch, path_alias):
+    from graphify.provenance import git_head
+
+    corpus_repo = tmp_path / "corpus-repo"
+    expected = _git_commit(corpus_repo, "nested/corpus/source.py")
+    scan_root = corpus_repo / "nested" / "corpus"
+    caller_repo = tmp_path / "caller-repo"
+    caller_commit = _git_commit(caller_repo)
+    assert caller_commit != expected
+    monkeypatch.chdir(caller_repo)
+
+    assert git_head(scan_root) == expected
+    alias = path_alias(tmp_path / "corpus-alias", scan_root)
+    assert git_head(alias) == expected
+
+    non_git = tmp_path / "non-git"
+    non_git.mkdir()
+    assert git_head(non_git) is None
+
+
+def test_to_json_never_infers_git_provenance_from_process_cwd(tmp_path, monkeypatch):
+    caller_repo = tmp_path / "caller"
+    caller_commit = _git_commit(caller_repo)
+    monkeypatch.chdir(caller_repo)
+    graph = make_graph()
+
+    neutral_path = tmp_path / "neutral.json"
+    assert to_json(graph, {}, str(neutral_path))
+    neutral = json.loads(neutral_path.read_text(encoding="utf-8"))
+    assert "built_at_commit" not in neutral
+
+    explicit_path = tmp_path / "explicit.json"
+    assert to_json(graph, {}, str(explicit_path), built_at_commit=caller_commit)
+    explicit = json.loads(explicit_path.read_text(encoding="utf-8"))
+    assert explicit["built_at_commit"] == caller_commit
+
+
+def test_reconcile_hyperedges_is_canonical_lossless_and_non_mutating():
+    records = [
+        {"label": "Flow", "members": ["b", "a", "b"], "context": "request"},
+        {"id": "explicit", "node_ids": ["old", "c"], "label": "Other"},
+        {"id": "degenerate", "nodes": ["missing", "a"]},
+    ]
+    original = json.loads(json.dumps(records))
+
+    reconciled = reconcile_hyperedges(
+        records,
+        live_node_ids={"a", "b", "c"},
+        node_remap={"old": "b"},
+    )
+
+    assert records == original
+    assert {record["id"] for record in reconciled} >= {"explicit"}
+    generated = next(record for record in reconciled if record["id"] != "explicit")
+    assert str(generated["id"]).startswith("hyperedge:v1:")
+    assert generated["nodes"] == ["a", "b"]
+    assert next(record for record in reconciled if record["id"] == "explicit")["nodes"] == [
+        "b",
+        "c",
+    ]
+    assert all("members" not in record and "node_ids" not in record for record in reconciled)
+
+    reversed_result = reconcile_hyperedges(
+        list(reversed(records)),
+        live_node_ids={"a", "b", "c"},
+        node_remap={"old": "b"},
+    )
+    assert reconciled == reversed_result
+
+
+def test_reconcile_hyperedges_refuses_conflicting_explicit_id():
+    with pytest.raises(GraphStateError, match="conflicting hyperedge id"):
+        reconcile_hyperedges(
+            [
+                {"id": "shared", "nodes": ["a", "b"], "label": "First"},
+                {"id": "shared", "nodes": ["a", "c"], "label": "Second"},
+            ],
+            live_node_ids={"a", "b", "c"},
+        )
+
+
+def test_to_json_reconciles_hyperedges_against_live_nodes(tmp_path):
+    graph = nx.MultiDiGraph()
+    graph.add_nodes_from(["a", "b", "c"])
+    graph.graph["hyperedges"] = [
+        {"label": "kept", "nodes": ["a", "b", "missing"]},
+        {"id": "dropped", "nodes": ["a", "missing"]},
+    ]
+    output = tmp_path / "graph.json"
+
+    assert to_json(graph, {}, str(output))
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert len(payload["hyperedges"]) == 1
+    assert payload["hyperedges"][0]["nodes"] == ["a", "b"]
+    assert payload["hyperedges"][0]["id"].startswith("hyperedge:v1:")
 
 
 def test_to_json_nodes_have_community():

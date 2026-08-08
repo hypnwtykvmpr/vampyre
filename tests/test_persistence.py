@@ -3,7 +3,10 @@ from __future__ import annotations
 import io
 import errno
 import os
+import subprocess
 import sys
+import textwrap
+import time
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -20,6 +23,28 @@ def test_atomic_write_text_replaces_complete_payload(tmp_path):
 
     assert target.read_text(encoding="utf-8") == "new"
     assert list(tmp_path.glob(".state.json.*.tmp")) == []
+
+
+def test_publish_graph_state_writes_only_completed_canonical_bytes(tmp_path):
+    from graphify.graph_state import DecodeMode, decode_graph_state, encode_graph_state_bytes
+    from graphify.persistence import publish_graph_state
+
+    payload = {
+        "schema_version": 1,
+        "directed": True,
+        "multigraph": False,
+        "graph": {"graphify_profile": {"graph_type": "digraph"}},
+        "nodes": [{"id": "b"}, {"id": "a"}],
+        "links": [{"source": "a", "target": "b", "_origin": "ast"}],
+        "hyperedges": [],
+    }
+    state = decode_graph_state(payload, mode=DecodeMode.STRICT_CURRENT)
+    target = tmp_path / "graph.json"
+
+    publish_graph_state(target, state)
+
+    assert target.read_bytes() == encode_graph_state_bytes(state)
+    assert list(tmp_path.glob(".graph.json.*.tmp")) == []
 
 
 def test_atomic_write_text_preserves_target_when_replace_fails(tmp_path, monkeypatch):
@@ -196,6 +221,82 @@ def test_file_state_transaction_restores_existing_and_removes_new_files(tmp_path
     assert not created.exists()
 
 
+@pytest.mark.parametrize("failed_index", [0, 1, 2])
+def test_file_state_transaction_attempts_every_restore_before_reporting_failure(
+    tmp_path, monkeypatch, failed_index
+):
+    from graphify import persistence
+
+    paths = [tmp_path / name for name in ("graph.json", "manifest.json", "marker")]
+    for index, path in enumerate(paths):
+        path.write_bytes(f"before-{index}".encode())
+    transaction = persistence.FileStateTransaction(paths)
+    for index, path in enumerate(paths):
+        path.write_bytes(f"mutated-{index}".encode())
+
+    failed_path = paths[failed_index]
+    attempted: list[Path] = []
+    real_atomic_write = persistence.atomic_write_bytes
+
+    def fail_one_restore(path: Path, payload: bytes) -> None:
+        target = Path(path)
+        attempted.append(target)
+        if target == failed_path:
+            raise PermissionError(errno.EACCES, "simulated rollback failure", target)
+        real_atomic_write(target, payload)
+
+    monkeypatch.setattr(persistence, "atomic_write_bytes", fail_one_restore)
+
+    with pytest.raises(OSError, match=failed_path.name):
+        transaction.rollback()
+
+    assert attempted == list(reversed(paths))
+    for index, path in enumerate(paths):
+        expected = f"mutated-{index}" if path == failed_path else f"before-{index}"
+        assert path.read_text(encoding="utf-8") == expected
+
+
+def test_file_state_transaction_reports_all_cleanup_failures_after_best_effort(
+    tmp_path, monkeypatch
+):
+    from graphify import persistence
+
+    graph = tmp_path / "graph.json"
+    manifest = tmp_path / "manifest.json"
+    created = tmp_path / "new-marker"
+    graph.write_bytes(b"graph-before")
+    manifest.write_bytes(b"manifest-before")
+    transaction = persistence.FileStateTransaction([graph, manifest, created])
+    graph.write_bytes(b"graph-mutated")
+    manifest.write_bytes(b"manifest-mutated")
+    created.write_bytes(b"created")
+
+    real_atomic_write = persistence.atomic_write_bytes
+    real_unlink = Path.unlink
+
+    def fail_manifest_restore(path: Path, payload: bytes) -> None:
+        target = Path(path)
+        if target == manifest:
+            raise PermissionError(errno.EACCES, "simulated write-back failure", target)
+        real_atomic_write(target, payload)
+
+    def fail_created_cleanup(path: Path, *args, **kwargs) -> None:
+        if path == created:
+            raise PermissionError(errno.EACCES, "simulated unlink failure", path)
+        real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(persistence, "atomic_write_bytes", fail_manifest_restore)
+    monkeypatch.setattr(Path, "unlink", fail_created_cleanup)
+
+    with pytest.raises(persistence.FileRollbackError) as raised:
+        transaction.rollback()
+
+    assert [path for path, _error in raised.value.failures] == [created, manifest]
+    assert graph.read_bytes() == b"graph-before"
+    assert manifest.read_bytes() == b"manifest-mutated"
+    assert created.read_bytes() == b"created"
+
+
 def test_file_state_transaction_keeps_committed_files(tmp_path):
     from graphify.persistence import FileStateTransaction, atomic_write_text
 
@@ -205,3 +306,136 @@ def test_file_state_transaction_keeps_committed_files(tmp_path):
         transaction.commit()
 
     assert target.read_text(encoding="utf-8") == "published"
+
+
+def test_output_state_lock_is_reentrant_for_the_same_directory(tmp_path):
+    from graphify.persistence import output_state_lock
+
+    with output_state_lock(tmp_path) as outer:
+        assert outer is not None
+        with output_state_lock(tmp_path) as inner:
+            assert inner is outer
+
+    assert not (tmp_path / ".publication-generation").exists()
+
+
+def test_file_state_transaction_refuses_stale_generation_rollback(tmp_path):
+    from graphify.persistence import FileStateTransaction, atomic_write_text, output_state_lock
+
+    target = tmp_path / "graph.json"
+    target.write_text("baseline", encoding="utf-8")
+    with output_state_lock(tmp_path) as first_lease:
+        transaction = FileStateTransaction([target], lease=first_lease)
+        atomic_write_text(target, "first-writer")
+
+    with output_state_lock(tmp_path):
+        atomic_write_text(target, "newer-writer")
+
+    assert transaction.rollback() is False
+    assert target.read_text(encoding="utf-8") == "newer-writer"
+
+
+def test_file_state_transaction_rolls_back_under_current_generation(tmp_path):
+    from graphify.persistence import FileStateTransaction, atomic_write_text, output_state_lock
+
+    target = tmp_path / "graph.json"
+    target.write_text("baseline", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="publish failed"):
+        with output_state_lock(tmp_path) as lease:
+            with FileStateTransaction([target], lease=lease):
+                atomic_write_text(target, "partial")
+                raise RuntimeError("publish failed")
+
+    assert target.read_text(encoding="utf-8") == "baseline"
+
+
+def test_output_state_lock_serializes_real_processes(tmp_path):
+    events = tmp_path / "events.txt"
+    script = textwrap.dedent(
+        """
+        import sys
+        import time
+        from pathlib import Path
+        from graphify.persistence import output_state_lock
+
+        output = Path(sys.argv[1])
+        events = Path(sys.argv[2])
+        name = sys.argv[3]
+        delay = float(sys.argv[4])
+        with output_state_lock(output):
+            with events.open("a", encoding="utf-8") as stream:
+                stream.write(f"{name}:start\\n")
+                stream.flush()
+            time.sleep(delay)
+            with events.open("a", encoding="utf-8") as stream:
+                stream.write(f"{name}:end\\n")
+                stream.flush()
+        """
+    )
+    first = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path / "out"), str(events), "first", "0.3"]
+    )
+    time.sleep(0.05)
+    second = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path / "out"), str(events), "second", "0"]
+    )
+    assert first.wait(timeout=10) == 0
+    assert second.wait(timeout=10) == 0
+    assert events.read_text(encoding="utf-8").splitlines() == [
+        "first:start",
+        "first:end",
+        "second:start",
+        "second:end",
+    ]
+
+
+def test_output_state_lock_keeps_same_guard_file_for_future_waiters(tmp_path):
+    from graphify.persistence import output_state_lock
+
+    output = tmp_path / "new-output"
+    with output_state_lock(output):
+        guard = output / ".rebuild.guard"
+        assert guard.exists()
+        first_handle = guard.open("rb")
+
+    try:
+        assert guard.exists()
+        with output_state_lock(output):
+            with guard.open("rb") as second_handle:
+                assert os.path.sameopenfile(first_handle.fileno(), second_handle.fileno())
+    finally:
+        first_handle.close()
+
+
+def test_output_state_lock_is_released_when_holder_process_crashes(tmp_path):
+    from graphify.persistence import output_state_lock
+
+    output = tmp_path / "out"
+    script = textwrap.dedent(
+        """
+        import os
+        import sys
+        from pathlib import Path
+        from graphify.persistence import output_state_lock
+
+        with output_state_lock(Path(sys.argv[1])) as lease:
+            assert lease is not None
+            print("locked", flush=True)
+            os._exit(17)
+        """
+    )
+    crashed = subprocess.run(
+        [sys.executable, "-c", script, str(output)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=10,
+        check=False,
+    )
+
+    assert crashed.returncode == 17
+    assert crashed.stdout == "locked\n"
+    assert (output / ".publication-generation").exists()
+    with output_state_lock(output, blocking=False) as recovered:
+        assert recovered is not None
+    assert not (output / ".publication-generation").exists()

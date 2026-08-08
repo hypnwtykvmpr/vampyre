@@ -395,12 +395,13 @@ def fetch_worktrees() -> dict[str, str]:
 def _load_graph_json(graph_path: Path) -> dict | None:
     if not graph_path.exists():
         return None
-    from graphify.security import check_graph_file_size_cap
+    from graphify.graph_loader import load_graph_state_file
+    from graphify.graph_state import DecodeMode, encode_graph_state
 
     try:
-        check_graph_file_size_cap(graph_path)
-        return json.loads(graph_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, ValueError):
+        state = load_graph_state_file(graph_path, mode=DecodeMode.READ_ONLY_LEGACY)
+        return encode_graph_state(state)
+    except (OSError, ValueError):
         return None
 
 
@@ -668,9 +669,9 @@ def _resolve_triage_backend() -> tuple[str, str]:
             )
             return b, model
 
-    import shutil
+    from graphify.claude_cli import claude_cli_available
 
-    if shutil.which("claude"):
+    if claude_cli_available():
         return "claude-cli", "claude-code-plan"
 
     return "ollama", _default_model_for_backend("ollama")
@@ -750,31 +751,13 @@ def triage_with_opus(prs: list[PRInfo], base: str) -> None:
             print("\n")
 
         elif backend == "claude-cli":
-            import platform as _platform
-            import shutil as _shutil
-            import subprocess as _sp
+            from graphify.claude_cli import run_claude_cli
 
-            _claude = "claude"
-            if _platform.system() == "Windows":
-                _claude = _shutil.which("claude.cmd") or _shutil.which("claude") or "claude"
-            proc = _sp.run(
-                [_claude, "-p", "--no-session-persistence"],
-                input=prompt,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                encoding="utf-8",
-            )
-            if proc.returncode != 0:
-                print(red(f"  claude -p failed: {proc.stderr.strip()[:300]}"), file=sys.stderr)
-            else:
-                try:
-                    result = json.loads(proc.stdout).get("result") or proc.stdout
-                except json.JSONDecodeError:
-                    result = proc.stdout
-                for line in result.splitlines():
-                    print(f"  {line}")
-                print()
+            envelope = run_claude_cli(prompt, timeout=120)
+            result = envelope["result"]
+            for line in result.splitlines():
+                print(f"  {line}")
+            print()
 
     except Exception as e:
         print(f"\n\n  {red(f'Triage failed: {e}')}", file=sys.stderr)

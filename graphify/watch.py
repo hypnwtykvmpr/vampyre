@@ -17,10 +17,12 @@ from graphify.detect import (
     _load_graphifyignore,
 )
 from graphify.installation import uv_tool_install_command
+from graphify.graph_state import GraphType
 from graphify.persistence import (
     FileStateTransaction,
     atomic_write_text,
     locked_file,
+    output_state_lock,
     write_pending_signal,
 )
 
@@ -166,9 +168,8 @@ def _rebuild_lock(out_dir: Path, *, blocking: bool = False):
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     status_path = out_dir / ".rebuild.lock"
-    guard_path = out_dir / ".rebuild.guard"
-    with locked_file(guard_path, blocking=blocking) as acquired:
-        if not acquired:
+    with output_state_lock(out_dir, blocking=blocking, reentrant=False) as lease:
+        if lease is None:
             yield False
             return
         atomic_write_text(status_path, f"{os.getpid()}\n")
@@ -206,23 +207,6 @@ def _apply_resource_limits() -> None:
         resource.setrlimit(which, (limit, new_hard))
     except (ImportError, ValueError, OSError):
         pass
-
-
-def _git_head() -> str | None:
-    """Return current git HEAD commit hash, or None outside a repo."""
-    import subprocess as _sp
-
-    try:
-        r = _sp.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-            encoding="utf-8",
-        )
-        return r.stdout.strip() if r.returncode == 0 else None
-    except Exception:
-        return None
 
 
 _WATCHED_EXTENSIONS = CODE_EXTENSIONS | DOC_EXTENSIONS | PAPER_EXTENSIONS | IMAGE_EXTENSIONS
@@ -305,17 +289,77 @@ def _node_community_map(graph_data: dict) -> dict[str, int]:
     return out
 
 
+def _analysis_matches_graph(analysis_path: Path, graph_data: dict) -> bool:
+    """Return whether a cluster-analysis sidecar exactly describes ``graph_data``."""
+    try:
+        analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return False
+    if not isinstance(analysis, dict) or "built_at_commit" not in analysis:
+        return False
+    if analysis["built_at_commit"] != graph_data.get("built_at_commit"):
+        return False
+    graph_fingerprint = analysis.get("graph_fingerprint")
+    if not isinstance(graph_fingerprint, str):
+        return False
+    try:
+        from graphify.graph_state import (
+            DecodeMode,
+            decode_graph_state,
+            graph_analysis_fingerprint as _graph_analysis_fingerprint,
+        )
+
+        state = decode_graph_state(graph_data, mode=DecodeMode.STRICT_CURRENT)
+    except (TypeError, ValueError):
+        return False
+    if graph_fingerprint != _graph_analysis_fingerprint(state):
+        return False
+
+    raw_communities = analysis.get("communities")
+    raw_cohesion = analysis.get("cohesion")
+    if not isinstance(raw_communities, dict) or not isinstance(raw_cohesion, dict):
+        return False
+    if not isinstance(analysis.get("gods"), list) or not isinstance(
+        analysis.get("surprises"), list
+    ):
+        return False
+    if "questions" in analysis and not isinstance(analysis["questions"], list):
+        return False
+
+    expected: dict[str, list[str]] = {}
+    nodes = graph_data.get("nodes")
+    if not isinstance(nodes, list):
+        return False
+    for node in nodes:
+        if not isinstance(node, dict) or node.get("id") is None or node.get("community") is None:
+            return False
+        expected.setdefault(str(node["community"]), []).append(str(node["id"]))
+    expected = {cid: sorted(members) for cid, members in expected.items()}
+
+    actual: dict[str, list[str]] = {}
+    for cid, members in raw_communities.items():
+        if not isinstance(members, list):
+            return False
+        normalized = [str(member) for member in members]
+        if len(normalized) != len(set(normalized)):
+            return False
+        actual[str(cid)] = sorted(normalized)
+    return actual == expected and {str(cid) for cid in raw_cohesion} == set(expected)
+
+
 def _canonical_graph_for_compare(graph_data: dict) -> dict:
     canonical = dict(graph_data)
-    canonical.pop("built_at_commit", None)
-    # Graph-level metadata under the top-level "graph" key (graphify_profile, a
-    # duplicate hyperedges copy, NetworkX bookkeeping) is NOT graph structure.
-    # export.to_json now persists graphify_profile there (PR 7 Phase A); without
-    # this strip the on-disk graph ({"graph": {"graphify_profile": ...}}) would
-    # never compare equal to a candidate that lacks it, defeating the
-    # no-change short-circuit. Hyperedge topology is preserved via the
-    # authoritative top-level "hyperedges" key sorted below.
-    canonical.pop("graph", None)
+    canonical.pop("schema_version", None)
+    canonical.pop("graphify_state_diagnostics", None)
+    # Full-state comparison keeps graph metadata so fresh diagnostics and custom
+    # metadata are publishable even when topology is unchanged. The nested
+    # hyperedge copy is legacy duplication; topology remains authoritative at
+    # the top level.
+    graph_metadata = canonical.get("graph")
+    if isinstance(graph_metadata, dict):
+        graph_metadata = dict(graph_metadata)
+        graph_metadata.pop("hyperedges", None)
+        canonical["graph"] = graph_metadata
     # Fold the legacy edge-list key so a graph.json written under the old "edges"
     # key compares equal to a modern candidate keyed "links". Without this fold a
     # legacy file ({"edges": [...]}) and the fresh candidate ({"links": [...]})
@@ -371,9 +415,58 @@ def _canonical_graph_for_compare(graph_data: dict) -> dict:
     return canonical
 
 
+def _canonical_unclustered_graph_for_compare(graph_data: dict) -> dict:
+    """Ignore only node fields derived from clustering or graph export."""
+    canonical = _canonical_graph_for_compare(graph_data)
+    nodes = canonical.get("nodes")
+    if isinstance(nodes, list):
+        normalized_nodes: list[object] = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                normalized_nodes.append(node)
+                continue
+            record = dict(node)
+            record.pop("community", None)
+            record.pop("community_name", None)
+            record.pop("norm_label", None)
+            normalized_nodes.append(record)
+        canonical["nodes"] = normalized_nodes
+    for key in (
+        "graphify_identity_diagnostics",
+        "graphify_multigraph_diagnostics",
+        "input_tokens",
+        "output_tokens",
+    ):
+        canonical.pop(key, None)
+    graph_metadata = canonical.get("graph")
+    if isinstance(graph_metadata, dict):
+        graph_metadata = dict(graph_metadata)
+        for key in ("graphify_identity_diagnostics", "graphify_multigraph_diagnostics"):
+            graph_metadata.pop(key, None)
+        canonical["graph"] = graph_metadata
+    return canonical
+
+
+def _record_list(
+    payload: dict[str, object],
+    key: str,
+    fallback_key: str | None = None,
+) -> list[dict]:
+    """Return only mapping records from one serialized-state list field."""
+    value = payload.get(key)
+    if value is None and fallback_key is not None:
+        value = payload.get(fallback_key)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def _canonical_topology_for_compare(graph_data: dict) -> dict:
     canonical = dict(graph_data)
     canonical.pop("built_at_commit", None)
+    canonical.pop("schema_version", None)
+    canonical.pop("graphify_state_diagnostics", None)
+    canonical.pop("graphify_identity_diagnostics", None)
     # Graph-level metadata under the top-level "graph" key (graphify_profile, a
     # duplicate hyperedges copy, NetworkX bookkeeping) is NOT topology. Phase A's
     # export.to_json persists graphify_profile there; the on-disk graph then has
@@ -543,53 +636,32 @@ def _topology_from_graph(G) -> dict:
     return data
 
 
-def _existing_is_multigraph(graph_data: dict) -> bool:
-    """Return True when an on-disk ``graph.json`` payload is a MultiDiGraph.
+def _existing_graph_type(graph_data: dict) -> GraphType:
+    """Require the complete class declaration needed before a stateful write.
 
-    Mirrors :func:`graphify.graph_loader.load_graph`'s detection so an
-    incremental ``_rebuild_code`` rebuilds with the SAME graph class the file
-    was saved as. Without inheriting this flag, the rebuild would re-emit a
-    simple ``DiGraph`` whose serialized ``graph.json`` declares ``multigraph``
-    unset — a deferred silent fallback: the preserved parallel-edge *records*
-    survive the write, but the next ``load_graph`` collapses them to one edge
-    per pair (the PR 7 go/no-go violation).
-
-    The top-level ``multigraph`` boolean is authoritative WHENEVER IT IS PRESENT,
-    exactly as ``load_graph`` treats it — including an explicit ``false``. A
-    serialized ``graphify_profile.graph_type == "multidigraph"`` is consulted
-    only when the top-level flag is ABSENT, rescuing a graph whose
-    profile-stamping writer omitted it so a multigraph is never misread as
-    simple. Letting a stale profile override an explicit ``multigraph: false``
-    would make this helper disagree with the loader on the same file — the
-    rebuild would emit a MultiDiGraph for a payload every reader loads as a
-    DiGraph.
+    Read-only consumers deliberately use ``DecodeMode.READ_ONLY_LEGACY`` and
+    may rescue a missing legacy flag. A rebuild cannot safely overwrite state
+    until both flags and the profile agree, so this boundary is stricter.
     """
-    if not isinstance(graph_data, dict):
-        return False
-    if "multigraph" in graph_data:
-        return graph_data["multigraph"] is True
-    graph_meta = graph_data.get("graph")
-    if isinstance(graph_meta, dict):
-        from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
+    from graphify.graph_state import resolve_graph_type_fields
 
-        profile = graph_meta.get(GRAPHIFY_PROFILE_KEY)
-        if isinstance(profile, dict) and profile.get("graph_type") == "multidigraph":
-            return True
-    return False
+    return resolve_graph_type_fields(
+        graph_data,
+        require_explicit=True,
+        allow_direction_rescue=True,
+    )
 
 
-def _existing_graph_type(graph_data: dict) -> str:
-    """Return the graph class declared by an existing serialized payload."""
-    if _existing_is_multigraph(graph_data):
-        return "multidigraph"
-    if isinstance(graph_data, dict) and graph_data.get("directed") is True:
-        return "digraph"
-    return "simple"
-
-
-def _stamp_graph_type(graph_data: dict, graph_type: str) -> None:
+def _stamp_graph_type(
+    graph_data: dict,
+    graph_type: GraphType,
+    *,
+    semantic_node_id_schema: str,
+) -> None:
     """Persist an explicit loader profile on raw no-cluster output."""
     from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
+    from graphify.ids import AST_NODE_ID_SCHEMA_PROFILE_KEY, CURRENT_AST_NODE_ID_SCHEMA
+    from graphify.semantic_schema import SEMANTIC_NODE_ID_SCHEMA_PROFILE_KEY
 
     graph_data["multigraph"] = graph_type == "multidigraph"
     graph_data["directed"] = graph_type in {"digraph", "multidigraph"}
@@ -599,6 +671,8 @@ def _stamp_graph_type(graph_data: dict, graph_type: str) -> None:
     profile = graph_meta.get(GRAPHIFY_PROFILE_KEY)
     profile = dict(profile) if isinstance(profile, dict) else {}
     profile["graph_type"] = graph_type
+    profile[AST_NODE_ID_SCHEMA_PROFILE_KEY] = CURRENT_AST_NODE_ID_SCHEMA
+    profile[SEMANTIC_NODE_ID_SCHEMA_PROFILE_KEY] = semantic_node_id_schema
     graph_meta[GRAPHIFY_PROFILE_KEY] = profile
     graph_data["graph"] = graph_meta
 
@@ -618,10 +692,8 @@ def _check_shrink(
 
     The shrink-guard exists to catch SILENT shrinkage from failed extraction
     chunks (a half-written semantic pass leaving thousands of nodes
-    unaccounted for). When ``had_explicit_deletions`` is True, the caller
-    has declared which files were removed (e.g. the post-commit hook saw
-    a ``D`` in ``git diff --name-only``) and a smaller graph is the expected
-    outcome — skip the guard so legitimate refactors don't require ``--force``.
+    unaccounted for). ``had_explicit_deletions`` is retained for call-site
+    compatibility, but it never exempts losses from unrelated sources.
 
     ``rebuilt_sources`` (when given) is the set of source files re-extracted this
     run. A net shrink is legitimate — not a failed chunk — when every *lost* node
@@ -651,7 +723,7 @@ def _check_shrink(
             file=sys.stderr,
         )
         return False
-    if force or not existing_data or had_explicit_deletions:
+    if force or not existing_data:
         return True
     existing_nodes = existing_data.get("nodes", [])
     new_nodes = new_data.get("nodes", [])
@@ -685,10 +757,6 @@ def _report_for_compare(report_text: str) -> str:
     return re.sub(r"^- Built from commit: `[^`]+`\n?", "", report_text, flags=re.MULTILINE)
 
 
-def _json_text(data: dict) -> str:
-    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-
-
 def _is_foreign_absolute_path(path: str) -> bool:
     """Return whether ``path`` is absolute only under another host convention."""
     return is_absolute_path(path) and not Path(path).is_absolute()
@@ -706,11 +774,196 @@ def _missing_local_source(source_file: object, *roots: Path) -> bool:
         return False
 
     path = Path(source).expanduser()
-    known_extensions = CODE_EXTENSIONS | DOC_EXTENSIONS | PAPER_EXTENSIONS | IMAGE_EXTENSIONS
-    if not path.is_absolute() and path.suffix.lower() not in known_extensions:
-        return False
     candidates = [path] if path.is_absolute() else [root / path for root in roots]
     return bool(candidates) and not any(candidate.exists() for candidate in candidates)
+
+
+def _identity_state_blocks_rebuild(output_dir: Path, *, full_ast_rebuild: bool) -> bool:
+    """Refuse identity state that this rebuild cannot migrate losslessly."""
+    graph_path = output_dir / "graph.json"
+    if not graph_path.is_file():
+        return False
+    try:
+        from graphify.graph_state import GraphStateError, read_graph_state_payload
+        from graphify.update_state import UpdateStateError, require_identity_schemas
+
+        payload = read_graph_state_payload(graph_path)
+        require_identity_schemas(
+            payload,
+            allow_unmarked_legacy_ast_ids=full_ast_rebuild,
+        )
+    except UpdateStateError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return True
+    except (GraphStateError, OSError, UnicodeError, ValueError) as exc:
+        print(f"error: existing graph state is unreadable: {exc}", file=sys.stderr)
+        return True
+    return False
+
+
+def _semantic_schema_for_ast_rebuild(existing: dict) -> str:
+    """Preserve semantic identity honestly while only the AST layer is rebuilt."""
+    from graphify.semantic_schema import LEGACY_SEMANTIC_NODE_ID_SCHEMA, PROMPT_SCHEMA_VERSION
+    from graphify.update_state import require_identity_schemas
+
+    if not existing:
+        return PROMPT_SCHEMA_VERSION
+    schemas = require_identity_schemas(existing, allow_unmarked_legacy_ast_ids=True)
+    if schemas.semantic is not None:
+        return schemas.semantic
+    records = [
+        *_record_list(existing, "nodes"),
+        *_record_list(existing, "links", "edges"),
+    ]
+    if _record_list(existing, "hyperedges") or any(
+        record.get("_origin") != "ast" for record in records
+    ):
+        return LEGACY_SEMANTIC_NODE_ID_SCHEMA
+    return PROMPT_SCHEMA_VERSION
+
+
+def _legacy_ast_reference_remap(
+    existing_nodes: list[dict],
+    fresh_nodes: list[dict],
+    carried_edges: list[dict],
+    carried_hyperedges: list[dict],
+    *,
+    root: Path,
+) -> dict[object, object]:
+    """Map referenced legacy AST IDs only when stable source identity is unique."""
+    from collections import defaultdict
+
+    from graphify.build import _norm_source_file, _stable_identity_component
+
+    fresh_ids = {node.get("id") for node in fresh_nodes}
+    old_ast = {
+        node.get("id"): node
+        for node in existing_nodes
+        if node.get("_origin") == "ast" and node.get("id") is not None
+    }
+    referenced: set[object] = set()
+    for edge in carried_edges:
+        if edge.get("_origin") == "ast":
+            continue
+        for field in ("source", "target", "_src", "_tgt"):
+            value = edge.get(field)
+            try:
+                if value in old_ast and value not in fresh_ids:
+                    referenced.add(value)
+            except TypeError:
+                continue
+    for hyperedge in carried_hyperedges:
+        member_values: list[object] = []
+        for field in ("nodes", "members", "node_ids"):
+            raw_members = hyperedge.get(field)
+            if isinstance(raw_members, list):
+                member_values = raw_members
+                break
+        for value in member_values:
+            try:
+                if value in old_ast and value not in fresh_ids:
+                    referenced.add(value)
+            except TypeError:
+                continue
+    if not referenced:
+        return {}
+
+    def _key(node: dict, *, include_location: bool) -> tuple[str | None, ...]:
+        source = node.get("source_file")
+        normalized_source = (
+            _norm_source_file(str(source), str(root)) if isinstance(source, str) else source
+        )
+        base: tuple[str | None, ...] = (
+            _stable_identity_component(normalized_source),
+            _stable_identity_component(node.get("label")),
+            _stable_identity_component(node.get("type")),
+            _stable_identity_component(node.get("file_type")),
+            _stable_identity_component(node.get("ecosystem")),
+        )
+        return (
+            (*base, _stable_identity_component(node.get("source_location")))
+            if include_location
+            else base
+        )
+
+    indexes: dict[bool, dict[tuple[object, ...], set[object]]] = {}
+    for include_location in (True, False):
+        index: dict[tuple[object, ...], set[object]] = defaultdict(set)
+        for node in fresh_nodes:
+            if node.get("_origin") == "ast" and node.get("id") is not None:
+                index[_key(node, include_location=include_location)].add(node["id"])
+        indexes[include_location] = index
+
+    remap: dict[object, object] = {}
+    unresolved: list[object] = []
+    for old_id in sorted(referenced, key=repr):
+        old_node = old_ast[old_id]
+        target: object | None = None
+        for include_location in (True, False):
+            candidates = indexes[include_location].get(
+                _key(old_node, include_location=include_location),
+                set(),
+            )
+            if len(candidates) == 1:
+                target = next(iter(candidates))
+                break
+            if len(candidates) > 1:
+                break
+        if target is None:
+            unresolved.append(old_id)
+        else:
+            remap[old_id] = target
+    if unresolved:
+        raise ValueError(
+            f"{len(unresolved)} referenced legacy AST node ID(s) could not be mapped "
+            "uniquely; run `graphify update --remap` for a full semantic rebuild"
+        )
+
+    for edge in carried_edges:
+        for field in ("source", "target", "_src", "_tgt"):
+            if field not in edge:
+                continue
+            value = edge.get(field)
+            try:
+                edge[field] = remap.get(value, value)
+            except TypeError:
+                continue
+    for hyperedge in carried_hyperedges:
+        for field in ("nodes", "members", "node_ids"):
+            raw_members = hyperedge.get(field)
+            if isinstance(raw_members, list):
+                hyperedge[field] = [remap.get(member, member) for member in raw_members]
+    return remap
+
+
+def _filter_raw_dangling_edges(nodes: list[dict], edges: list[dict]) -> tuple[list[dict], int]:
+    """Drop fresh AST edges to external nodes and refuse loss of carried facts."""
+    from graphify.validate import is_hashable
+
+    live_ids = {
+        node.get("id") for node in nodes if isinstance(node, dict) and is_hashable(node.get("id"))
+    }
+    kept: list[dict] = []
+    skipped_ast = 0
+    for edge in edges:
+        if not isinstance(edge, dict):
+            raise ValueError("raw extraction emitted a non-object edge record")
+        source = edge.get("source")
+        target = edge.get("target")
+        endpoints_live = (
+            is_hashable(source)
+            and is_hashable(target)
+            and source in live_ids
+            and target in live_ids
+        )
+        if endpoints_live:
+            kept.append(edge)
+            continue
+        if edge.get("_origin") == "ast":
+            skipped_ast += 1
+            continue
+        raise ValueError("refusing to discard a preserved non-AST edge with a dangling endpoint")
+    return kept, skipped_ast
 
 
 def _rebuild_code(
@@ -718,7 +971,7 @@ def _rebuild_code(
     *,
     output_dir: Path | None = None,
     output_root: Path | None = None,
-    graph_type: str | None = None,
+    graph_type: GraphType | None = None,
     changed_paths: list[Path] | None = None,
     follow_symlinks: bool = False,
     force: bool = False,
@@ -729,9 +982,8 @@ def _rebuild_code(
 ) -> bool:
     """Re-run AST extraction + build + optional cluster + report for code files. No LLM needed.
 
-    When ``force`` is True the node-count safety check in ``to_json`` is bypassed
-    so the rebuilt graph overwrites graph.json even if it has fewer nodes.
-    Use this after refactors that legitimately delete code.
+    When ``force`` is True a verified non-empty shrink may replace a populated
+    graph. It does not imply a full scan or override the zero-node safety floor.
 
     When ``changed_paths`` is provided, only those files are re-extracted; nodes
     for unchanged files are preserved from the existing graph. Deleted paths
@@ -822,9 +1074,15 @@ def _rebuild_code(
                     _ack_pending(out, late_claims)
             return ok
 
+    if _identity_state_blocks_rebuild(out, full_ast_rebuild=changed_paths is None):
+        return False
+
     watch_root = watch_path.resolve()
     project_root = Path.cwd().resolve() if not watch_path.is_absolute() else watch_root
     report_root = _report_root_label(watch_path)
+    from graphify.semantic_schema import PROMPT_SCHEMA_VERSION
+
+    semantic_node_id_schema = PROMPT_SCHEMA_VERSION
     try:
         from graphify.extract import extract, _get_extractor
         from graphify.detect import detect, snapshot_source_hashes
@@ -833,7 +1091,6 @@ def _rebuild_code(
         from graphify.analyze import god_nodes, surprising_connections, suggest_questions
         from graphify.report import generate
         from graphify.export import to_json, to_html
-        from graphify.security import check_graph_file_size_cap
 
         detected = detect(watch_path, follow_symlinks=follow_symlinks)
         code_files = [Path(f) for f in detected["files"]["code"]]
@@ -844,7 +1101,7 @@ def _rebuild_code(
             if _get_extractor(p) is not None:
                 code_files.append(p)
 
-        if not code_files:
+        if not code_files and changed_paths is None:
             print("[graphify watch] No code files found - nothing to rebuild.")
             return False
 
@@ -858,8 +1115,20 @@ def _rebuild_code(
                 deleted_paths.add(_nsf(str(path), str(root)) or str(path))
 
         if changed_paths is not None:
+            from graphify.source_state import (
+                SourceState,
+                classify_changed_source,
+                destructive_source_state,
+            )
+
             code_set = {p.resolve() for p in code_files}
+            detected_set = {
+                Path(path).resolve() for paths in detected["files"].values() for path in paths
+            }
+            ignore_patterns = _load_graphifyignore(watch_root)
+            ignore_cache: dict[Path, bool] = {}
             wanted: list[Path] = []
+            semantic_pending = False
             change_root = Path.cwd().resolve()
             for raw in changed_paths:
                 candidates = _changed_path_candidates(
@@ -867,14 +1136,6 @@ def _rebuild_code(
                     change_root=change_root,
                     watch_root=watch_root,
                 )
-                tracked = next(
-                    (cand for cand in candidates if cand.exists() and cand in code_set), None
-                )
-                if tracked is not None:
-                    if tracked not in wanted:
-                        wanted.append(tracked)
-                    continue
-
                 existing_in_root = next(
                     (
                         cand
@@ -884,9 +1145,25 @@ def _rebuild_code(
                     None,
                 )
                 if existing_in_root is not None:
-                    # The path exists under the watched root but detect filtered
-                    # it out. Evict any stale nodes that still claim it.
-                    _add_deleted_source(existing_in_root)
+                    ignored = _is_ignored(
+                        existing_in_root,
+                        watch_root,
+                        ignore_patterns,
+                        _cache=ignore_cache,
+                    )
+                    state = classify_changed_source(
+                        existing_in_root,
+                        detected_existing=detected_set,
+                        extractable_ast=code_set,
+                        ignored=ignored,
+                    )
+                    if state is SourceState.CHANGED_AST:
+                        if existing_in_root not in wanted:
+                            wanted.append(existing_in_root)
+                    elif state is SourceState.SEMANTIC_REFRESH_PENDING:
+                        semantic_pending = True
+                    elif destructive_source_state(state):
+                        _add_deleted_source(existing_in_root)
                     continue
 
                 deleted_in_root = next(
@@ -897,6 +1174,8 @@ def _rebuild_code(
                     # File was deleted or renamed away inside the watched root.
                     # Evict preserved nodes that still claim this source path.
                     _add_deleted_source(deleted_in_root)
+            if semantic_pending:
+                _notify_only(watch_root, output_dir=out)
             if not wanted and not deleted_paths:
                 print("[graphify watch] No tracked code files in change set - skipping rebuild.")
                 return True
@@ -921,7 +1200,9 @@ def _rebuild_code(
             print(f"[graphify watch] Rebuild refused: {exc}", file=sys.stderr)
             return False
 
-        commit = _git_head()
+        from graphify.provenance import git_head
+
+        commit = git_head(watch_root)
         result = (
             extract(
                 extract_targets,
@@ -983,8 +1264,13 @@ def _rebuild_code(
         existing_graph_metadata: dict = {}
         if existing_graph.exists():
             try:
-                check_graph_file_size_cap(existing_graph)
-                existing = json.loads(existing_graph.read_text(encoding="utf-8"))
+                from graphify.graph_loader import load_graph_state_file
+                from graphify.graph_state import DecodeMode, encode_graph_state
+
+                existing_state = load_graph_state_file(
+                    existing_graph, mode=DecodeMode.MIGRATE_LEGACY
+                )
+                existing = encode_graph_state(existing_state)
                 existing_graph_data = existing
                 raw_graph_metadata = existing.get("graph")
                 if isinstance(raw_graph_metadata, dict):
@@ -995,12 +1281,29 @@ def _rebuild_code(
                     }
                 new_ast_ids = {n["id"] for n in result["nodes"]}
                 _relativize_source_files(existing, project_root)
+                existing_nodes = _record_list(existing, "nodes")
+                existing_links = _record_list(existing, "links", "edges")
+                existing_hyperedges_records = _record_list(existing, "hyperedges")
+                semantic_node_id_schema = _semantic_schema_for_ast_rebuild(existing)
+                if changed_paths is None:
+                    from graphify.update_state import require_identity_schemas
+
+                    identity_schemas = require_identity_schemas(
+                        existing,
+                        allow_unmarked_legacy_ast_ids=True,
+                    )
+                    if identity_schemas.ast is None:
+                        legacy_remap = _legacy_ast_reference_remap(
+                            existing_nodes,
+                            result["nodes"],
+                            existing_links,
+                            existing_hyperedges_records,
+                            root=project_root,
+                        )
+                        diagnostics = result.setdefault("graphify_identity_diagnostics", {})
+                        diagnostics["migrated_legacy_ast_references"] = len(legacy_remap)
                 evict_sources: set[str] = set(deleted_paths)
-                if changed_paths is not None:
-                    for p in extract_targets:
-                        for root in (project_root, watch_root):
-                            evict_sources.add(_nsf(str(p), str(root)) or str(p))
-                else:
+                if changed_paths is None:
                     # Full re-extraction: reconcile against current code files to
                     # evict nodes from files deleted since the last run (#1007).
                     # This must include semantic document sources: an AST-only
@@ -1008,11 +1311,6 @@ def _rebuild_code(
                     # record whose local source is gone keeps invalid graph data
                     # forever and can leave dangling hyperedges.
                     _root_str = str(project_root)
-                    current_sources = {
-                        _nsf(str(p.relative_to(project_root)), _root_str)
-                        for p in code_files
-                        if p.is_relative_to(project_root)
-                    }
                     detected_sources = {
                         _nsf(str(Path(path)), _root_str) or str(path)
                         for paths in detected["files"].values()
@@ -1048,11 +1346,7 @@ def _rebuild_code(
                                 return True
                         return False
 
-                    sourced_records = (
-                        list(existing.get("nodes", []))
-                        + list(existing.get("links", existing.get("edges", [])))
-                        + list(existing.get("hyperedges", []))
-                    )
+                    sourced_records = existing_nodes + existing_links + existing_hyperedges_records
                     for record in sourced_records:
                         if not isinstance(record, dict):
                             continue
@@ -1061,35 +1355,37 @@ def _rebuild_code(
                             continue
                         source_file = str(sf)
                         norm = _nsf(source_file, _root_str) or source_file
-                        stale_code_source = (
-                            Path(source_file).suffix.lower() in _CODE_EXTENSIONS
-                            and norm not in current_sources
-                            and not _is_foreign_absolute_path(source_file)
-                        )
-                        if (
-                            stale_code_source
-                            or _ignored_local_source(source_file, norm)
-                            or _missing_local_source(source_file, project_root, watch_root)
+                        if _ignored_local_source(source_file, norm) or _missing_local_source(
+                            source_file, project_root, watch_root
                         ):
                             evict_sources.add(source_file)
                             evict_sources.add(norm)
                             deleted_paths.add(norm)
-                # On a full re-extraction every code file is re-extracted, so
-                # new_ast_ids is the complete current AST set. Any AST-marked node
-                # missing from it is stale and must be dropped even if its source
-                # file still exists (a symbol removed from a surviving file, #1116).
-                # Gate on full_rebuild: in incremental mode an AST node from an
-                # unchanged file is legitimately absent from new_ast_ids. Semantic
-                # nodes lack the "_origin" marker, so they are never dropped here —
-                # only by the deleted-file eviction in evict_sources above.
-                full_rebuild = changed_paths is None
+                # AST records owned by successfully re-extracted sources are
+                # replaced. Semantic-owned records survive until a semantic pass
+                # succeeds; only ignored/proven-deleted sources authorize their
+                # destruction.
+                reextracted_sources: set[str] = set()
+                for path in extract_targets:
+                    for root in (project_root, watch_root):
+                        reextracted_sources.add(_nsf(str(path), str(root)) or str(path))
+
+                def _record_source_in(record: dict, sources: set[str]) -> bool:
+                    source = record.get("source_file")
+                    if not source:
+                        return False
+                    normalized = _nsf(str(source), str(project_root))
+                    return source in sources or (bool(normalized) and normalized in sources)
+
                 preserved_nodes: list[dict] = []
-                for node in existing.get("nodes", []):
+                for node in existing_nodes:
                     if node["id"] in new_ast_ids:
                         continue
-                    if full_rebuild and node.get("_origin") == "ast":
+                    if _record_source_in(node, evict_sources):
                         continue
-                    if evict_sources and node.get("source_file") in evict_sources:
+                    if node.get("_origin") == "ast" and (
+                        changed_paths is None or _record_source_in(node, reextracted_sources)
+                    ):
                         continue
                     if not node.get("label"):
                         label = node.get("name") or node.get("id")
@@ -1113,33 +1409,18 @@ def _rebuild_code(
                 # kept exactly as before, so cross-file edges that merely point at a
                 # re-extracted file (#1402 sourceless stubs / cross-file rewire) are
                 # not over-pruned — only edges the re-extracted file itself produced.
-                edge_evict_sources: set[str] = set(evict_sources)
-                for p in extract_targets:
-                    for _root in (project_root, watch_root):
-                        edge_evict_sources.add(_nsf(str(p), str(_root)) or str(p))
-                # #1521 hybrid scope. On a full rebuild `extract_targets` is EVERY
-                # code file, so the source_file eviction above would also drop
-                # semantic / LLM-inferred edges — but a CLI full rebuild is AST-only
-                # (the LLM pass is not re-run), so those edges are never re-supplied
-                # and would be silently lost forever (~15% of edges on the live
-                # graph). So on a full rebuild, only evict an edge the fresh AST pass
-                # can actually re-supply: one with no non-AST `_origin` marker whose
-                # BOTH endpoints are AST-origin nodes. A stale structural edge (a
-                # removed import between two surviving AST nodes) still evicts and
-                # re-appears only if it still exists; an edge marked non-AST, or
-                # touching a non-AST (document / rationale / concept / LLM) node, is
-                # preserved. Incremental mode is unchanged: the user edited that file,
-                # so its own edges go regardless of origin.
-                origin_by_id = {n["id"]: n.get("_origin") for n in existing.get("nodes", [])}
+                edge_evict_sources: set[str] = evict_sources | reextracted_sources
 
-                def _is_ast_node(nid: object) -> bool:
-                    return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
-
+                # An AST-only rebuild may replace only records the AST pass can
+                # re-supply. This rule applies equally to full and incremental
+                # rebuilds; semantic ownership is not invalidated merely because
+                # its source file changed.
                 def _edge_ast_resuppliable(e: dict) -> bool:
-                    origin = e.get("_origin")
-                    if origin is not None and origin != "ast":
-                        return False
-                    return _is_ast_node(e.get("source")) and _is_ast_node(e.get("target"))
+                    # Endpoint ownership is not producer ownership. Legacy and
+                    # unstamped relationships between AST nodes may have come from
+                    # an older semantic/curated producer and are not guaranteed to
+                    # be re-emitted by this AST-only rebuild.
+                    return e.get("_origin") == "ast"
 
                 def _edge_evicted(e: dict) -> bool:
                     if not edge_evict_sources:
@@ -1158,13 +1439,13 @@ def _rebuild_code(
                     )
                     if explicit_source_eviction:
                         return True
-                    if full_rebuild and not _edge_ast_resuppliable(e):
+                    if not _edge_ast_resuppliable(e):
                         return False
                     return True
 
                 preserved_edges = [
                     e
-                    for e in existing.get("links", existing.get("edges", []))
+                    for e in existing_links
                     if e.get("source") in all_ids
                     and e.get("target") in all_ids
                     and not _edge_evicted(e)
@@ -1173,7 +1454,7 @@ def _rebuild_code(
 
                 existing_hyperedges = _repair_hyperedge_file_node_aliases_from_records(
                     result["nodes"] + preserved_nodes,
-                    existing.get("hyperedges", []),
+                    existing_hyperedges_records,
                 )
                 preserved_hyperedges: list[dict] = []
                 for hyperedge in existing_hyperedges:
@@ -1195,10 +1476,10 @@ def _rebuild_code(
                         )
                     if not isinstance(members, list):
                         continue
+                    from graphify.validate import is_hashable
+
                     surviving_members = [
-                        member
-                        for member in members
-                        if isinstance(member, str) and member in all_ids
+                        member for member in members if is_hashable(member) and member in all_ids
                     ]
                     surviving_members = list(dict.fromkeys(surviving_members))
                     if len(surviving_members) < 2:
@@ -1213,6 +1494,11 @@ def _rebuild_code(
                     preserved_hyperedges.append(hyperedge)
 
                 result = {
+                    **{
+                        key: value
+                        for key, value in result.items()
+                        if key not in {"nodes", "edges", "hyperedges"}
+                    },
                     "nodes": result["nodes"] + preserved_nodes,
                     "edges": result["edges"] + preserved_edges,
                     "hyperedges": preserved_hyperedges,
@@ -1226,7 +1512,9 @@ def _rebuild_code(
                 )
                 return False
 
-        resolved_graph_type = graph_type or _existing_graph_type(existing_graph_data)
+        resolved_graph_type = graph_type or (
+            _existing_graph_type(existing_graph_data) if existing_graph_data else "simple"
+        )
 
         _relativize_source_files(result, project_root)
         # Source files re-extracted this run — their symbol sets may legitimately
@@ -1253,31 +1541,77 @@ def _rebuild_code(
             # counts diverge across build modes (#1317).
             from graphify.build import dedupe_edges as _dedupe_edges, dedupe_nodes as _dedupe_nodes
 
+            raw_nodes = _dedupe_nodes(result.get("nodes", []))
+            try:
+                raw_edges, skipped_external_ast_edges = _filter_raw_dangling_edges(
+                    raw_nodes,
+                    result.get("edges", []),
+                )
+            except ValueError as exc:
+                print(f"[graphify] error: {exc}", file=sys.stderr)
+                return False
+            if skipped_external_ast_edges:
+                diagnostics = result.setdefault("graphify_identity_diagnostics", {})
+                diagnostics["skipped_external_ast_edges"] = skipped_external_ast_edges
+
             candidate_graph_data = {
-                **{k: v for k, v in result.items() if k not in ("edges", "nodes")},
-                "nodes": _dedupe_nodes(result.get("nodes", [])),
+                **{
+                    k: v
+                    for k, v in result.items()
+                    if k not in ("edges", "nodes", "input_tokens", "output_tokens")
+                },
+                "nodes": raw_nodes,
                 # Multigraph keeps parallel edges; only collapse for simple graphs (#1317).
                 "links": (
-                    result.get("edges", [])
-                    if resolved_graph_type == "multidigraph"
-                    else _dedupe_edges(result.get("edges", []))
+                    raw_edges if resolved_graph_type == "multidigraph" else _dedupe_edges(raw_edges)
                 ),
             }
-            if existing_graph_metadata:
-                candidate_graph_data["graph"] = existing_graph_metadata
+            generated_graph_metadata = candidate_graph_data.get("graph", {})
+            if not isinstance(generated_graph_metadata, dict):
+                generated_graph_metadata = {}
+            from graphify.graph_state import merge_graph_metadata
+
+            candidate_graph_data["graph"] = merge_graph_metadata(
+                existing_graph_metadata,
+                generated_graph_metadata,
+                target_type=resolved_graph_type,
+            )
+            if commit:
+                candidate_graph_data["built_at_commit"] = commit
+            else:
+                candidate_graph_data.pop("built_at_commit", None)
             # The no-cluster path writes raw merged extraction JSON directly (it
             # never goes through build_from_json/to_json), so it would otherwise
             # emit a graph.json with no multigraph flag — the same deferred
             # collapse as the clustered path. Stamp the resolved class explicitly
             # so every rewrite reloads with the same graph semantics. Preserved
             # multigraph records keep their key; new AST edges receive one on load.
-            _stamp_graph_type(candidate_graph_data, resolved_graph_type)
-            candidate_graph_text = _json_text(candidate_graph_data)
+            _stamp_graph_type(
+                candidate_graph_data,
+                resolved_graph_type,
+                semantic_node_id_schema=semantic_node_id_schema,
+            )
+            from graphify.graph_state import (
+                DecodeMode,
+                decode_graph_state,
+                encode_graph_state,
+            )
+
+            candidate_state = decode_graph_state(
+                candidate_graph_data,
+                mode=DecodeMode.MIGRATE_LEGACY,
+            )
+            candidate_graph_data = encode_graph_state(candidate_state)
             same_graph = False
+            same_content = False
             if existing_graph.exists():
                 try:
-                    check_graph_file_size_cap(existing_graph)
-                    existing_payload = json.loads(existing_graph.read_text(encoding="utf-8"))
+                    from graphify.graph_loader import load_graph_state_file
+                    from graphify.graph_state import DecodeMode, encode_graph_state
+
+                    existing_payload = encode_graph_state(
+                        load_graph_state_file(existing_graph, mode=DecodeMode.MIGRATE_LEGACY)
+                    )
                     same_graph = json.dumps(
                         _canonical_graph_for_compare(existing_payload),
                         sort_keys=True,
@@ -1287,10 +1621,49 @@ def _rebuild_code(
                         sort_keys=True,
                         ensure_ascii=False,
                     )
+                    same_content = json.dumps(
+                        _canonical_unclustered_graph_for_compare(existing_payload),
+                        sort_keys=True,
+                        ensure_ascii=False,
+                    ) == json.dumps(
+                        _canonical_unclustered_graph_for_compare(candidate_graph_data),
+                        sort_keys=True,
+                        ensure_ascii=False,
+                    )
                 except Exception:
                     same_graph = False
+                    same_content = False
+            if not same_content:
+                # A changed unclustered graph cannot retain membership claims
+                # from the previous topology. Readers deliberately fall back to
+                # these attributes when the analysis sidecar is absent.
+                candidate_nodes = candidate_graph_data.get("nodes")
+                if not isinstance(candidate_nodes, list) or any(
+                    not isinstance(node, dict) for node in candidate_nodes
+                ):
+                    raise ValueError("candidate graph nodes must be a list of objects")
+                for node in candidate_nodes:
+                    node.pop("community", None)
+                    node.pop("community_name", None)
+                candidate_state = decode_graph_state(
+                    candidate_graph_data,
+                    mode=DecodeMode.STRICT_CURRENT,
+                )
+                candidate_graph_data = encode_graph_state(candidate_state)
+            analysis_path = out / ".graphify_analysis.json"
+            report_path = out / "GRAPH_REPORT.md"
+            graph_html_path = out / "graph.html"
+            callflow_files = list(out.glob("*-callflow.html"))
             with FileStateTransaction(
-                [existing_graph, out / "manifest.json", out / ".graphify_root"]
+                [
+                    existing_graph,
+                    analysis_path,
+                    report_path,
+                    graph_html_path,
+                    *callflow_files,
+                    out / "manifest.json",
+                    out / ".graphify_root",
+                ]
             ) as state_transaction:
                 if not same_graph:
                     if not _check_shrink(
@@ -1302,9 +1675,18 @@ def _rebuild_code(
                     ):
                         return False
                     from graphify.export import backup_if_protected as _backup
+                    from graphify.persistence import publish_graph_state
 
                     _backup(out, transaction=state_transaction)
-                    atomic_write_text(existing_graph, candidate_graph_text)
+                    publish_graph_state(existing_graph, candidate_state)
+                    if not same_content:
+                        for derived_path in (
+                            analysis_path,
+                            report_path,
+                            graph_html_path,
+                            *callflow_files,
+                        ):
+                            derived_path.unlink(missing_ok=True)
 
                 from graphify.detect import save_manifest
 
@@ -1326,24 +1708,27 @@ def _rebuild_code(
                     "[graphify watch] No code-graph changes detected (--no-cluster); outputs left untouched."
                 )
             else:
+                candidate_nodes = _record_list(candidate_graph_data, "nodes")
+                candidate_links = _record_list(candidate_graph_data, "links", "edges")
                 print(
                     "[graphify watch] Rebuilt (no clustering): "
-                    f"{len(candidate_graph_data.get('nodes', []))} nodes, "
-                    f"{len(candidate_graph_data.get('links', []))} edges"
+                    f"{len(candidate_nodes)} nodes, "
+                    f"{len(candidate_links)} edges"
                 )
                 print(f"[graphify watch] graph.json updated in {out}")
+                if same_content:
+                    print("[graphify watch] Analysis-relevant graph content is unchanged.")
+                else:
+                    print(
+                        "[graphify watch] Removed stale cluster-derived outputs; "
+                        "run `graphify cluster-only` to regenerate them."
+                    )
             return True
 
-        detection = {
-            "files": {
-                "code": [str(f) for f in code_files],
-                "document": [],
-                "paper": [],
-                "image": [],
-            },
-            "total_files": len(code_files),
-            "total_words": detected.get("total_words", 0),
-        }
+        # The report describes the detected corpus represented by the merged
+        # graph, not only the AST subset rebuilt in this pass. Keeping the full
+        # detection record also keeps file and word totals on one predicate.
+        detection = dict(detected)
 
         # Rebuild with the resolved saved class. MultiDiGraph records retain their
         # keys, and directed simple graphs remain directed across the write/load
@@ -1354,8 +1739,33 @@ def _rebuild_code(
             directed=resolved_graph_type == "digraph",
             multigraph=saved_is_multigraph,
         )
-        if existing_graph_metadata:
-            G.graph.update(existing_graph_metadata)
+        from graphify.graph_state import merge_graph_metadata
+
+        fresh_graph_metadata = dict(G.graph)
+        fresh_hyperedges = fresh_graph_metadata.get("hyperedges")
+        G.graph.clear()
+        merged_graph_metadata = merge_graph_metadata(
+            existing_graph_metadata,
+            fresh_graph_metadata,
+            target_type=resolved_graph_type,
+        )
+        for generated_key in (
+            "graphify_identity_diagnostics",
+            "graphify_multigraph_diagnostics",
+        ):
+            if generated_key in fresh_graph_metadata:
+                merged_graph_metadata[generated_key] = fresh_graph_metadata[generated_key]
+        if isinstance(fresh_hyperedges, list):
+            merged_graph_metadata["hyperedges"] = fresh_hyperedges
+        G.graph.update(merged_graph_metadata)
+        from graphify.ids import AST_NODE_ID_SCHEMA_PROFILE_KEY, CURRENT_AST_NODE_ID_SCHEMA
+        from graphify.semantic_schema import SEMANTIC_NODE_ID_SCHEMA_PROFILE_KEY
+
+        generated_profile = G.graph.get("graphify_profile")
+        generated_profile = dict(generated_profile) if isinstance(generated_profile, dict) else {}
+        generated_profile[AST_NODE_ID_SCHEMA_PROFILE_KEY] = CURRENT_AST_NODE_ID_SCHEMA
+        generated_profile[SEMANTIC_NODE_ID_SCHEMA_PROFILE_KEY] = semantic_node_id_schema
+        G.graph["graphify_profile"] = generated_profile
         candidate_topology = _topology_from_graph(G)
         if existing_graph_data:
             try:
@@ -1370,6 +1780,17 @@ def _rebuild_code(
                 )
             except Exception:
                 same_topology = False
+            if same_topology:
+                same_topology = existing_graph_data.get("built_at_commit") == commit
+            if same_topology:
+                existing_metadata = _canonical_graph_for_compare(existing_graph_data).get("graph")
+                candidate_metadata = _canonical_graph_for_compare(candidate_topology).get("graph")
+                same_topology = existing_metadata == candidate_metadata
+            if same_topology:
+                same_topology = _analysis_matches_graph(
+                    out / ".graphify_analysis.json",
+                    existing_graph_data,
+                )
             if same_topology:
                 with FileStateTransaction(
                     [out / "manifest.json", out / ".graphify_root"]
@@ -1434,6 +1855,15 @@ def _rebuild_code(
             learning=_llfr(out / "graph.json"),
         )
         report_path = out / "GRAPH_REPORT.md"
+        analysis_path = out / ".graphify_analysis.json"
+        analysis = {
+            "built_at_commit": commit,
+            "communities": {str(k): v for k, v in communities.items()},
+            "cohesion": {str(k): v for k, v in cohesion.items()},
+            "gods": gods,
+            "surprises": surprises,
+            "questions": questions,
+        }
         labels_json = (
             json.dumps({str(k): v for k, v in sorted(labels.items())}, ensure_ascii=False, indent=2)
             + "\n"
@@ -1450,13 +1880,28 @@ def _rebuild_code(
         json_written = to_json(G, communities, str(graph_tmp), force=True, built_at_commit=commit)
         if not json_written:
             return False
+        from graphify.graph_loader import load_graph_state_file
+        from graphify.graph_state import DecodeMode
+
+        candidate_state = load_graph_state_file(
+            graph_tmp,
+            mode=DecodeMode.STRICT_CURRENT,
+        )
         candidate_graph_data = json.loads(graph_tmp.read_text(encoding="utf-8"))
+        from graphify.graph_state import graph_analysis_fingerprint as _graph_analysis_fingerprint
+
+        analysis["graph_fingerprint"] = _graph_analysis_fingerprint(candidate_state)
+        analysis_json = json.dumps(analysis, ensure_ascii=False, indent=2)
         same_graph = False
         same_report = False
         if existing_graph.exists():
             try:
-                check_graph_file_size_cap(existing_graph)
-                existing_payload = json.loads(existing_graph.read_text(encoding="utf-8"))
+                from graphify.graph_loader import load_graph_state_file
+                from graphify.graph_state import DecodeMode, encode_graph_state
+
+                existing_payload = encode_graph_state(
+                    load_graph_state_file(existing_graph, mode=DecodeMode.MIGRATE_LEGACY)
+                )
                 same_graph = json.dumps(
                     _canonical_graph_for_compare(existing_payload),
                     sort_keys=True,
@@ -1471,11 +1916,13 @@ def _rebuild_code(
         if report_path.exists():
             old_report = report_path.read_text(encoding="utf-8")
             same_report = _report_for_compare(old_report) == _report_for_compare(report)
-        no_change = same_graph and same_report
+        same_analysis = _analysis_matches_graph(analysis_path, candidate_graph_data)
+        no_change = same_graph and same_report and same_analysis
         with FileStateTransaction(
             [
                 existing_graph,
                 report_path,
+                analysis_path,
                 labels_file,
                 out / "manifest.json",
                 out / ".graphify_root",
@@ -1498,11 +1945,15 @@ def _rebuild_code(
                 ):
                     return False
                 from graphify.export import backup_if_protected as _backup
+                from graphify.persistence import publish_graph_state
 
                 _backup(out, transaction=state_transaction)
-                graph_tmp.replace(existing_graph)
+                publish_graph_state(existing_graph, candidate_state)
+                graph_tmp.unlink()
                 atomic_write_text(report_path, report)
                 atomic_write_text(labels_file, labels_json)
+            if not no_change:
+                atomic_write_text(analysis_path, analysis_json)
 
             from graphify.detect import save_manifest
 

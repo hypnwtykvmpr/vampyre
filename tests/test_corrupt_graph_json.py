@@ -8,6 +8,8 @@ manual edit) must raise a clear RuntimeError with recovery guidance at each.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from graphify.build import build_merge
@@ -45,7 +47,17 @@ def test_valid_graph_still_loads(tmp_path):
     """Happy path unchanged: a well-formed graph.json loads without raising."""
     p = tmp_path / "graph.json"
     p.write_text(
-        '{"nodes": [{"id": "a", "label": "a", "file_type": "code"}], "edges": []}',
+        json.dumps(
+            {
+                "schema_version": 1,
+                "directed": False,
+                "multigraph": False,
+                "graph": {"graphify_profile": {"graph_type": "simple"}},
+                "nodes": [{"id": "a", "label": "a", "file_type": "code"}],
+                "links": [],
+                "hyperedges": [],
+            }
+        ),
         encoding="utf-8",
     )
     # none of these should raise

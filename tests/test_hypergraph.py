@@ -8,6 +8,7 @@ from pathlib import Path
 import networkx as nx
 
 from graphify.build import build_from_json
+from graphify.ids import make_id
 from graphify.export import attach_hyperedges, to_json
 from graphify.report import generate
 
@@ -85,13 +86,14 @@ def test_build_from_json_relativizes_hyperedge_source_file(tmp_path):
     extraction = {
         "nodes": [
             {"id": "a", "label": "A", "file_type": "document", "source_file": str(abs_doc)},
+            {"id": "b", "label": "B", "file_type": "document", "source_file": str(abs_doc)},
         ],
         "edges": [],
         "hyperedges": [
             {
                 "id": "arch",
                 "label": "Architecture",
-                "nodes": ["a"],
+                "nodes": ["a", "b"],
                 "relation": "participate_in",
                 "confidence": "INFERRED",
                 "confidence_score": 0.75,
@@ -124,12 +126,14 @@ def test_build_from_json_missing_hyperedges_key():
 
 def test_attach_hyperedges_adds_new():
     G = nx.Graph()
+    G.add_nodes_from(["A", "B", "C"])
     attach_hyperedges(G, [{"id": "auth_flow", "label": "Auth Flow", "nodes": ["A", "B", "C"]}])
     assert len(G.graph["hyperedges"]) == 1
 
 
 def test_attach_hyperedges_deduplicates():
     G = nx.Graph()
+    G.add_nodes_from(["A", "B", "C"])
     h = {"id": "auth_flow", "label": "Auth Flow", "nodes": ["A", "B", "C"]}
     attach_hyperedges(G, [h])
     attach_hyperedges(G, [h])  # second call with same id should not duplicate
@@ -138,6 +142,7 @@ def test_attach_hyperedges_deduplicates():
 
 def test_attach_hyperedges_multiple_different_ids():
     G = nx.Graph()
+    G.add_nodes_from(["A", "B", "C", "D", "E", "F"])
     attach_hyperedges(
         G,
         [
@@ -148,10 +153,14 @@ def test_attach_hyperedges_multiple_different_ids():
     assert len(G.graph["hyperedges"]) == 2
 
 
-def test_attach_hyperedges_skips_entry_without_id():
+def test_attach_hyperedges_assigns_deterministic_id():
     G = nx.Graph()
+    G.add_nodes_from(["A", "B", "C"])
     attach_hyperedges(G, [{"label": "No ID", "nodes": ["A", "B", "C"]}])
-    assert G.graph.get("hyperedges", []) == []
+    first = G.graph["hyperedges"][0]["id"]
+    attach_hyperedges(G, [{"label": "No ID", "nodes": ["A", "B", "C"]}])
+    assert first.startswith("hyperedge:v1:")
+    assert G.graph["hyperedges"] == [{"id": first, "label": "No ID", "nodes": ["A", "B", "C"]}]
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +173,7 @@ def test_to_json_includes_hyperedges():
     communities = {0: list(G.nodes())}
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         path = f.name
+    Path(path).unlink()
     to_json(G, communities, path)
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     assert "hyperedges" in data
@@ -177,6 +187,7 @@ def test_to_json_hyperedges_empty_when_none():
     communities = {0: list(G.nodes())}
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         path = f.name
+    Path(path).unlink()
     to_json(G, communities, path)
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     assert "hyperedges" in data
@@ -194,6 +205,7 @@ def test_hyperedges_roundtrip_via_json_file():
     communities = {0: list(G.nodes())}
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         path = f.name
+    Path(path).unlink()
     to_json(G, communities, path)
 
     # Reload the JSON as if build_from_json were called on it
@@ -358,7 +370,7 @@ def test_build_rekeys_alias_keyed_hyperedge_members():
     }
     G = build_from_json(extraction)
     he = G.graph["hyperedges"][0]
-    assert he["nodes"] == ["pkg_mod_foo", "pkg_mod_bar"]
+    assert he["nodes"] == sorted([make_id("pkg_mod", "foo"), make_id("pkg_mod", "bar")])
 
 
 def test_build_repoints_hyperedge_members_after_ghost_merge():
@@ -379,13 +391,21 @@ def test_build_repoints_hyperedge_members_after_ghost_merge():
                 "source_file": "src/app.py",
                 "source_location": "L2",
             },
+            {
+                "id": "src_app_sink",
+                "label": "sink",
+                "file_type": "code",
+                "source_file": "src/app.py",
+                "source_location": "L3",
+                "_origin": "ast",
+            },
         ],
         "edges": [],
         "hyperedges": [
             {
                 "id": "render_flow",
                 "label": "Render flow",
-                "nodes": ["semantic_render"],
+                "nodes": ["semantic_render", "src_app_sink"],
                 "source_file": "src/app.py",
             }
         ],
@@ -393,8 +413,8 @@ def test_build_repoints_hyperedge_members_after_ghost_merge():
 
     graph = build_from_json(extraction)
 
-    assert set(graph.nodes) == {"src_app_render"}
-    assert graph.graph["hyperedges"][0]["nodes"] == ["src_app_render"]
+    assert set(graph.nodes) == {"src_app_render", "src_app_sink"}
+    assert graph.graph["hyperedges"][0]["nodes"] == ["src_app_render", "src_app_sink"]
 
 
 def test_build_warns_once_per_aliased_hyperedge(capsys):

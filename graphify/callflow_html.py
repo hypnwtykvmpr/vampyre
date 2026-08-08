@@ -234,7 +234,7 @@ def normalize_edge(raw: dict, index: int) -> dict | None:
 
 
 def _node_link_payload(data: dict[str, object]) -> tuple[list, list] | None:
-    """Read current graphify graph.json via NetworkX's node-link parser."""
+    """Read a generic NetworkX-compatible payload outside Graphify state."""
     if not isinstance(data.get("nodes"), list):
         return None
     if not isinstance(data.get("links"), list) and not isinstance(data.get("edges"), list):
@@ -274,6 +274,15 @@ def _node_link_payload(data: dict[str, object]) -> tuple[list, list] | None:
     return nodes, edges
 
 
+def _is_canonical_graphify_payload(data: Mapping[str, object]) -> bool:
+    graph_metadata = data.get("graph")
+    return (
+        "schema_version" in data
+        or "graphify_profile" in data
+        or (isinstance(graph_metadata, Mapping) and "graphify_profile" in graph_metadata)
+    )
+
+
 def load_graph(path: str | Path) -> tuple[list[dict], list[dict], list, dict[str, object]]:
     """Load graph.json. Returns normalized (nodes, edges, hyperedges, metadata)."""
     if path:
@@ -290,25 +299,54 @@ def load_graph(path: str | Path) -> tuple[list[dict], list[dict], list, dict[str
     graph_block = _string_keyed_mapping(data.get("graph")) or {}
     meta_block = _string_keyed_mapping(data.get("metadata")) or {}
 
-    node_link = _node_link_payload(data)
-    if node_link:
-        raw_nodes, raw_edges = node_link
+    if _is_canonical_graphify_payload(data):
+        from graphify.graph_loader import load_graph_state_file
+        from graphify.graph_state import DecodeMode, encode_graph_state
+
+        state = load_graph_state_file(path, mode=DecodeMode.READ_ONLY_LEGACY)
+        canonical = encode_graph_state(state)
+        raw_nodes = first_list(canonical.get("nodes"))
+        raw_edges = first_list(canonical.get("links"))
+        hyperedges = first_list(canonical.get("hyperedges"))
+        graph_block = _string_keyed_mapping(canonical.get("graph")) or {}
+        meta_block = {
+            key: value
+            for key, value in canonical.items()
+            if key
+            not in {
+                "schema_version",
+                "directed",
+                "multigraph",
+                "graph",
+                "nodes",
+                "links",
+                "hyperedges",
+                "graphify_state_diagnostics",
+            }
+        }
     else:
-        raw_nodes = first_list(
-            data.get("nodes"),
-            data.get("vertices"),
-            graph_block.get("nodes"),
-            graph_block.get("vertices"),
+        node_link = _node_link_payload(data)
+        if node_link:
+            raw_nodes, raw_edges = node_link
+        else:
+            raw_nodes = first_list(
+                data.get("nodes"),
+                data.get("vertices"),
+                graph_block.get("nodes"),
+                graph_block.get("vertices"),
+            )
+            raw_edges = first_list(
+                data.get("links"),
+                data.get("edges"),
+                graph_block.get("links"),
+                graph_block.get("edges"),
+            )
+        hyperedges = first_list(
+            data.get("hyperedges"),
+            graph_block.get("hyperedges"),
+            data.get("groups"),
+            graph_block.get("groups"),
         )
-        raw_edges = first_list(
-            data.get("links"), data.get("edges"), graph_block.get("links"), graph_block.get("edges")
-        )
-    hyperedges = first_list(
-        data.get("hyperedges"),
-        graph_block.get("hyperedges"),
-        data.get("groups"),
-        graph_block.get("groups"),
-    )
 
     nodes = [normalize_node(n, i) for i, n in enumerate(raw_nodes) if isinstance(n, dict)]
     edges = []

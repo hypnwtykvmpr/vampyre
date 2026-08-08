@@ -403,7 +403,7 @@ from graphify.cluster import cluster, score_all
 from graphify.analyze import god_nodes, surprising_connections, suggest_questions
 from graphify.report import generate
 from graphify.export import backup_if_protected, to_json
-from graphify.persistence import FileStateTransaction, atomic_write_text
+from graphify.persistence import FileStateTransaction, atomic_write_text, output_state_lock
 from pathlib import Path
 
 extraction = json.loads(Path('.graphify_extract.json').read_text())
@@ -439,14 +439,17 @@ analysis = {
 graph_path = Path('graphify-out/graph.json')
 report_path = Path('graphify-out/GRAPH_REPORT.md')
 analysis_path = Path('.graphify_analysis.json')
-with FileStateTransaction([graph_path, report_path, analysis_path]) as transaction:
-    backup_if_protected(Path('graphify-out'), transaction=transaction)
-    if not to_json(G, communities, str(graph_path)):
-        print('ERROR: refused to shrink graphify-out/graph.json (fewer nodes than the existing graph). Run a full rebuild to be safe.')
-        raise SystemExit(1)
-    atomic_write_text(report_path, report)
-    atomic_write_text(analysis_path, json.dumps(analysis, indent=2))
-    transaction.commit()
+with output_state_lock(Path('graphify-out')) as lease:
+    if lease is None:
+        raise SystemExit('ERROR: could not acquire graph publication lock')
+    with FileStateTransaction([graph_path, report_path, analysis_path], lease=lease) as transaction:
+        backup_if_protected(Path('graphify-out'), transaction=transaction)
+        if not to_json(G, communities, str(graph_path)):
+            print('ERROR: refused to shrink graphify-out/graph.json (fewer nodes than the existing graph). Run a full rebuild to be safe.')
+            raise SystemExit(1)
+        atomic_write_text(report_path, report)
+        atomic_write_text(analysis_path, json.dumps(analysis, indent=2))
+        transaction.commit()
 print(f'Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges, {len(communities)} communities')
 "
 ```
@@ -468,7 +471,7 @@ from graphify.build import build_from_json
 from graphify.cluster import score_all
 from graphify.analyze import god_nodes, surprising_connections, suggest_questions
 from graphify.report import generate
-from graphify.persistence import FileStateTransaction, atomic_write_text
+from graphify.persistence import FileStateTransaction, atomic_write_text, output_state_lock
 from pathlib import Path
 
 extraction = json.loads(Path('.graphify_extract.json').read_text())
@@ -489,10 +492,13 @@ questions = suggest_questions(G, communities, labels)
 report = generate(G, communities, cohesion, labels, analysis['gods'], analysis['surprises'], detection, tokens, 'INPUT_PATH', suggested_questions=questions)
 report_path = Path('graphify-out/GRAPH_REPORT.md')
 labels_path = Path('.graphify_labels.json')
-with FileStateTransaction([report_path, labels_path]) as transaction:
-    atomic_write_text(report_path, report)
-    atomic_write_text(labels_path, json.dumps({str(k): v for k, v in labels.items()}))
-    transaction.commit()
+with output_state_lock(Path('graphify-out')) as lease:
+    if lease is None:
+        raise SystemExit('ERROR: could not acquire graph publication lock')
+    with FileStateTransaction([report_path, labels_path], lease=lease) as transaction:
+        atomic_write_text(report_path, report)
+        atomic_write_text(labels_path, json.dumps({str(k): v for k, v in labels.items()}))
+        transaction.commit()
 print('Report updated with community labels')
 "
 ```
@@ -690,20 +696,23 @@ from pathlib import Path
 from datetime import datetime, timezone
 from graphify.detect import save_manifest
 from graphify.paths import write_scan_root_marker
-from graphify.persistence import FileStateTransaction, acknowledge_pending_signal
+from graphify.persistence import FileStateTransaction, acknowledge_pending_signal, output_state_lock
 
 # Save manifest for --update
 detect = json.loads(Path('.graphify_detect.json').read_text())
 manifest_path = Path('graphify-out/manifest.json')
 marker_path = Path('graphify-out/.graphify_root')
-with FileStateTransaction([manifest_path, marker_path]) as transaction:
-    save_manifest(detect['files'], manifest_path=str(manifest_path), root='INPUT_PATH', expected_hashes=detect['_source_snapshot'])
-    write_scan_root_marker(marker_path, Path('INPUT_PATH'))
-    transaction.commit()
-generation_path = Path('graphify-out/.graphify_signal_generation')
-generation = generation_path.read_bytes() if generation_path.exists() else None
-acknowledge_pending_signal(Path('graphify-out/needs_update'), generation or None)
-generation_path.unlink(missing_ok=True)
+with output_state_lock(Path('graphify-out')) as lease:
+    if lease is None:
+        raise SystemExit('ERROR: could not acquire graph publication lock')
+    with FileStateTransaction([manifest_path, marker_path], lease=lease) as transaction:
+        save_manifest(detect['files'], manifest_path=str(manifest_path), root='INPUT_PATH', expected_hashes=detect['_source_snapshot'])
+        write_scan_root_marker(marker_path, Path('INPUT_PATH'))
+        transaction.commit()
+    generation_path = Path('graphify-out/.graphify_signal_generation')
+    generation = generation_path.read_bytes() if generation_path.exists() else None
+    acknowledge_pending_signal(Path('graphify-out/needs_update'), generation or None)
+    generation_path.unlink(missing_ok=True)
 
 # Update cumulative cost tracker
 extract = json.loads(Path('.graphify_extract.json').read_text())

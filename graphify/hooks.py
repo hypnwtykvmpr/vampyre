@@ -37,10 +37,10 @@ _PINNED='__PINNED_PYTHON__'
 if [ -n "$_PINNED" ] && [ -x "$_PINNED" ] && "$_PINNED" -c "$_GFY_PROBE" 2>/dev/null; then
     GRAPHIFY_PYTHON="$_PINNED"
 fi
-# Second probe: read graphify-out/.graphify_python (written by the skill and
+# Second probe: read the configured output's .graphify_python (written by the skill and
 # CLI; survives uv-tool reinstalls and is the same source the README documents).
 if [ -z "$GRAPHIFY_PYTHON" ]; then
-    _GFY_PYTHON_FILE="graphify-out/.graphify_python"
+    _GFY_PYTHON_FILE="${GRAPHIFY_OUT:-graphify-out}/.graphify_python"
     if [ -f "$_GFY_PYTHON_FILE" ]; then
         _FROM_FILE=$(cat "$_GFY_PYTHON_FILE" 2>/dev/null | tr -d '[:space:]')
         case "$_FROM_FILE" in
@@ -131,6 +131,11 @@ try:
     _context = resolve_update_context(output_dir=_configured_out)
     _root = _context.scan_root
     _out = _context.output_dir
+    _changed_abs = [(Path.cwd() / item).resolve() for item in changed]
+    # Graphify requires Python 3.10+, so pathlib.Path.is_relative_to is part of
+    # every supported runtime (it was added in Python 3.9).
+    if _changed_abs and all(item.is_relative_to(_out.resolve()) for item in _changed_abs):
+        sys.exit(0)
     _rebuild_code(_root, output_dir=_out, output_root=_context.output_root,
                   graph_type=_context.graph_type, changed_paths=changed, force=_force)
     # Refresh the work-memory lessons doc when saved Q&A outcomes exist
@@ -168,7 +173,12 @@ try:
     # (no changed_paths) is correct here. The flock inside _rebuild_code still
     # prevents pile-ups when commit + checkout fire back-to-back.
     _configured_out = Path(os.environ.get('GRAPHIFY_OUT', 'graphify-out'))
-    _context = resolve_update_context(output_dir=_configured_out)
+    if not _configured_out.exists():
+        sys.exit(0)
+    _context = resolve_update_context(
+        output_dir=_configured_out,
+        allow_unmarked_legacy_ast_ids=True,
+    )
     _root = _context.scan_root
     _out = _context.output_dir
     _rebuild_code(_root, output_dir=_out, output_root=_context.output_root,
@@ -274,12 +284,6 @@ if [ -z "$CHANGED" ]; then
     exit 0
 fi
 
-# Skip when only graphify-out/ artifacts changed (avoids rebuild loop when graph outputs are tracked in git)
-_NON_GRAPH=$(echo "$CHANGED" | grep -v '^graphify-out/' || true)
-if [ -z "$_NON_GRAPH" ]; then
-    exit 0
-fi
-
 """
     + _PYTHON_DETECT
     + """
@@ -324,11 +328,6 @@ BRANCH_SWITCH=$3
 
 # Only run on branch switches, not file checkouts
 if [ "$BRANCH_SWITCH" != "1" ]; then
-    exit 0
-fi
-
-# Only run if graphify-out/ exists (graph has been built before)
-if [ ! -d "graphify-out" ]; then
     exit 0
 fi
 

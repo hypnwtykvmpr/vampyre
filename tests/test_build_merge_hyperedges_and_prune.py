@@ -17,13 +17,25 @@ import json
 import os
 from pathlib import Path
 
-from graphify.build import build_merge, _infer_merge_root
+import networkx as nx
+
+from graphify.build import build, build_merge, _infer_merge_root
+from graphify.graph_state import TOP_LEVEL_METADATA_CARRIER
 
 
 def _write_graph(graph_path: Path, nodes, edges, hyperedges) -> None:
     """Write a graph.json in the shape to_json emits (top-level hyperedges)."""
     graph_path.write_text(
-        json.dumps({"nodes": nodes, "edges": edges, "hyperedges": hyperedges}),
+        json.dumps(
+            {
+                "directed": False,
+                "multigraph": False,
+                "graph": {"graphify_profile": {"graph_type": "simple"}},
+                "nodes": nodes,
+                "edges": edges,
+                "hyperedges": hyperedges,
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -41,12 +53,18 @@ def _seed_two_file_graph(tmp_path):
     graph_path = tmp_path / "graph.json"
     nodes = [
         {"id": "a1", "label": "a1", "file_type": "document", "source_file": "a.md"},
+        {"id": "a2", "label": "a2", "file_type": "document", "source_file": "a.md"},
         {"id": "b1", "label": "b1", "file_type": "document", "source_file": "b.md"},
+        {"id": "b2", "label": "b2", "file_type": "document", "source_file": "b.md"},
     ]
     hyperedges = [
-        {"id": "he_a", "label": "flow A", "source_file": "a.md", "nodes": ["a1"]},
-        {"id": "he_b", "label": "flow B", "source_file": "b.md", "nodes": ["b1"]},
-        {"id": "he_global", "label": "cross-file flow", "nodes": ["a1", "b1"]},  # no source_file
+        {"id": "he_a", "label": "flow A", "source_file": "a.md", "nodes": ["a1", "a2"]},
+        {"id": "he_b", "label": "flow B", "source_file": "b.md", "nodes": ["b1", "b2"]},
+        {
+            "id": "he_global",
+            "label": "cross-file flow",
+            "nodes": ["a1", "b1", "b2"],
+        },  # no source_file
     ]
     _write_graph(graph_path, nodes, [], hyperedges)
     return root, graph_path
@@ -56,10 +74,18 @@ def test_update_preserves_hyperedges_of_unchanged_files(tmp_path):
     root, graph_path = _seed_two_file_graph(tmp_path)
     # Re-extract only b.md, with a fresh hyperedge for it.
     new_chunk = {
-        "nodes": [{"id": "b1", "label": "b1", "file_type": "document", "source_file": "b.md"}],
+        "nodes": [
+            {"id": "b1", "label": "b1", "file_type": "document", "source_file": "b.md"},
+            {"id": "b2", "label": "b2", "file_type": "document", "source_file": "b.md"},
+        ],
         "edges": [],
         "hyperedges": [
-            {"id": "he_b_v2", "label": "flow B v2", "source_file": "b.md", "nodes": ["b1"]}
+            {
+                "id": "he_b_v2",
+                "label": "flow B v2",
+                "source_file": "b.md",
+                "nodes": ["b1", "b2"],
+            }
         ],
     }
     G = build_merge([new_chunk], graph_path, dedup=False, root=root)
@@ -74,9 +100,12 @@ def test_update_without_root_still_preserves_hyperedges(tmp_path):
     """The runbook omits root; the fallback root must not break preservation."""
     root, graph_path = _seed_two_file_graph(tmp_path)
     new_chunk = {
-        "nodes": [{"id": "b1", "label": "b1", "file_type": "document", "source_file": "b.md"}],
+        "nodes": [
+            {"id": "b1", "label": "b1", "file_type": "document", "source_file": "b.md"},
+            {"id": "b2", "label": "b2", "file_type": "document", "source_file": "b.md"},
+        ],
         "edges": [],
-        "hyperedges": [{"id": "he_b_v2", "source_file": "b.md", "nodes": ["b1"]}],
+        "hyperedges": [{"id": "he_b_v2", "source_file": "b.md", "nodes": ["b1", "b2"]}],
     }
     G = build_merge([new_chunk], graph_path, dedup=False)  # no root
     ids = _he_ids(G)
@@ -94,6 +123,37 @@ def test_deleted_file_hyperedges_are_pruned(tmp_path):
     assert "he_global" in ids  # global hyperedge kept
     # and its node is gone too
     assert "a1" not in set(G.nodes)
+    assert all(set(record["nodes"]) <= set(G.nodes) for record in G.graph["hyperedges"])
+    assert next(record for record in G.graph["hyperedges"] if record["id"] == "he_global")[
+        "nodes"
+    ] == ["b1", "b2"]
+
+
+def test_entity_dedup_remap_is_applied_to_hyperedge_members():
+    extraction = {
+        "nodes": [
+            {
+                "id": "alpha_old",
+                "label": "Alpha",
+                "file_type": "concept",
+                "source_file": "same.md",
+            },
+            {
+                "id": "alpha",
+                "label": "alpha",
+                "file_type": "concept",
+                "source_file": "same.md",
+            },
+            {"id": "beta", "label": "Beta", "file_type": "concept", "source_file": "same.md"},
+        ],
+        "edges": [],
+        "hyperedges": [{"id": "flow", "nodes": ["alpha_old", "beta"]}],
+    }
+
+    graph = build([extraction], dedup=True)
+
+    assert set(graph.nodes) == {"alpha", "beta"}
+    assert graph.graph["hyperedges"] == [{"id": "flow", "nodes": ["alpha", "beta"]}]
 
 
 # ── #1571: root-less prune (absolute deleted paths vs relative node keys) ──────
@@ -217,3 +277,56 @@ def test_prune_matches_across_symlinked_root(tmp_path, path_alias):
     )
     labels = {d["label"] for _, d in G.nodes(data=True)}
     assert "handoff" not in labels and "keep" in labels
+
+
+def test_no_change_merge_preserves_graph_and_top_level_metadata(tmp_path):
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "directed": True,
+                "multigraph": True,
+                "producer": {"name": "fixture", "version": 7},
+                "graph": {
+                    "custom_meta": {"owner": "team"},
+                    "graphify_profile": {
+                        "graph_type": "multidigraph",
+                        "extension": "preserve-me",
+                    },
+                },
+                "nodes": [{"id": "a"}, {"id": "b"}],
+                "links": [
+                    {
+                        "source": "a",
+                        "target": "b",
+                        "key": "k1",
+                        "relation": "calls",
+                        "_origin": "ast",
+                    },
+                    {
+                        "source": "a",
+                        "target": "b",
+                        "key": "k2",
+                        "relation": "imports",
+                        "_origin": "ast",
+                    },
+                ],
+                "hyperedges": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    graph = build_merge([], graph_path, dedup=False)
+
+    assert isinstance(graph, nx.MultiDiGraph)
+    assert graph.number_of_edges("a", "b") == 2
+    assert graph.graph["custom_meta"] == {"owner": "team"}
+    assert graph.graph["graphify_profile"] == {
+        "graph_type": "multidigraph",
+        "extension": "preserve-me",
+    }
+    assert graph.graph[TOP_LEVEL_METADATA_CARRIER] == {
+        "producer": {"name": "fixture", "version": 7}
+    }

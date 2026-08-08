@@ -124,6 +124,25 @@ def test_subgraph_to_text_single_relation_format_pinned():
     assert line2 == "EDGE alpha --uses [INFERRED]--> beta"
 
 
+def test_subgraph_to_text_same_relation_parallels_keep_both_records():
+    graph = nx.MultiDiGraph()
+    graph.add_node("a", label="alpha")
+    graph.add_node("b", label="beta")
+    graph.add_edge(
+        "a", "b", key="call-L5", relation="calls", context="first", confidence="EXTRACTED"
+    )
+    graph.add_edge(
+        "a", "b", key="call-L9", relation="calls", context="second", confidence="EXTRACTED"
+    )
+
+    text = _subgraph_to_text(graph, {"a", "b"}, [("a", "b")])
+    edge_line = next(line for line in text.splitlines() if line.startswith("EDGE "))
+
+    assert "2 records" in edge_line
+    assert "key=call-L5" in edge_line and "context=first" in edge_line
+    assert "key=call-L9" in edge_line and "context=second" in edge_line
+
+
 # ---------------------------------------------------------------------------
 # 2. get_neighbors bundles parallel edges to one neighbor
 # ---------------------------------------------------------------------------
@@ -291,6 +310,67 @@ def test_query_capped_summary_for_noisy_pair():
     neighbors = _neighbors_text(graph, "Alpha")
     nbr_line = next(line for line in neighbors.splitlines() if line.strip().startswith("-->"))
     assert _CAPPED_MARKER.search(nbr_line), nbr_line
+
+
+def test_same_relation_parallel_records_show_multiplicity_and_provenance():
+    graph = nx.MultiDiGraph()
+    graph.add_node("a", label="Alpha")
+    graph.add_node("b", label="Beta")
+    graph.add_edge(
+        "a",
+        "b",
+        key="call-L5",
+        relation="calls",
+        source_location="L5",
+        confidence="EXTRACTED",
+        context="call",
+        _origin="ast",
+    )
+    graph.add_edge(
+        "a",
+        "b",
+        key="call-L9",
+        relation="calls",
+        source_location="L9",
+        confidence="INFERRED",
+        context="callback",
+        provenance={"provider": "semantic"},
+    )
+
+    query = _subgraph_to_text(graph, {"a", "b"}, [("a", "b")])
+    neighbors = _neighbors_text(graph, "Alpha")
+    path = _shortest_path_text(graph, "Alpha", "Beta")
+
+    for rendered in (query, neighbors, path):
+        assert "2 records" in rendered
+        assert "key=call-L5" in rendered
+        assert "key=call-L9" in rendered
+        assert "location=L5" in rendered
+        assert "location=L9" in rendered
+        assert "confidence=EXTRACTED" in rendered
+        assert "confidence=INFERRED" in rendered
+        assert "context=call" in rendered
+        assert "context=callback" in rendered
+        assert "provenance=ast" in rendered
+        assert 'provenance={"provider":"semantic"}' in rendered
+
+
+def test_shortest_path_uses_stable_tie_break_for_equal_paths():
+    def make_graph(middle_order):
+        graph = nx.Graph()
+        for node_id in ["source", *middle_order, "target"]:
+            graph.add_node(node_id, label=node_id)
+        for middle in middle_order:
+            graph.add_edge("source", middle, relation="calls")
+            graph.add_edge(middle, "target", relation="calls")
+        return graph
+
+    via_z_then_a = _shortest_path_text(make_graph(["z", "a"]), "source", "target")
+    via_a_then_z = _shortest_path_text(make_graph(["a", "z"]), "source", "target")
+
+    assert via_z_then_a == via_a_then_z
+    assert " a " in via_z_then_a
+    assert " z " not in via_z_then_a
 
 
 # ---------------------------------------------------------------------------

@@ -134,6 +134,25 @@ def test_export_wiki_accepts_edges_only_graph_json(tmp_path):
     assert (out / "wiki" / "index.md").exists()
 
 
+def test_export_wiki_explicit_graph_rebases_analysis_from_unrelated_cwd(tmp_path):
+    external_root = tmp_path / "external"
+    runner_root = tmp_path / "runner"
+    external_root.mkdir()
+    runner_root.mkdir()
+    external_out = _make_graph(external_root)
+    runner_out = _make_graph(runner_root)
+    (runner_out / ".graphify_analysis.json").write_text(
+        json.dumps({"communities": {"99": ["stale-node"]}, "cohesion": {}, "gods": []}),
+        encoding="utf-8",
+    )
+
+    result = _run(["export", "wiki", "--graph", str(external_out / "graph.json")], runner_root)
+
+    assert result.returncode == 0, result.stderr
+    assert (external_out / "wiki" / "index.md").exists()
+    assert not (runner_out / "wiki").exists()
+
+
 # ── graphify export graphml ──────────────────────────────────────────────────
 
 
@@ -310,8 +329,8 @@ def test_update_no_cluster_writes_raw_graph(tmp_path):
 # Regression test for #934 - cluster-only crashes when graphify-out/ doesn't exist
 
 
-def test_cluster_only_creates_output_dir_when_missing(tmp_path):
-    """cluster-only must not crash with FileNotFoundError when graphify-out/ is absent (#934)."""
+def test_cluster_only_explicit_graph_uses_its_state_directory(tmp_path):
+    """An explicit graph owns its adjacent cluster artifacts even without the default dir."""
     # Build graph.json somewhere other than the default graphify-out/ location
     # so we can point --graph at it while graphify-out/ doesn't exist yet.
     graph_src = tmp_path / "backup" / "graph.json"
@@ -329,7 +348,9 @@ def test_cluster_only_creates_output_dir_when_missing(tmp_path):
 
     r = _run(["cluster-only", ".", "--graph", str(graph_src), "--no-viz"], tmp_path)
     assert r.returncode == 0, r.stderr
-    assert (tmp_path / "graphify-out" / "GRAPH_REPORT.md").exists()
+    assert (graph_src.parent / "GRAPH_REPORT.md").exists()
+    assert (graph_src.parent / ".graphify_analysis.json").exists()
+    assert not (tmp_path / "graphify-out").exists()
 
 
 # Regression test for #1027 - cluster-only must remap labels via node overlap
@@ -357,12 +378,43 @@ def test_cluster_only_persists_analysis_sidecar(tmp_path):
     assert "questions" in analysis
 
     graph = json.loads((out / "graph.json").read_text(encoding="utf-8"))
+    assert "built_at_commit" in analysis
+    assert analysis["built_at_commit"] == graph.get("built_at_commit")
+    from graphify.graph_loader import load_graph_state_file
+    from graphify.graph_state import DecodeMode, graph_analysis_fingerprint
+
+    assert analysis["graph_fingerprint"] == graph_analysis_fingerprint(
+        load_graph_state_file(out / "graph.json", mode=DecodeMode.STRICT_CURRENT)
+    )
     graph_cids = {
         str(node["community"])
         for node in graph.get("nodes", [])
         if node.get("community") is not None
     }
     assert graph_cids == set(analysis["communities"])
+
+
+def test_extract_analysis_sidecar_is_bound_to_graph_state(tmp_path):
+    from graphify.graph_loader import load_graph_state_file
+    from graphify.graph_state import DecodeMode, graph_analysis_fingerprint
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "app.py").write_text(
+        "def helper():\n    return 1\n\ndef main():\n    return helper()\n",
+        encoding="utf-8",
+    )
+    result = _run(["extract", str(corpus)], tmp_path)
+    assert result.returncode == 0, result.stderr
+    out = corpus / "graphify-out"
+    analysis = json.loads((out / ".graphify_analysis.json").read_text(encoding="utf-8"))
+    graph = json.loads((out / "graph.json").read_text(encoding="utf-8"))
+
+    assert "built_at_commit" in analysis
+    assert analysis["built_at_commit"] == graph.get("built_at_commit")
+    assert analysis["graph_fingerprint"] == graph_analysis_fingerprint(
+        load_graph_state_file(out / "graph.json", mode=DecodeMode.STRICT_CURRENT)
+    )
 
 
 def test_cluster_only_remaps_labels_to_previous_cids(tmp_path):
@@ -416,11 +468,9 @@ def test_cluster_only_remaps_labels_to_previous_cids(tmp_path):
 
 
 # ── communities-fallback when .graphify_analysis.json is absent ──────────────
-# The watch / post-commit rebuild path only writes graph.json + GRAPH_REPORT.md;
-# it does NOT regenerate .graphify_analysis.json. The full `graphify extract`
-# pipeline also removes its temp files at the end of the run on some skill
-# workflows. In both cases the per-node `community` attribute is intact on
-# every node in graph.json — that's the source of truth `to_json` writes.
+# Legacy graphs and externally copied graph.json files may lack the analysis
+# sidecar. The per-node `community` attribute remains a lossless fallback for
+# clustered graph state.
 # Without these tests, `graphify export html|obsidian|wiki|svg|graphml|neo4j`
 # silently bails or generates a degraded artifact whenever the sidecar is
 # missing, even though the data is right there.

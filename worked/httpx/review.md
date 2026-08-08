@@ -12,7 +12,7 @@ exact Leiden partition is non-deterministic but the structural analysis is sound
 ## Full GRAPH_REPORT.md Content
 
 ```markdown
-# Graph Report - /home/safi/graphify_test/httpx  (2026-04-03)
+# Graph Report - /workspace/graphify_test/httpx  (2026-04-03)
 
 ## Corpus Check
 - 6 files · ~2,800 words

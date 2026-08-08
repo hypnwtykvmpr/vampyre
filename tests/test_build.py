@@ -11,6 +11,7 @@ from graphify.build import (
     dedupe_edges,
     dedupe_nodes,
 )
+from graphify.ids import make_id
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -87,6 +88,63 @@ def test_ambiguous_edge_preserved():
     assert type(G) is nx.Graph
     data = G.edges["n_layernorm", "n_concept_attn"]
     assert data["confidence"] == "AMBIGUOUS"
+
+
+def test_exact_ids_win_and_contested_fuzzy_aliases_are_skipped_deterministically():
+    nodes = [
+        {
+            "id": "A-B",
+            "label": "dash",
+            "file_type": "code",
+            "source_file": "a.py",
+            "_origin": "ast",
+        },
+        {
+            "id": "A_B",
+            "label": "underscore",
+            "file_type": "code",
+            "source_file": "b.py",
+            "_origin": "ast",
+        },
+        {
+            "id": "sink",
+            "label": "sink",
+            "file_type": "code",
+            "source_file": "sink.py",
+            "_origin": "ast",
+        },
+    ]
+    edges = [
+        {
+            "source": "A-B",
+            "target": "sink",
+            "relation": "exact",
+            "confidence": "EXTRACTED",
+            "source_file": "a.py",
+        },
+        {
+            "source": "a b",
+            "target": "sink",
+            "relation": "fuzzy",
+            "confidence": "INFERRED",
+            "source_file": "x.py",
+        },
+    ]
+
+    first = build_from_json({"nodes": nodes, "edges": edges})
+    second = build_from_json({"nodes": list(reversed(nodes)), "edges": list(reversed(edges))})
+
+    for graph in (first, second):
+        dash_id = next(nid for nid, data in graph.nodes(data=True) if data.get("label") == "dash")
+        sink_id = next(nid for nid, data in graph.nodes(data=True) if data.get("label") == "sink")
+        assert graph.has_edge(dash_id, sink_id)
+        assert edge_data(graph, dash_id, sink_id)["relation"] == "exact"
+        assert not any(data.get("relation") == "fuzzy" for _, _, data in graph.edges(data=True))
+        assert graph.graph["graphify_identity_diagnostics"] == {
+            "contested_exact_aliases": [],
+            "contested_normalized_aliases": ["a_b"],
+            "skipped_contested_endpoints": 1,
+        }
 
 
 def test_legacy_node_source_canonicalized():
@@ -515,11 +573,17 @@ def test_build_merge_repairs_carried_file_node_hyperedge_alias(tmp_path):
         source_location="L1",
         _origin="ast",
     )
+    graph.add_node(
+        "stable_doc",
+        label="Design",
+        file_type="document",
+        source_file="docs/design.md",
+    )
     graph.graph["hyperedges"] = [
         {
             "id": "app_group",
             "label": "App group",
-            "nodes": ["src_app_py_node"],
+            "nodes": ["src_app_py_node", "stable_doc"],
             "source_file": "docs/design.md",
         }
     ]
@@ -528,7 +592,7 @@ def test_build_merge_repairs_carried_file_node_hyperedge_alias(tmp_path):
 
     rebuilt = build_merge([], graph_path, dedup=False)
 
-    assert rebuilt.graph["hyperedges"][0]["nodes"] == ["src_app"]
+    assert rebuilt.graph["hyperedges"][0]["nodes"] == ["src_app", "stable_doc"]
 
 
 def test_build_from_json_preserves_first_direction_on_bidirectional_pair(tmp_path):
@@ -580,9 +644,11 @@ def test_build_from_json_preserves_first_direction_on_bidirectional_pair(tmp_pat
     # direction must be the first-seen one (a_handler -> z_emitter), not the
     # lexicographically-later one (z_emitter -> a_handler).
     assert G.number_of_edges() == 1
-    data = edge_data(G, "a_handler", "z_emitter")
-    assert data["_src"] == "a_handler"
-    assert data["_tgt"] == "z_emitter"
+    a_id = make_id("a", "a")
+    z_id = make_id("z", "z")
+    data = edge_data(G, a_id, z_id)
+    assert data["_src"] == a_id
+    assert data["_tgt"] == z_id
 
     graph_path = tmp_path / "graph.json"
     assert to_json(G, {}, str(graph_path), force=True)
@@ -591,13 +657,13 @@ def test_build_from_json_preserves_first_direction_on_bidirectional_pair(tmp_pat
         e for e in saved.get("links", saved.get("edges", [])) if e.get("relation") == "calls"
     ]
     assert len(saved_calls) == 1
-    assert saved_calls[0]["source"] == "a_handler", (
+    assert saved_calls[0]["source"] == a_id, (
         f"calls edge source flipped on bidirectional collision: "
-        f"expected a_handler, got {saved_calls[0]['source']}"
+        f"expected {a_id}, got {saved_calls[0]['source']}"
     )
-    assert saved_calls[0]["target"] == "z_emitter", (
+    assert saved_calls[0]["target"] == z_id, (
         f"calls edge target flipped on bidirectional collision: "
-        f"expected z_emitter, got {saved_calls[0]['target']}"
+        f"expected {z_id}, got {saved_calls[0]['target']}"
     )
 
 
@@ -714,7 +780,7 @@ def test_build_from_json_relativizes_absolute_source_file(tmp_path):
     }
     G = build_from_json(extraction, root=root)
     # The id-stem migration (#1504) re-keys the old short id to the full-path form.
-    sf = G.nodes["docs_overview_intro"]["source_file"]
+    sf = G.nodes[make_id("docs_overview", "intro")]["source_file"]
     assert not sf.startswith("/"), f"source_file still absolute: {sf}"
     assert sf == "docs/overview.md"
 
@@ -730,7 +796,7 @@ def test_build_relativizes_absolute_source_file(tmp_path):
     }
     G = build([extraction], root=root)
     # #1504 re-keys main_fn (old stem "main") to the full-path form "src_main".
-    sf = G.nodes["src_main_fn"]["source_file"]
+    sf = G.nodes[make_id("src_main", "fn")]["source_file"]
     assert sf == "src/main.py"
 
 
@@ -744,7 +810,7 @@ def test_build_from_json_relative_source_file_unchanged(tmp_path):
     }
     G = build_from_json(extraction, root=tmp_path)
     # source_file must be untouched; the id is re-keyed to the full-path form (#1504).
-    assert G.nodes["src_foo_bar"]["source_file"] == "src/foo.py"
+    assert G.nodes[make_id("src_foo", "bar")]["source_file"] == "src/foo.py"
 
 
 def test_build_merge_prune_absolute_paths_match_relative_nodes(tmp_path):
@@ -971,9 +1037,9 @@ def test_build_merge_root_collapses_convention_drift(tmp_path):
     assert "docs_wiki_overview_stale" not in G_ok, (
         "stale node for the re-extracted file must be dropped"
     )
-    assert G_ok.nodes["docs_wiki_overview_overview"]["source_file"] == "docs/wiki/overview.md", (
-        "new chunk must be canonicalized to the stored relative base"
-    )
+    assert G_ok.nodes[make_id("docs_wiki_overview", "overview")]["source_file"] == (
+        "docs/wiki/overview.md"
+    ), "new chunk must be canonicalized to the stored relative base"
 
 
 def test_build_merge_rejects_oversized_existing_graph(monkeypatch, tmp_path):

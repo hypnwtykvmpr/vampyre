@@ -4,12 +4,22 @@ import json as _json
 import os
 import subprocess
 import sys as _sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from graphify import llm
+
+
+@pytest.fixture(autouse=True)
+def _stable_public_egress_dns(monkeypatch):
+    """Keep provider classification deterministic and offline."""
+    monkeypatch.setattr(
+        "graphify.egress.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("93.184.216.34", 0))],
+    )
 
 
 def _clear_backend_env(monkeypatch):
@@ -103,6 +113,8 @@ def test_openai_compat_backends_resolve_full_output_cap(tmp_path, monkeypatch, b
     _clear_backend_env(monkeypatch)
     monkeypatch.delenv("GRAPHIFY_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.setenv(env_key, "test-key")
+    if backend == "ollama":
+        monkeypatch.setitem(llm.BACKENDS["ollama"], "base_url", "http://127.0.0.1:11434/v1")
     source = tmp_path / "note.md"
     source.write_text("# Architecture\n", encoding="utf-8")
     result = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 1, "output_tokens": 1}
@@ -228,6 +240,25 @@ def _ok(nodes=None, edges=None, model="m"):
         "model": model,
         "finish_reason": "stop",
     }
+
+
+def _ok_for_chunk(chunk, *, file_type="document"):
+    paths = [Path(item) for item in chunk]
+    result = _ok(
+        nodes=[
+            {
+                "id": path.stem,
+                "label": path.stem,
+                "source_file": path.name,
+                "file_type": file_type,
+            }
+            for path in paths
+        ]
+    )
+    result["egress_decisions"] = [
+        {"eligible": True, "safe_relative_path": path.name} for path in paths
+    ]
+    return result
 
 
 def test_looks_like_context_exceeded_matches_common_messages():
@@ -364,6 +395,23 @@ def _fake_openai_response(content, *, finish_reason="stop", prompt_tokens=100, c
     return _Resp()
 
 
+def _valid_semantic_content(node_id: str, source_file: str = "notes.md") -> str:
+    return _json.dumps(
+        {
+            "nodes": [
+                {
+                    "id": node_id,
+                    "label": node_id.upper(),
+                    "file_type": "concept",
+                    "source_file": source_file,
+                }
+            ],
+            "edges": [],
+            "hyperedges": [],
+        }
+    )
+
+
 def _install_fake_openai(monkeypatch, fake_resp):
     """Inject a stub `openai` module so `_call_openai_compat` can run without
     the real SDK installed. The function does `from openai import OpenAI`
@@ -450,7 +498,7 @@ def test_call_openai_compat_relabels_unparseable_json_as_length(monkeypatch):
 def test_call_openai_compat_preserves_real_finish_reason(monkeypatch):
     # A genuine extraction with real nodes must NOT be re-labelled.
     fake_resp = _fake_openai_response(
-        '{"nodes":[{"id":"a"}],"edges":[],"hyperedges":[]}',
+        _valid_semantic_content("a"),
         finish_reason="stop",
         completion_tokens=200,
     )
@@ -466,7 +514,7 @@ def test_call_openai_compat_preserves_real_finish_reason(monkeypatch):
         backend="kimi",
     )
     assert result["finish_reason"] == "stop"
-    assert result["nodes"] == [{"id": "a"}]
+    assert result["nodes"][0]["id"] == "a"
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +538,7 @@ def _install_capturing_openai(monkeypatch):
         def create(self, **kwargs):
             captured.update(kwargs)
             return _fake_openai_response(
-                '{"nodes":[{"id":"x"}],"edges":[],"hyperedges":[]}',
+                _valid_semantic_content("x", "f.py"),
                 finish_reason="stop",
                 completion_tokens=100,
             )
@@ -688,7 +736,7 @@ def test_extract_corpus_parallel_ollama_runs_serially(tmp_path, monkeypatch):
 
     def fake_extract(chunk, *_, **__):
         call_order.append(len(chunk))
-        return _ok(nodes=[{"id": f.stem} for f in chunk])
+        return _ok_for_chunk(chunk)
 
     monkeypatch.delenv("GRAPHIFY_OLLAMA_PARALLEL", raising=False)
 
@@ -738,6 +786,72 @@ def test_extract_corpus_parallel_ollama_parallel_env_restores_concurrency(tmp_pa
                 pass  # mock scaffolding may not be complete; we only care about the call
 
     mock_pool.assert_called()
+
+
+def test_parallel_completion_order_does_not_change_semantic_output(tmp_path, monkeypatch):
+    files = [tmp_path / f"f{index}.md" for index in range(3)]
+    for path in files:
+        path.write_text(path.stem, encoding="utf-8")
+
+    def run(delays):
+        callbacks = []
+
+        def fake_extract(chunk, **_kwargs):
+            path = Path(chunk[0])
+            time.sleep(delays[path.stem])
+            return _ok_for_chunk(chunk)
+
+        monkeypatch.setenv("GRAPHIFY_OLLAMA_PARALLEL", "1")
+        with patch("graphify.llm.extract_files_direct", side_effect=fake_extract):
+            result = llm.extract_corpus_parallel(
+                files,
+                backend="ollama",
+                api_key="ollama",
+                root=tmp_path,
+                token_budget=None,
+                chunk_size=1,
+                max_concurrency=3,
+                on_chunk_done=lambda index, *_args: callbacks.append(index),
+            )
+        return callbacks, result
+
+    reverse_callbacks, reverse_result = run({"f0": 0.06, "f1": 0.03, "f2": 0.0})
+    forward_callbacks, forward_result = run({"f0": 0.0, "f1": 0.03, "f2": 0.06})
+
+    assert reverse_callbacks != forward_callbacks
+    assert reverse_result == forward_result
+
+
+def test_parallel_semantic_merge_rejects_conflicting_duplicate_node_ids(tmp_path, monkeypatch):
+    files = [tmp_path / "first.md", tmp_path / "second.md"]
+    for path in files:
+        path.write_text(path.stem, encoding="utf-8")
+
+    def conflicting_extract(chunk, **_kwargs):
+        path = Path(chunk[0])
+        return _ok(
+            nodes=[
+                {
+                    "id": "shared",
+                    "label": path.stem,
+                    "source_file": "shared.md",
+                    "file_type": "document",
+                }
+            ]
+        )
+
+    monkeypatch.setenv("GRAPHIFY_OLLAMA_PARALLEL", "1")
+    with patch("graphify.llm.extract_files_direct", side_effect=conflicting_extract):
+        with pytest.raises(ValueError, match="conflicting semantic node id"):
+            llm.extract_corpus_parallel(
+                files,
+                backend="ollama",
+                api_key="ollama",
+                root=tmp_path,
+                token_budget=None,
+                chunk_size=1,
+                max_concurrency=2,
+            )
 
 
 def test_adaptive_retry_bisects_on_hollow_ollama_response(tmp_path):
@@ -822,7 +936,7 @@ def test_call_azure_uses_correct_client_params_and_max_completion_tokens(monkeyp
     monkeypatch.delenv("GRAPHIFY_API_TIMEOUT", raising=False)
 
     fake_resp = _fake_openai_response(
-        '{"nodes":[{"id":"a"}],"edges":[],"hyperedges":[]}',
+        _valid_semantic_content("a"),
         finish_reason="stop",
         prompt_tokens=100,
         completion_tokens=50,
@@ -842,7 +956,7 @@ def test_call_azure_uses_correct_client_params_and_max_completion_tokens(monkeyp
         "must use max_completion_tokens not max_tokens"
     )
     assert "max_tokens" not in captured["create_kwargs"], "deprecated max_tokens must not be sent"
-    assert result["nodes"] == [{"id": "a"}]
+    assert result["nodes"][0]["id"] == "a"
 
 
 def test_detect_backend_returns_azure_when_both_vars_set(monkeypatch):
@@ -982,7 +1096,9 @@ def test_native_extraction_prompt_requests_hyperedges():
     for deep in (False, True):
         prompt = llm._extraction_system(deep=deep)
         assert "hyperedge" in prompt.lower(), f"deep={deep}: prompt does not mention hyperedges"
-        assert "3 or more nodes" in prompt, f"deep={deep}: prompt lacks the hyperedge guidance"
+        assert "at least 3 distinct nodes" in prompt, (
+            f"deep={deep}: prompt lacks the hyperedge guidance"
+        )
         # The schema example must show a populated hyperedge, not an empty array.
         assert '"hyperedges":[]' not in prompt, f"deep={deep}: schema still shows empty hyperedges"
         assert '"nodes":["node_id1"' in prompt, (
@@ -1004,11 +1120,11 @@ def test_native_extraction_prompt_matches_skill_spec_on_hyperedges():
         / "shared"
         / "extraction-spec.md"
     ).read_text(encoding="utf-8")
-    shared = "3 or more nodes clearly participate together"
-    assert shared in spec, "skill extraction-spec changed its hyperedge wording"
-    assert shared in llm._EXTRACTION_SYSTEM, (
-        "native prompt drifted from the skill hyperedge wording"
-    )
+    from graphify.semantic_schema import render_semantic_schema
+
+    shared = render_semantic_schema()
+    assert "@@SEMANTIC_SCHEMA@@" in spec
+    assert shared in llm._EXTRACTION_SYSTEM
 
 
 # --- *_BASE_URL env overrides for kimi / gemini / deepseek (#1458) -------------
@@ -1089,21 +1205,22 @@ def test_call_claude_cli_passes_errors_replace_to_subprocess():
     from unittest.mock import patch, MagicMock
 
     valid_envelope = _make_cli_envelope('{"nodes":[],"edges":[],"hyperedges":[]}')
-    mock_proc = MagicMock()
-    mock_proc.returncode = 0
-    mock_proc.stdout = valid_envelope
-    mock_proc.stderr = ""
+    from graphify import claude_cli
+
+    claude_cli._validated_executable.cache_clear()
+    required_help = " ".join(claude_cli._REQUIRED_HELP_FLAGS)
+    help_proc = MagicMock(returncode=0, stdout=required_help, stderr="")
+    call_proc = MagicMock(returncode=0, stdout=valid_envelope, stderr="")
 
     with (
         patch("platform.system", return_value="Linux"),
         patch("shutil.which", return_value="/usr/bin/claude"),
-        patch("subprocess.run", return_value=mock_proc) as mock_run,
+        patch("subprocess.run", side_effect=[help_proc, call_proc]) as mock_run,
     ):
         llm._call_claude_cli("test prompt")
 
-    assert mock_run.call_args.kwargs.get("errors") == "replace", (
-        "subprocess.run missing errors='replace' — non-UTF-8 bytes will crash the reader thread"
-    )
+    assert len(mock_run.call_args_list) == 2
+    assert all(call.kwargs.get("errors") == "replace" for call in mock_run.call_args_list)
 
 
 def test_call_claude_cli_tolerates_non_utf8_in_stderr():
@@ -1111,18 +1228,21 @@ def test_call_claude_cli_tolerates_non_utf8_in_stderr():
     chars instead of UnicodeDecodeError, allowing the error path to report cleanly."""
     from unittest.mock import patch, MagicMock
 
-    mock_proc = MagicMock()
-    mock_proc.returncode = 1
-    mock_proc.stdout = ""
-    mock_proc.stderr = "GBK error: ��"  # replacement chars after decode
+    from graphify import claude_cli
+
+    claude_cli._validated_executable.cache_clear()
+    required_help = " ".join(claude_cli._REQUIRED_HELP_FLAGS)
+    help_proc = MagicMock(returncode=0, stdout=required_help, stderr="")
+    call_proc = MagicMock(returncode=1, stdout="", stderr="GBK error: ��")
 
     with (
         patch("platform.system", return_value="Linux"),
         patch("shutil.which", return_value="/usr/bin/claude"),
-        patch("subprocess.run", return_value=mock_proc),
+        patch("subprocess.run", side_effect=[help_proc, call_proc]),
     ):
-        with pytest.raises(RuntimeError, match="claude -p exited 1"):
+        with pytest.raises(RuntimeError, match="failed with exit code 1") as exc_info:
             llm._call_claude_cli("test prompt")
+    assert "GBK error" not in str(exc_info.value)
 
 
 def test_resolve_max_retries_default_and_env(monkeypatch):

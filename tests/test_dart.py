@@ -155,7 +155,7 @@ class TestDart(unittest.TestCase):
             next((n for n in nodes if n["label"] == "@injectable"), None),
             "@injectable annotation node",
         )
-        self.assertEqual(injectable_annotation["id"], "annotation_injectable")
+        self.assertEqual(injectable_annotation["id"], _make_id("annotation", "injectable"))
         self.assertIsNone(injectable_annotation["source_file"])
 
         configures_injectable = next(
@@ -691,7 +691,10 @@ class TestDart(unittest.TestCase):
             ),
             "GoRouter route-path navigation edge",
         )
-        self.assertEqual(nav_edge["target"], "route_home_id_123_type_auth")
+        self.assertEqual(
+            nav_edge["target"],
+            _make_id("route", "_home_id_123_type_auth"),
+        )
 
 
 if __name__ == "__main__":

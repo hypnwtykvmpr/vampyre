@@ -1,11 +1,11 @@
 # file discovery, type classification, and corpus health checks
 from __future__ import annotations
-import fnmatch
 import json
 import os
 import re
 import sys
 import shlex
+import string
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from pathlib import Path
@@ -197,79 +197,6 @@ def _zip_within_caps(path: Path) -> bool:
     return True
 
 
-# Parent directories whose contents are always sensitive.
-# Checked against path.parts[:-1] (parents only) so a root-level file named
-# "credentials" or "secrets" is not falsely flagged by this stage.
-_SENSITIVE_DIRS = frozenset(
-    {
-        ".ssh",
-        ".gnupg",
-        ".aws",
-        ".gcloud",
-        "secrets",
-        ".secrets",
-        "credentials",
-    }
-)
-
-# Files that may contain secrets - skip silently. These patterns are specific
-# (extensions, exact credential-store names) and always apply.
-_SENSITIVE_PATTERNS = [
-    re.compile(r"(^|[\\/])\.(env|envrc)(\.|$)", re.IGNORECASE),
-    re.compile(r"\.(pem|key|p12|pfx|cert|crt|der|p8)$", re.IGNORECASE),
-    re.compile(r"(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$"),
-    re.compile(r"(\.netrc|\.pgpass|\.htpasswd)$", re.IGNORECASE),
-    re.compile(r"(aws_credentials|gcloud_credentials|service.account)", re.IGNORECASE),
-]
-
-# Generic keyword patterns - these only count when the keyword is LOAD-BEARING
-# in the filename (see _generic_keyword_hit), because a keyword buried mid-phrase
-# in a long descriptive slug names a topic, not a credential store:
-# "token-economics-of-recall.md" is a note ABOUT tokens; "api_token.txt" IS one.
-# Uses lookarounds instead of \b so underscore-prefixed names like api_token.txt
-# match. Both patterns use (?![a-zA-Z]) so that the trailing-underscore behavior
-# is consistent: "secret_store.txt" IS flagged, "tokenizer.py" is NOT (because
-# "i" after "token" is alpha and blocks the match).
-# `token` is kept separate because its longer suffix "izer"/"ize" is the only
-# common false-positive; other keywords have no such well-known derivatives.
-_GENERIC_KEYWORD_PATTERNS = [
-    re.compile(
-        r"(?<![a-zA-Z0-9])(credential|secret|passwd|password|private_key)s?(?![a-zA-Z])",
-        re.IGNORECASE,
-    ),
-    re.compile(r"(?<![a-zA-Z0-9])tokens?(?![a-zA-Z])", re.IGNORECASE),
-]
-
-# Word separators for the load-bearing check (underscore intentionally included;
-# multi-word keywords like private_key are handled by the end-of-stem check,
-# which runs before word counting).
-_WORD_SPLIT = re.compile(r"[-_\s]+")
-
-
-def _generic_keyword_hit(name: str) -> bool:
-    """True if a generic secret keyword appears load-bearing in the filename.
-
-    Secret-store files name their contents, and in English compounds the
-    content noun is the head, which comes last: "github-personal-access-token",
-    "api_token", "oauth_token". A keyword that is neither at the end of the
-    stem nor in a short (<=2 word) name is a topic word in a descriptive slug
-    ("token-economics-of-recall.md", "password-policy-discussion.md") and must
-    not cause the file to be silently dropped from the graph (#436, #718).
-    """
-    # Stem = name up to the first dot, ignoring leading dots so dotfiles like
-    # ".token" keep their keyword ("" stems would never match).
-    stem = name.lstrip(".").split(".")[0]
-    for pat in _GENERIC_KEYWORD_PATTERNS:
-        hit = False
-        for m in pat.finditer(stem):
-            hit = True
-            if m.end() == len(stem):  # keyword ends the stem -> names the contents
-                return True
-        if hit and len([w for w in _WORD_SPLIT.split(stem) if w]) <= 2:
-            return True  # short name like token_config.yaml / secret_handler.txt
-    return False
-
-
 # Signals that a .md/.txt file is actually a converted academic paper
 _PAPER_SIGNALS = [
     re.compile(r"\barxiv\b", re.IGNORECASE),
@@ -290,18 +217,10 @@ _PAPER_SIGNAL_THRESHOLD = 3  # need at least this many signals to call it a pape
 
 
 def _is_sensitive(path: Path) -> bool:
-    """Return True if this file likely contains secrets and should be skipped."""
-    # Stage 1: any PARENT directory is a known secrets dir (parts[:-1] excludes
-    # the filename itself so a root-level file named "credentials" is not falsely
-    # skipped — the name patterns in Stage 2 handle the filename).
-    if any(part in _SENSITIVE_DIRS for part in path.parts[:-1]):
-        return True
-    # Stage 2: filename pattern match
-    name = path.name
-    if any(p.search(name) for p in _SENSITIVE_PATTERNS):
-        return True
-    # Stage 3: generic keywords, only when load-bearing in the name
-    return _generic_keyword_hit(name)
+    """Return whether a high-confidence credential path must be skipped."""
+    from graphify.egress import credential_path_reason
+
+    return credential_path_reason(path) is not None
 
 
 def _looks_like_paper(path: Path) -> bool:
@@ -906,27 +825,117 @@ _VCS_MARKERS = (".git", ".hg", ".svn", "_darcs", ".fossil")
 
 
 def _parse_gitignore_line(raw: str) -> str:
-    """Parse one raw line from a .graphifyignore file per gitignore spec.
-
-    - Strip newline chars
-    - Strip inline comments (whitespace + # suffix), but only when # is
-      preceded by whitespace — so path#with#hash.py is preserved
-    - Unescape \\# to literal #
-    - Remove trailing spaces unless escaped with backslash
-    - Strip leading whitespace
-    - Return empty string for blank lines and full-line comments
-    """
+    """Parse one ignore line while preserving Git-significant escaping."""
     line = raw.rstrip("\n\r")
-    line = line.lstrip()
     if not line or line.startswith("#"):
         return ""
-    # Strip inline comments: require whitespace before # (gitignore extension)
-    line = re.sub(r"\s+#+[^\\].*$", "", line)
-    # Unescape \# → literal #
-    line = line.replace("\\#", "#")
-    # Remove unescaped trailing spaces (per gitignore spec)
-    line = re.sub(r"(?<!\\) +$", "", line)
+    while line.endswith(" "):
+        backslashes = 0
+        index = len(line) - 2
+        while index >= 0 and line[index] == "\\":
+            backslashes += 1
+            index -= 1
+        if backslashes % 2:
+            break
+        line = line[:-1]
     return line
+
+
+def _gitignore_regex(pattern: str) -> str:
+    """Translate one Git wildmatch pattern body to a path-segment-safe regex."""
+    posix_classes = {
+        "alnum": "A-Za-z0-9",
+        "alpha": "A-Za-z",
+        "blank": " \t",
+        "cntrl": "\x00-\x1f\x7f",
+        "digit": "0-9",
+        "graph": "!-~",
+        "lower": "a-z",
+        "print": " -~",
+        "punct": re.escape(string.punctuation),
+        "space": " \t\r\n\v\f",
+        "upper": "A-Z",
+        "xdigit": "A-Fa-f0-9",
+    }
+    out: list[str] = []
+    index = 0
+    while index < len(pattern):
+        char = pattern[index]
+        if char == "\\" and index + 1 < len(pattern):
+            out.append(re.escape(pattern[index + 1]))
+            index += 2
+            continue
+        if char == "*":
+            end = index + 1
+            while end < len(pattern) and pattern[end] == "*":
+                end += 1
+            if end - index >= 2:
+                if end < len(pattern) and pattern[end] == "/":
+                    out.append("(?:.*/)?")
+                    index = end + 1
+                else:
+                    out.append(".*")
+                    index = end
+            else:
+                out.append("[^/]*")
+                index += 1
+            continue
+        if char == "?":
+            out.append("[^/]")
+            index += 1
+            continue
+        if char == "[":
+            posix_match = re.match(r"\[\[:([a-z]+):\]\]", pattern[index:])
+            if posix_match is not None and posix_match.group(1) in posix_classes:
+                out.append("[" + posix_classes[posix_match.group(1)] + "]")
+                index += len(posix_match.group(0))
+                continue
+            end = index + 1
+            if end < len(pattern) and pattern[end] in ("!", "^"):
+                end += 1
+            if end < len(pattern) and pattern[end] == "]":
+                end += 1
+            while end < len(pattern) and pattern[end] != "]":
+                end += 1
+            if end >= len(pattern):
+                out.append(r"\[")
+                index += 1
+                continue
+            body = pattern[index + 1 : end]
+            if body.startswith("!"):
+                body = "^" + body[1:]
+            out.append("[" + body.replace("\\", r"\\") + "]")
+            index = end + 1
+            continue
+        out.append(re.escape(char))
+        index += 1
+    return "".join(out)
+
+
+def _gitignore_pattern_matches(target: Path, anchor: Path, pattern: str) -> bool:
+    """Match one parsed rule relative to the directory that owns it."""
+    try:
+        relative = target.relative_to(anchor).as_posix()
+    except ValueError:
+        return False
+    if not relative or relative == ".":
+        return False
+
+    body = pattern
+    directory_only = body.endswith("/") and not body.endswith("\\/")
+    if directory_only:
+        body = body[:-1]
+    anchored = body.startswith("/")
+    if anchored:
+        body = body[1:]
+    if not body:
+        return False
+
+    has_separator = "/" in body
+    candidate = relative if anchored or has_separator else target.name
+    if directory_only and not target.is_dir():
+        return False
+    return re.fullmatch(_gitignore_regex(body), candidate) is not None
 
 
 def _find_vcs_root(start: Path) -> Path | None:
@@ -945,7 +954,20 @@ def _find_vcs_root(start: Path) -> Path | None:
         current = parent
 
 
-def _load_graphifyignore(root: Path) -> list[tuple[Path, str]]:
+def _append_ignore_patterns(patterns: list[tuple[Path, str]], directory: Path) -> None:
+    """Append ignore rules owned by one directory in precedence order."""
+    for fname in (".gitignore", ".graphifyignore"):
+        ignore_file = directory / fname
+        if ignore_file.is_file():
+            for raw in ignore_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = _parse_gitignore_line(raw)
+                if line:
+                    patterns.append((directory, line))
+
+
+def _load_graphifyignore(
+    root: Path, *, discover_descendants: bool = True
+) -> list[tuple[Path, str]]:
     """Read .graphifyignore files and return (anchor_dir, pattern) pairs.
 
     Patterns are returned outer-first so that inner (closer) rules are
@@ -968,8 +990,20 @@ def _load_graphifyignore(root: Path) -> list[tuple[Path, str]]:
         current = current.parent
     dirs.reverse()  # ceiling first, scan root last
 
+    descendant_dirs: set[Path] = set()
+    if discover_descendants:
+        for dirpath, dirnames, filenames in os.walk(root):
+            directory = Path(dirpath)
+            dirnames[:] = [name for name in dirnames if not _is_noise_dir(name, directory)]
+            if ".gitignore" in filenames or ".graphifyignore" in filenames:
+                descendant_dirs.add(directory.resolve())
+    ordered_dirs = dirs + sorted(
+        descendant_dirs - set(dirs),
+        key=lambda path: (len(path.relative_to(root).parts), path.as_posix()),
+    )
+
     patterns: list[tuple[Path, str]] = []
-    for d in dirs:
+    for d in ordered_dirs:
         # Merge .gitignore and .graphifyignore for this dir (#1363). Previously
         # the presence of a .graphifyignore made graphify skip that dir's
         # .gitignore entirely, so a file excluded only by .gitignore (e.g. a
@@ -980,13 +1014,7 @@ def _load_graphifyignore(root: Path) -> list[tuple[Path, str]]:
         # last-match-wins; adding a .graphifyignore can only ever exclude MORE,
         # never re-include a .gitignore-excluded file (#945 kept: a project with
         # only a .gitignore still gets sensible defaults).
-        for fname in (".gitignore", ".graphifyignore"):
-            ignore_file = d / fname
-            if ignore_file.exists():
-                for raw in ignore_file.read_text(encoding="utf-8", errors="ignore").splitlines():
-                    line = _parse_gitignore_line(raw)
-                    if line:
-                        patterns.append((d, line))
+        _append_ignore_patterns(patterns, d)
     return patterns
 
 
@@ -1018,51 +1046,11 @@ def _is_ignored(
         if _cache is not None and target in _cache:
             return _cache[target]
 
-        def _matches(rel: str, p: str, anchored: bool) -> bool:
-            if anchored:
-                return fnmatch.fnmatch(rel, p)
-            parts = rel.split("/")
-            if fnmatch.fnmatch(rel, p):
-                return True
-            if fnmatch.fnmatch(target.name, p):
-                return True
-            for i, part in enumerate(parts):
-                if fnmatch.fnmatch(part, p):
-                    return True
-                if fnmatch.fnmatch("/".join(parts[: i + 1]), p):
-                    return True
-            return False
-
         result = False
         for anchor, pattern in patterns:
             negated = pattern.startswith("!")
             raw = pattern[1:] if negated else pattern
-            anchored = raw.startswith("/")
-            p = raw.strip("/")
-            if not p:
-                continue
-
-            matched = False
-            if anchored:
-                try:
-                    rel_anchor = str(target.relative_to(anchor)).replace(os.sep, "/")
-                    matched = _matches(rel_anchor, p, anchored=True)
-                except ValueError:
-                    pass
-            else:
-                try:
-                    rel = str(target.relative_to(root)).replace(os.sep, "/")
-                    matched = _matches(rel, p, anchored=False)
-                except ValueError:
-                    pass
-                if not matched and anchor != root:
-                    try:
-                        rel_anchor = str(target.relative_to(anchor)).replace(os.sep, "/")
-                        matched = _matches(rel_anchor, p, anchored=False)
-                    except ValueError:
-                        pass
-
-            if matched:
+            if _gitignore_pattern_matches(target, anchor, raw):
                 result = not negated  # last match wins; ! flips to un-ignore
         if _cache is not None:
             _cache[target] = result
@@ -1152,15 +1140,31 @@ def detect(
     total_words = 0
 
     skipped_sensitive: list[str] = []
-    ignore_patterns = _load_graphifyignore(root)
-    ignore_cache: dict[Path, bool] = {}  # shared across all _is_ignored calls in this scan
+    blocked_egress: list[str] = []
+    initial_ignore_patterns = _load_graphifyignore(root, discover_descendants=False)
+    loaded_ignore_dirs = {anchor for anchor, _pattern in initial_ignore_patterns}
+    ignore_state: tuple[tuple[tuple[Path, str], ...], dict[Path, bool]] = (
+        tuple(initial_ignore_patterns),
+        {},
+    )
     # CLI --exclude patterns are anchored at the scan root and appended last
     # so they win over any .graphifyignore/.gitignore rules (#947).
+    explicit_excludes: list[tuple[Path, str]] = []
     if extra_excludes:
         for pat in extra_excludes:
             line = _parse_gitignore_line(pat)
             if line:
-                ignore_patterns.append((root, line))
+                explicit_excludes.append((root, line))
+
+    def _ignored(path: Path) -> bool:
+        patterns, cache = ignore_state
+        return _is_ignored(
+            path,
+            root,
+            [*patterns, *explicit_excludes],
+            _cache=cache,
+        )
+
     # Always include graphify-out/memory/ - query results filed back into the graph
     memory_dir = root / GRAPHIFY_OUT / "memory"
     scan_paths = [root]
@@ -1174,6 +1178,16 @@ def detect(
         in_memory_tree = memory_dir.exists() and str(scan_root).startswith(str(memory_dir))
         for dirpath, dirnames, filenames in os.walk(scan_root, followlinks=follow_symlinks):
             dp = Path(dirpath)
+            if dp not in loaded_ignore_dirs:
+                added_patterns: list[tuple[Path, str]] = []
+                _append_ignore_patterns(added_patterns, dp)
+                loaded_ignore_dirs.add(dp)
+                if added_patterns:
+                    patterns, _cache = ignore_state
+                    # Publish rules and their empty cache as one generation. A
+                    # reader can observe the old or new generation, never new
+                    # rules with stale cached decisions.
+                    ignore_state = ((*patterns, *added_patterns), {})
             if follow_symlinks and os.path.islink(dirpath):
                 real = os.path.realpath(dirpath)
                 parent_real = os.path.realpath(os.path.dirname(dirpath))
@@ -1194,10 +1208,7 @@ def detect(
                 # bin/, obj/, wwwroot/, generated/, … : a pathological slowdown on large
                 # repos for no correctness gain.
                 dirnames[:] = [
-                    d
-                    for d in dirnames
-                    if not _is_noise_dir(d, dp)
-                    and not _is_ignored(dp / d, root, ignore_patterns, _cache=ignore_cache)
+                    d for d in dirnames if not _is_noise_dir(d, dp) and not _ignored(dp / d)
                 ]
                 if follow_symlinks:
                     safe_dirs: list[str] = []
@@ -1229,13 +1240,14 @@ def detect(
             # Skip files inside our own converted/ dir (avoid re-processing sidecars)
             if str(p).startswith(str(converted_dir)):
                 continue
-        if not in_memory and _is_ignored(p, root, ignore_patterns, _cache=ignore_cache):
+        if not in_memory and _ignored(p):
             continue
         if not _resolves_under_root(p, root):
             skipped_sensitive.append(str(p) + " [symlink target outside scan root]")
             continue
         if _is_sensitive(p):
             skipped_sensitive.append(str(p))
+            blocked_egress.append(str(p))
             continue
         ftype = classify_file(p)
         if ftype:
@@ -1254,7 +1266,7 @@ def detect(
                     skipped_sensitive.append(str(p) + f" [Google Workspace export failed: {exc}]")
                     continue
                 if md_path:
-                    if _is_ignored(md_path, root, ignore_patterns, _cache=ignore_cache):
+                    if _ignored(md_path):
                         continue
                     files[ftype].append(str(md_path))
                     total_words += count_words(md_path)
@@ -1267,7 +1279,7 @@ def detect(
             if p.suffix.lower() in OFFICE_EXTENSIONS:
                 md_path = convert_office_file(p, converted_dir)
                 if md_path:
-                    if _is_ignored(md_path, root, ignore_patterns, _cache=ignore_cache):
+                    if _ignored(md_path):
                         continue
                     files[ftype].append(str(md_path))
                     total_words += count_words(md_path)
@@ -1309,7 +1321,8 @@ def detect(
         "needs_graph": needs_graph,
         "warning": warning,
         "skipped_sensitive": skipped_sensitive,
-        "graphifyignore_patterns": len(ignore_patterns),
+        "blocked_egress": sorted(blocked_egress),
+        "graphifyignore_patterns": len(ignore_state[0]),
         "scan_root": str(root.resolve()),
     }
 
@@ -1631,11 +1644,9 @@ def detect_incremental(
                         stored_mtime = stored_mtime.get("mtime")
                     if not isinstance(stored_mtime, (int, float)):
                         stored_mtime = None
-                    if stored_mtime is None or current_mtime != stored_mtime:
-                        # mtime bumped — verify with content hash before re-extracting
-                        changed = _md5_file(Path(f)) != stored_hash
-                    else:
-                        changed = False
+                    # mtime is only a scheduling hint, never proof of content
+                    # equality: replacement can preserve size and timestamps.
+                    changed = _md5_file(Path(f)) != stored_hash
             else:
                 changed = True  # unknown format, re-extract to be safe
 

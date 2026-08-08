@@ -198,8 +198,11 @@ def _load_node_community(
     # id -> label from the graph, so a label-form citation resolves to a community too.
     id_to_label: dict[str, str] = {}
     try:
-        gdata = json.loads(graph_path.read_text(encoding="utf-8"))
-        for n in gdata.get("nodes", []):
+        from graphify.graph_loader import load_graph_state_file
+        from graphify.graph_state import DecodeMode
+
+        state = load_graph_state_file(graph_path, mode=DecodeMode.READ_ONLY_LEGACY)
+        for n in state.nodes:
             if isinstance(n, dict) and n.get("id") is not None and n.get("label") is not None:
                 id_to_label[str(n["id"])] = str(n["label"])
     except (OSError, ValueError):
@@ -230,16 +233,14 @@ def _load_known_nodes(graph_path: Path) -> set[str] | None:
     indexing ids alone silently dropped every label-form citation (the common case).
     """
     try:
-        data = json.loads(Path(graph_path).read_text(encoding="utf-8"))
+        from graphify.graph_loader import load_graph_state_file
+        from graphify.graph_state import DecodeMode
+
+        state = load_graph_state_file(graph_path, mode=DecodeMode.READ_ONLY_LEGACY)
     except (OSError, ValueError):
         return None
-    nodes = data.get("nodes")
-    if not isinstance(nodes, list):
-        return None
     known: set[str] = set()
-    for n in nodes:
-        if not isinstance(n, dict):
-            continue
+    for n in state.nodes:
         if n.get("id") is not None:
             known.add(str(n["id"]))
         if n.get("label") is not None:
@@ -685,11 +686,14 @@ def _build_id_label_maps(
     label_to_ids: dict[str, list[str]] = {}
     node_by_id: dict[str, dict[str, Any]] = {}
     try:
-        data = json.loads(Path(graph_path).read_text(encoding="utf-8"))
+        from graphify.graph_loader import load_graph_state_file
+        from graphify.graph_state import DecodeMode
+
+        state = load_graph_state_file(graph_path, mode=DecodeMode.READ_ONLY_LEGACY)
     except (OSError, ValueError):
         return id_set, label_to_ids, node_by_id
-    for n in data.get("nodes", []):
-        if not isinstance(n, dict) or n.get("id") is None:
+    for n in state.nodes:
+        if n.get("id") is None:
             continue
         nid = str(n["id"])
         id_set[nid] = nid

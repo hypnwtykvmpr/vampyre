@@ -17,8 +17,9 @@ import types
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
+import pytest
 
 from graphify import llm
 
@@ -27,11 +28,27 @@ from graphify import llm
 _PNG_BYTES = b"\x89PNG\r\n\x1a\nFAKEPIXELDATA"
 _NODE_JSON = json.dumps(
     {
-        "nodes": [{"id": "x", "label": "L", "file_type": "image", "source_file": "a.png"}],
+        "nodes": [
+            {
+                "id": "x",
+                "label": "L",
+                "file_type": "image",
+                "source_file": "sub/diagram.png",
+            }
+        ],
         "edges": [],
         "hyperedges": [],
     }
 )
+
+
+@pytest.fixture(autouse=True)
+def _stable_public_egress_dns(monkeypatch):
+    """Keep provider classification deterministic and offline."""
+    monkeypatch.setattr(
+        "graphify.egress.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("93.184.216.34", 0))],
+    )
 
 
 def _make_corpus(tmp_path):
@@ -143,32 +160,19 @@ def test_path_backend_skips_byte_read_and_size_cap(tmp_path, monkeypatch):
     assert ref.rel == "huge.png" and ref.path.name == "huge.png"  # path still usable
 
 
-def test_claude_cli_passes_oversized_image_by_path(tmp_path, monkeypatch):
-    # An image over the inline base64 cap must still reach claude-cli by path —
-    # opus reads it via the Read tool, no size limit on that route.
+def test_claude_cli_refuses_images_without_os_proven_file_confinement(tmp_path, monkeypatch):
     big = tmp_path / "huge.png"
     big.write_bytes(b"x" * 100)
     monkeypatch.setattr(llm, "_MAX_IMAGE_BYTES", 8)
     refs = llm._build_image_refs([big], tmp_path, read_bytes=False)
-    envelope = {"result": _NODE_JSON, "usage": {"output_tokens": 1}, "stop_reason": "end_turn"}
-    seen: dict = {}
-
-    def fake_run(args, **kw):
-        seen["input"] = kw.get("input", "")
-        return MagicMock(returncode=0, stdout=json.dumps(envelope), stderr="")
-
-    monkeypatch.setattr(llm, "_response_is_hollow", lambda r, p: False)
-    with (
-        patch("shutil.which", return_value="/fake/claude"),
-        patch("subprocess.run", side_effect=fake_run),
-    ):
+    with pytest.raises(RuntimeError, match="inline-vision API backend"):
         llm._call_claude_cli("CORPUS", images=refs)
-    assert str(refs[0].path) in seen["input"]
 
 
 def test_capability_flags(monkeypatch):
-    for b in ("claude", "claude-cli", "openai", "gemini", "bedrock", "kimi"):
+    for b in ("claude", "openai", "gemini", "bedrock", "kimi"):
         assert llm._backend_supports_vision(b), b
+    assert not llm._backend_supports_vision("claude-cli")
     assert not llm._backend_supports_vision("deepseek")
     # ollama is opt-in via env (default model is text-only)
     monkeypatch.delenv("GRAPHIFY_OLLAMA_VISION", raising=False)
@@ -370,28 +374,13 @@ def test_call_bedrock_sends_raw_image_bytes(tmp_path, monkeypatch):
 # ── CLI backends (mocked subprocess) ──────────────────────────────────────────
 
 
-def test_claude_cli_adds_dir_and_read_instruction(tmp_path, monkeypatch):
+def test_claude_cli_never_grants_an_image_directory(tmp_path, monkeypatch):
     img, _, _ = _make_corpus(tmp_path)
     refs = llm._build_image_refs([img], tmp_path)
-    envelope = {"result": _NODE_JSON, "usage": {"output_tokens": 1}, "stop_reason": "end_turn"}
-    seen: dict = {}
-
-    def fake_run(args, **kw):
-        seen["args"] = args
-        seen["input"] = kw.get("input", "")
-        return MagicMock(returncode=0, stdout=json.dumps(envelope), stderr="")
-
-    monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
-    with (
-        patch("shutil.which", return_value="/fake/claude"),
-        patch("subprocess.run", side_effect=fake_run),
-    ):
-        llm._call_claude_cli("CORPUS", images=refs)
-
-    assert "--add-dir" in seen["args"]
-    assert str(refs[0].path.parent) in seen["args"]
-    # the prompt sent on stdin tells the model to Read the image path
-    assert "Read tool" in seen["input"] and str(refs[0].path) in seen["input"]
+    with patch("subprocess.run") as run:
+        with pytest.raises(RuntimeError, match="inline-vision API backend"):
+            llm._call_claude_cli("CORPUS", images=refs)
+    run.assert_not_called()
 
 
 # ── dispatch-level vision gating ──────────────────────────────────────────────

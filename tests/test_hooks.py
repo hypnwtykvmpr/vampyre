@@ -6,6 +6,7 @@ import subprocess
 from types import SimpleNamespace
 from pathlib import Path
 import pytest
+import graphify.hooks as hooks
 from graphify.hooks import install, uninstall, status, _hooks_dir, _HOOK_MARKER, _CHECKOUT_MARKER
 
 
@@ -341,6 +342,113 @@ def test_rebuild_bodies_read_graphify_root(name, body):
     assert "output_dir=_configured_out" in body, f"{name} drops its runtime output directory"
 
 
+def test_hook_preflight_has_no_literal_output_directory_policy():
+    from graphify import hooks
+
+    assert "grep -v '^graphify-out/'" not in hooks._HOOK_SCRIPT
+    assert 'if [ ! -d "graphify-out" ]' not in hooks._CHECKOUT_SCRIPT
+    assert "item.is_relative_to(_out.resolve())" in hooks._REBUILD_BODY_COMMIT
+
+
+def test_commit_hook_path_api_matches_declared_python_floor():
+    metadata = (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert 'requires-python = ">=3.10"' in metadata
+    assert ".is_relative_to(" in hooks._REBUILD_BODY_COMMIT
+
+
+def test_commit_hook_output_only_change_exits_before_rebuild(tmp_path, monkeypatch):
+    import graphify.watch as watch
+
+    source_root = tmp_path / "project"
+    source_root.mkdir()
+    output = source_root / "graphify-out"
+    output.mkdir()
+    (output / ".graphify_root").write_text("marker-relative:..", encoding="utf-8")
+    (output / "graph.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "directed": False,
+                "multigraph": False,
+                "graph": {
+                    "graphify_profile": {
+                        "graph_type": "simple",
+                        "ast_node_id_schema": "unicode-boundary-sha1-v1",
+                        "semantic_node_id_schema": "semantic-v2",
+                    }
+                },
+                "nodes": [],
+                "links": [],
+                "hyperedges": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(source_root)
+    monkeypatch.setenv("GRAPHIFY_OUT", str(output))
+    monkeypatch.setenv("GRAPHIFY_REBUILD_TIMEOUT", "0")
+    monkeypatch.setenv("GRAPHIFY_CHANGED", "graphify-out/graph.json")
+    monkeypatch.setattr(watch, "_apply_resource_limits", lambda: None)
+    monkeypatch.setattr(
+        watch,
+        "_rebuild_code",
+        lambda *_args, **_kwargs: pytest.fail("output-only hook change invoked rebuild"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        exec(_REBUILD_BODY_COMMIT, {})
+
+    assert exc_info.value.code == 0
+
+
+def test_checkout_hook_without_graph_state_is_a_clean_noop(tmp_path, monkeypatch):
+    import graphify.update_state as update_state
+    import graphify.watch as watch
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GRAPHIFY_OUT", str(tmp_path / "missing-output"))
+    monkeypatch.setenv("GRAPHIFY_REBUILD_TIMEOUT", "0")
+    monkeypatch.setattr(watch, "_apply_resource_limits", lambda: None)
+    monkeypatch.setattr(
+        watch,
+        "_rebuild_code",
+        lambda *_args, **_kwargs: pytest.fail("missing graph state invoked rebuild"),
+    )
+    monkeypatch.setattr(
+        update_state,
+        "resolve_update_context",
+        lambda *_args, **_kwargs: pytest.fail("missing graph state invoked resolver"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        exec(_REBUILD_BODY_CHECKOUT, {})
+
+    assert exc_info.value.code == 0
+
+
+def test_checkout_hook_refuses_partial_graph_state(tmp_path, monkeypatch):
+    import graphify.watch as watch
+
+    output = tmp_path / "partial-output"
+    output.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GRAPHIFY_OUT", str(output))
+    monkeypatch.setenv("GRAPHIFY_REBUILD_TIMEOUT", "0")
+    monkeypatch.setattr(watch, "_apply_resource_limits", lambda: None)
+    monkeypatch.setattr(
+        watch,
+        "_rebuild_code",
+        lambda *_args, **_kwargs: pytest.fail("partial graph state invoked rebuild"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        exec(_REBUILD_BODY_CHECKOUT, {})
+
+    assert exc_info.value.code == 1
+
+
 def test_rebuild_bodies_with_graphify_root_are_valid_python():
     """The .graphify_root snippet must parse so a quoting slip can't ship a hook
     that crashes the moment git fires it (#1173)."""
@@ -363,7 +471,13 @@ def test_rebuild_bodies_resolve_portable_marker_from_unrelated_cwd(body, tmp_pat
             {
                 "directed": False,
                 "multigraph": False,
-                "graph": {"graphify_profile": {"graph_type": "simple"}},
+                "graph": {
+                    "graphify_profile": {
+                        "graph_type": "simple",
+                        "ast_node_id_schema": "unicode-boundary-sha1-v1",
+                        "semantic_node_id_schema": "semantic-v2",
+                    }
+                },
                 "nodes": [],
                 "links": [],
             }
@@ -388,6 +502,11 @@ def test_rebuild_bodies_resolve_portable_marker_from_unrelated_cwd(body, tmp_pat
     exec(body, {})
 
     assert [path.resolve() for path in captured] == [source_root.resolve()]
+
+
+def test_only_full_checkout_hook_allows_legacy_ast_identity_migration():
+    assert "allow_unmarked_legacy_ast_ids=True" not in _REBUILD_BODY_COMMIT
+    assert "allow_unmarked_legacy_ast_ids=True" in _REBUILD_BODY_CHECKOUT
 
 
 def test_detached_launch_targets_graphify_python():

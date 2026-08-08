@@ -131,7 +131,7 @@ graphify query "what connects DigestAuth to Response?" --graph graphify-out/grap
 어시스턴트가 도구 호출이나 MCP를 지원하는 경우, 텍스트를 붙여넣는 대신 그래프를 직접 사용하세요. graphify는 `graph.json`을 MCP 서버로 노출할 수 있습니다:
 
 ```bash
-python -m graphify.serve graphify-out/graph.json
+graphify serve graphify-out/graph.json
 ```
 
 이를 통해 어시스턴트가 `query_graph`, `get_node`, `get_neighbors`, `shortest_path` 같은 반복 쿼리에 구조화된 그래프 접근을 할 수 있습니다.

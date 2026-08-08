@@ -47,6 +47,20 @@ def _find(r, label, id_contains):
     return next(n["id"] for n in r["nodes"] if n["label"] == label and id_contains in n["id"])
 
 
+def _method_id(result: dict, owner_label: str, method_label: str) -> str:
+    owners = {node["id"] for node in result["nodes"] if node.get("label") == owner_label}
+    labels = {node["id"]: node.get("label") for node in result["nodes"]}
+    matches = {
+        edge["target"]
+        for edge in result["edges"]
+        if edge.get("relation") == "method"
+        and edge.get("source") in owners
+        and labels.get(edge.get("target")) == method_label
+    }
+    assert len(matches) == 1, (owner_label, method_label, matches)
+    return next(iter(matches))
+
+
 def test_field_receiver_resolves_to_declared_type_not_bare_match(tmp_path):
     calls, r = _calls(tmp_path, _AMBIG)
     commit = _find(r, ".Commit()", "commit")
@@ -67,8 +81,11 @@ def test_parameter_receiver_resolves(tmp_path):
             )
         },
     )
-    assert any("copy" in s and "server_save" in t for s, t in calls)
-    assert not any("copy" in s and "cache_save" in t for s, t in calls)
+    copy = _method_id(r, "Svc", ".Copy()")
+    server_save = _method_id(r, "Server", ".Save()")
+    cache_save = _method_id(r, "Cache", ".Save()")
+    assert (copy, server_save) in calls
+    assert (copy, cache_save) not in calls
 
 
 def test_local_var_receiver_resolves(tmp_path):
@@ -84,8 +101,9 @@ def test_local_var_receiver_resolves(tmp_path):
             )
         },
     )
-    assert any("_r_a" in s and "server_save" in t for s, t in calls), "explicit-typed local"
-    assert any("_r_b" in s and "server_save" in t for s, t in calls), "var = new T() local"
+    server_save = _method_id(r, "Server", ".Save()")
+    assert (_method_id(r, "R", ".A()"), server_save) in calls, "explicit-typed local"
+    assert (_method_id(r, "R", ".B()"), server_save) in calls, "var = new T() local"
 
 
 def test_cross_file_receiver_resolves(tmp_path):
@@ -102,8 +120,9 @@ def test_cross_file_receiver_resolves(tmp_path):
             ),
         },
     )
-    assert any("commit" in s and "server_save" in t for s, t in calls)
-    assert not any("commit" in s and "cache_save" in t for s, t in calls)
+    commit = _method_id(r, "Repo", ".Commit()")
+    assert (commit, _method_id(r, "Server", ".Save()")) in calls
+    assert (commit, _method_id(r, "Cache", ".Save()")) not in calls
 
 
 def test_this_and_static_receivers(tmp_path):
@@ -120,8 +139,10 @@ def test_this_and_static_receivers(tmp_path):
             )
         },
     )
-    assert any("_r_a" in s and "_r_b" in t for s, t in calls), "this.B() -> R.B"
-    assert any("_r_g" in s and "util_f" in t for s, t in calls), "Util.F() -> Util.F"
+    assert (_method_id(r, "R", ".A()"), _method_id(r, "R", ".B()")) in calls, "this.B() -> R.B"
+    assert (_method_id(r, "R", ".G()"), _method_id(r, "Util", ".F()")) in calls, (
+        "Util.F() -> Util.F"
+    )
 
 
 def test_untyped_receiver_emits_no_edge(tmp_path):
@@ -134,7 +155,9 @@ def test_untyped_receiver_emits_no_edge(tmp_path):
             )
         },
     )
-    assert not any("save" in t.lower() for _s, t in calls), "dynamic receiver must not resolve"
+    caller = _method_id(r, "R", ".C()")
+    server_save = _method_id(r, "Server", ".Save()")
+    assert (caller, server_save) not in calls, "dynamic receiver must not resolve"
 
 
 def test_method_absent_on_type_emits_no_edge(tmp_path):
@@ -148,7 +171,9 @@ def test_method_absent_on_type_emits_no_edge(tmp_path):
             )
         },
     )
-    assert not any("_r_c" in s and "save" in t.lower() for s, t in calls)
+    caller = _method_id(r, "R", ".C()")
+    server_save = _method_id(r, "Server", ".Save()")
+    assert (caller, server_save) not in calls
 
 
 def test_unqualified_call_still_resolves(tmp_path):
@@ -161,6 +186,4 @@ def test_unqualified_call_still_resolves(tmp_path):
             )
         },
     )
-    assert any("_r_a" in s and "helper" in t for s, t in calls), (
-        "no regression on unqualified calls"
-    )
+    assert (_method_id(r, "R", ".A()"), _method_id(r, "R", ".Helper()")) in calls

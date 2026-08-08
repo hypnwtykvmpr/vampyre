@@ -1,4 +1,4 @@
-# Graph Report - /home/safi/graphify-benchmark  (2026-04-04)
+# Graph Report - /workspace/graphify-benchmark  (2026-04-04)
 
 ## Corpus Check
 - 49 files · ~92,616 words
@@ -23,9 +23,9 @@
 
 ## Surprising Connections (you probably didn't know these)
 - `from_pretrained()` --calls--> `get_default_config()`  [INFERRED]
-  /home/safi/graphify-benchmark/repos/nanoGPT/model.py → /home/safi/graphify-benchmark/repos/minGPT/mingpt/model.py
+  /workspace/graphify-benchmark/repos/nanoGPT/model.py → /workspace/graphify-benchmark/repos/minGPT/mingpt/model.py
 - `get_batch()` --conceptually_related_to--> `get_batch()`  [INFERRED]
-  /home/safi/graphify-benchmark/repos/nanoGPT/train.py → /home/safi/graphify-benchmark/repos/nanoGPT/bench.py
+  /workspace/graphify-benchmark/repos/nanoGPT/train.py → /workspace/graphify-benchmark/repos/nanoGPT/bench.py
 - `Training Script` --produces--> `GPTConfig Dataclass`  [INFERRED]
   repos/nanoGPT/train.py → repos/nanoGPT/model.py
 - `GPT Language Model (minGPT)` --conceptually_related_to--> `GPT Model Class`  [INFERRED]

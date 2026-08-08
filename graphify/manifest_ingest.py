@@ -5,13 +5,15 @@ declare a package and its dependencies. Left to the LLM document path, the same
 package gets a different file-anchored node id from its own manifest than from
 each dependent's dependency reference, so it splits into duplicate nodes. This
 module parses manifests deterministically and emits ONE canonical package node
-per package -- keyed by NAME via :func:`graphify.ids.make_id` -- plus
+per package -- keyed by ECOSYSTEM + NAME via :func:`graphify.ids.make_id` -- plus
 ``depends_on`` edges, so a package referenced from N manifests collapses to a
 single hub node (the dependency stub and the package's own definition node share
 the canonical id and merge at build time).
 
 Mirrors ``mcp_ingest``: recognized by filename, routed to the deterministic AST
-path (never the LLM), so a manifest is extracted exactly once.
+path (never the LLM), so a manifest is extracted exactly once. Package identity
+includes the ecosystem, preventing a same-named Go module and Python package
+from collapsing into one node.
 """
 
 from __future__ import annotations
@@ -43,11 +45,9 @@ def is_package_manifest_path(path: Path) -> bool:
     return path.name.lower() in PACKAGE_MANIFEST_NAMES
 
 
-def _pkg_id(name: str) -> str:
-    """Canonical package node id, keyed by package NAME so every reference to the
-    same package -- its own manifest and any dependent's dependency line -- maps
-    to one node."""
-    return make_id("pkg", name)
+def _pkg_id(ecosystem: str, name: str) -> str:
+    """Canonical package ID within one dependency ecosystem."""
+    return make_id("pkg", ecosystem, name)
 
 
 def extract_package_manifest(path: Path) -> dict[str, Any]:
@@ -59,9 +59,9 @@ def extract_package_manifest(path: Path) -> dict[str, Any]:
     except OSError as exc:
         return {"nodes": [], "edges": [], "error": f"manifest read error: {exc}"}
 
-    eco = PACKAGE_MANIFEST_NAMES[path.name.lower()]
+    ecosystem = PACKAGE_MANIFEST_NAMES[path.name.lower()]
     try:
-        info = _PARSERS[eco](text)
+        info = _PARSERS[ecosystem](text)
     except Exception as exc:  # noqa: BLE001 — a malformed manifest must not abort extraction
         return {"nodes": [], "edges": [], "error": f"manifest parse error: {exc}"}
     if not info or not info.get("name"):
@@ -69,13 +69,13 @@ def extract_package_manifest(path: Path) -> dict[str, Any]:
 
     name = info["name"]
     str_path = str(path)
-    pkg_nid = _pkg_id(name)
+    pkg_nid = _pkg_id(ecosystem, name)
     node: dict[str, Any] = {
         "id": pkg_nid,
         "label": name,
         "file_type": "code",  # valid schema type; `type` distinguishes packages
         "type": "package",
-        "ecosystem": eco,
+        "ecosystem": ecosystem,
         "source_file": str_path,
         "source_location": "L1",
     }
@@ -88,7 +88,7 @@ def extract_package_manifest(path: Path) -> dict[str, Any]:
     for dep in info.get("deps", []):
         if not dep:
             continue
-        dep_nid = _pkg_id(dep)
+        dep_nid = _pkg_id(ecosystem, dep)
         if dep_nid == pkg_nid or dep_nid in seen:
             continue
         seen.add(dep_nid)

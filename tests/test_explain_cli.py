@@ -7,9 +7,10 @@ import graphify.__main__ as mainmod
 
 def _write_graph(tmp_path):
     graph_data = {
-        "directed": False,
+        "schema_version": 1,
+        "directed": True,
         "multigraph": False,
-        "graph": {},
+        "graph": {"graphify_profile": {"graph_type": "digraph"}},
         "nodes": [
             {
                 "id": "validate",
@@ -36,24 +37,28 @@ def _write_graph(tmp_path):
                 "community": 0,
             },
         ],
+        "hyperedges": [],
         "links": [
             {
                 "source": "create_patch",
                 "target": "validate",
                 "relation": "calls",
                 "confidence": "EXTRACTED",
+                "_origin": "ast",
             },
             {
                 "source": "create_edit",
                 "target": "validate",
                 "relation": "calls",
                 "confidence": "EXTRACTED",
+                "_origin": "ast",
             },
             {
                 "source": "validate",
                 "target": "stable_stringify",
                 "relation": "calls",
                 "confidence": "EXTRACTED",
+                "_origin": "ast",
             },
         ],
     }
@@ -91,9 +96,10 @@ def test_caller_shows_callee_as_outbound(monkeypatch, tmp_path, capsys):
 def test_explain_source_file_path_prefers_file_level_node(monkeypatch, tmp_path, capsys):
     source_file = "app/api/example/route.ts"
     graph_data = {
-        "directed": False,
+        "schema_version": 1,
+        "directed": True,
         "multigraph": False,
-        "graph": {},
+        "graph": {"graphify_profile": {"graph_type": "digraph"}},
         "nodes": [
             {
                 "id": "example_route_get",
@@ -116,8 +122,10 @@ def test_explain_source_file_path_prefers_file_level_node(monkeypatch, tmp_path,
                 "target": "example_route_get",
                 "relation": "contains",
                 "confidence": "EXTRACTED",
+                "_origin": "ast",
             },
         ],
+        "hyperedges": [],
     }
     p = tmp_path / "graph.json"
     p.write_text(json.dumps(graph_data), encoding="utf-8")
@@ -190,3 +198,63 @@ def test_explain_no_lesson_line_for_unannotated_node(monkeypatch, tmp_path, caps
     p = _write_graph(tmp_path)
     out = _run(monkeypatch, p, "validateSanitySession", capsys)
     assert "Lesson:" not in out
+
+
+def test_explain_supports_undirected_graph(monkeypatch, tmp_path, capsys):
+    graph_data = {
+        "schema_version": 1,
+        "directed": False,
+        "multigraph": False,
+        "graph": {"graphify_profile": {"graph_type": "simple"}},
+        "nodes": [{"id": "a", "label": "Alpha"}, {"id": "b", "label": "Beta"}],
+        "links": [{"source": "a", "target": "b", "relation": "calls", "_origin": "ast"}],
+        "hyperedges": [],
+    }
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(json.dumps(graph_data), encoding="utf-8")
+
+    out = _run(monkeypatch, graph_path, "Alpha", capsys)
+
+    assert "--> Beta [calls] []" in out
+
+
+def test_explain_shows_same_relation_parallel_details(monkeypatch, tmp_path, capsys):
+    graph_data = {
+        "schema_version": 1,
+        "directed": True,
+        "multigraph": True,
+        "graph": {"graphify_profile": {"graph_type": "multidigraph"}},
+        "nodes": [{"id": "a", "label": "Alpha"}, {"id": "b", "label": "Beta"}],
+        "links": [
+            {
+                "source": "a",
+                "target": "b",
+                "key": "call-L5",
+                "relation": "calls",
+                "source_location": "L5",
+                "confidence": "EXTRACTED",
+                "context": "call",
+                "_origin": "ast",
+            },
+            {
+                "source": "a",
+                "target": "b",
+                "key": "call-L9",
+                "relation": "calls",
+                "source_location": "L9",
+                "confidence": "INFERRED",
+                "context": "callback",
+                "provenance": {"provider": "semantic"},
+                "_origin": "semantic",
+            },
+        ],
+        "hyperedges": [],
+    }
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(json.dumps(graph_data), encoding="utf-8")
+
+    out = _run(monkeypatch, graph_path, "Alpha", capsys)
+
+    assert "2 records" in out
+    assert "key=call-L5" in out
+    assert "key=call-L9" in out

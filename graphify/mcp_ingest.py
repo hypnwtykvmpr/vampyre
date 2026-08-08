@@ -58,6 +58,7 @@ Cross-config emergent edges:
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -76,7 +77,8 @@ MCP_CONFIG_FILENAMES: frozenset[str] = frozenset(
 )
 
 _MAX_BYTES = 1_048_576  # 1 MiB — same cap as extract_json
-_MAX_SERVERS_PER_FILE = 200  # generous; flags pathological configs
+_DEFAULT_MAX_SERVERS_PER_FILE = 200
+_MAX_SERVERS_ENV = "GRAPHIFY_MCP_MAX_SERVERS"
 
 
 def is_mcp_config_path(path: Path) -> bool:
@@ -84,13 +86,31 @@ def is_mcp_config_path(path: Path) -> bool:
     return path.name in MCP_CONFIG_FILENAMES
 
 
-def extract_mcp_config(path: Path) -> dict[str, Any]:
+def _configured_server_limit(explicit: int | None) -> int:
+    value: object = explicit
+    if value is None:
+        value = os.environ.get(_MAX_SERVERS_ENV, str(_DEFAULT_MAX_SERVERS_PER_FILE)).strip()
+    try:
+        limit = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{_MAX_SERVERS_ENV} must be a positive integer") from exc
+    if limit <= 0:
+        raise ValueError(f"{_MAX_SERVERS_ENV} must be a positive integer")
+    return limit
+
+
+def extract_mcp_config(path: Path, *, max_servers: int | None = None) -> dict[str, Any]:
     """Parse an MCP config file into Graphify nodes and edges.
 
     Behaviour matches other extractors in `extract.py`:
       - returns ``{"nodes": [...], "edges": [...]}`` on success
       - returns ``{"nodes": [], "edges": [], "error": "<reason>"}`` on parse
         failure, oversize file, or missing ``mcpServers`` map
+
+    ``max_servers`` overrides the default hard cap of 200. When omitted,
+    ``GRAPHIFY_MCP_MAX_SERVERS`` can set a positive integer before extraction.
+    Inputs above the configured cap are refused in full; partial MCP maps are
+    never returned as successful extraction results.
     """
     try:
         with path.open("rb") as fh:
@@ -124,6 +144,24 @@ def extract_mcp_config(path: Path) -> dict[str, Any]:
         if not isinstance(servers, dict):
             return {"nodes": [], "edges": [], "error": "mcp_ingest: no mcpServers map"}
 
+    try:
+        server_limit = _configured_server_limit(max_servers)
+    except ValueError as exc:
+        return {"nodes": [], "edges": [], "error": f"mcp_ingest: {exc}"}
+    valid_servers = [
+        (server_name, spec)
+        for server_name, spec in servers.items()
+        if isinstance(server_name, str) and server_name and isinstance(spec, dict)
+    ]
+    if len(valid_servers) > server_limit:
+        return {
+            "nodes": [],
+            "edges": [],
+            "error": (
+                f"mcp_ingest: {len(valid_servers)} servers exceeds configured limit {server_limit}"
+            ),
+        }
+
     str_path = str(path)
     file_nid = _make_id(str_path)
     nodes: list[dict[str, Any]] = []
@@ -142,17 +180,7 @@ def extract_mcp_config(path: Path) -> dict[str, Any]:
     )
 
     file_stem = _file_stem(path)
-    server_count = 0
-    for server_name, spec in servers.items():
-        if not isinstance(server_name, str) or not server_name:
-            continue
-        if not isinstance(spec, dict):
-            # Skip non-object server entries silently — the broken entry is
-            # the user's, not ours.
-            continue
-        if server_count >= _MAX_SERVERS_PER_FILE:
-            break
-        server_count += 1
+    for server_name, spec in valid_servers:
         _emit_server(
             server_name=server_name,
             spec=spec,

@@ -290,11 +290,19 @@ def resolve_scan_root_marker(
     if not recorded or "\x00" in recorded:
         return None
 
+    # A drive-qualified relative path (``C:escape``) is neither portable nor
+    # anchored. On POSIX it would otherwise be treated as an ordinary relative
+    # filename; on Windows it is relative to drive C's process-local cwd.
+    if PureWindowsPath(recorded).drive and not PureWindowsPath(recorded).is_absolute():
+        return None
+
     if recorded.startswith(SCAN_ROOT_MARKER_PREFIX):
         relative = recorded[len(SCAN_ROOT_MARKER_PREFIX) :]
         if not relative:
             return None
         try:
+            if PureWindowsPath(relative).drive and not PureWindowsPath(relative).is_absolute():
+                return None
             relative_path = Path(relative)
             if is_absolute_path(relative):
                 return None

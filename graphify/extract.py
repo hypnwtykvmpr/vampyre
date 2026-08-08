@@ -15,8 +15,18 @@ from typing import TYPE_CHECKING, Any, Callable
 from defusedxml import ElementTree as SafeET
 
 from .cache import load_cached, save_cached
+from .id_channels import (
+    ExtractionState,
+    NodeId,
+    apply_edge_reference_remap,
+    apply_id_remap,
+    assert_no_unclassified_id_fields,
+    assert_registered_references_live,
+    collect_unresolved_references,
+)
 from .mcp_ingest import extract_mcp_config, is_mcp_config_path
 from .manifest_ingest import extract_package_manifest, is_package_manifest_path
+from .ids import disambiguate_path_scoped_ids
 from .resolver_registry import (
     LanguageResolver,
     register as register_language_resolver,
@@ -77,9 +87,22 @@ def _print_console(text: str, *, file=None, **kwargs) -> None:
     print(_console_safe(text, stream), file=stream, **kwargs)
 
 
-def _safe_extract(extractor: Callable, path: Path) -> dict:
+def _error_result(exc: BaseException) -> dict:
+    detail = str(exc).strip()
+    message = f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+    return {"nodes": [], "edges": [], "error": message}
+
+
+def _normalize_extraction_result(result: dict) -> dict:
+    if "error" not in result:
+        return result
+    message = str(result.get("error", "")).strip() or "ExtractionError"
+    return {"nodes": [], "edges": [], "error": message}
+
+
+def _safe_extract(extractor: Callable, path: Path, **kwargs: object) -> dict:
     try:
-        return extractor(path)
+        return extractor(path, **kwargs)
     except RecursionError:
         _print_console(
             f"  warning: skipped {path} (recursion limit exceeded)",
@@ -97,7 +120,7 @@ def _safe_extract(extractor: Callable, path: Path) -> dict:
             file=sys.stderr,
             flush=True,
         )
-        return {"nodes": [], "edges": [], "error": f"{type(e).__name__}: {e}"}
+        return _error_result(e)
 
 
 def _file_node_id(rel_path: Path) -> str:
@@ -2465,13 +2488,10 @@ def _get_cpp_func_name(node, source: bytes) -> str | None:
         return _read_text(node, source)
     if node.type == "qualified_identifier":
         # An out-of-class DEFINITION (`void Foo::bar() {}`) carries a
-        # qualified_identifier declarator. Retaining the `Foo::` qualifier makes
-        # _make_id(stem, "Foo::bar") normalize to the same id as the in-class
-        # member _make_id(class_nid, "bar"), so the decl in Foo.h and the def in
-        # Foo.cpp resolve to ONE method node instead of two (#1547). The full
-        # qualified text also handles nested scopes (`A::B::bar`). Free functions
-        # never have a qualified_identifier here, so their bare-name ids are
-        # unchanged; only qualified definitions shift onto their owning class.
+        # qualified_identifier declarator. Retain the qualifier so the generic
+        # function path can reconstruct the owning class explicitly. Node IDs
+        # preserve part boundaries, so flattening `Foo::bar` into one ID part
+        # cannot stand in for `_make_id(class_nid, "bar")` (#1547).
         return _read_text(node, source)
     decl = node.child_by_field_name("declarator")
     if decl:
@@ -3710,7 +3730,7 @@ def _extract_generic(
         )
         return {"nodes": [], "edges": [], "error": hint}
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     try:
         parser = Parser(language)
@@ -3718,7 +3738,7 @@ def _extract_generic(
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     str_path = str(path)
@@ -4767,6 +4787,14 @@ def _extract_generic(
                 func_nid = _make_id(parent_class_nid, func_name)
                 add_node(func_nid, f".{func_name}()", line)
                 add_edge(parent_class_nid, func_nid, "method", line)
+            elif config.ts_module == "tree_sitter_cpp" and "::" in func_name:
+                qualified_parts = [part for part in func_name.split("::") if part]
+                if len(qualified_parts) < 2:
+                    return
+                owner_nid = _make_id(stem, qualified_parts[-2])
+                func_nid = _make_id(owner_nid, qualified_parts[-1])
+                add_node(func_nid, f"{func_name}()", line)
+                add_edge(file_nid, func_nid, "contains", line)
             else:
                 func_nid = _make_id(stem, func_name)
                 add_node(func_nid, f"{func_name}()", line)
@@ -7290,7 +7318,7 @@ def extract_dart(path: Path) -> dict:
         interfaces_list = []
 
         # Parse extends or on
-        extends_m = re.search(r"^\s*(?:extends|on)\s+([a-zA-Z0-9_.]+)", header)
+        extends_m = re.search(r"^\s*(?:extends|on)\s+([a-zA-Z0-9_.$]+)", header)
         if extends_m:
             base_class = extends_m.group(1)
             rest_header = header[extends_m.end() :]
@@ -8077,7 +8105,7 @@ def extract_verilog(path: Path) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     str_path = str(path)
@@ -8237,7 +8265,7 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     str_path = path.as_posix()
@@ -8563,7 +8591,7 @@ def extract_julia(path: Path) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     str_path = str(path)
@@ -8907,7 +8935,7 @@ def extract_fortran(path: Path) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     str_path = str(path)
@@ -9200,7 +9228,7 @@ def extract_go(path: Path) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     # Use directory name as package scope so methods on the same type across
@@ -9633,7 +9661,7 @@ def extract_rust(path: Path) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     str_path = str(path)
@@ -10036,7 +10064,7 @@ def extract_powershell(path: Path) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     str_path = str(path)
@@ -10461,7 +10489,7 @@ def extract_powershell_manifest(path: Path) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     str_path = str(path)
     nodes: list[dict] = []
@@ -10617,11 +10645,9 @@ def _node_disambiguation_source_key(node: dict, root: Path) -> str:
 
 
 def _disambiguate_colliding_node_ids(
-    nodes: list[dict],
-    edges: list[dict],
-    raw_calls: list[dict],
+    state: ExtractionState,
     root: Path,
-) -> None:
+) -> dict[str, object]:
     """Rewrite only colliding node IDs, using source path as the disambiguator.
 
     Module anchor nodes (#1327) are exempt: ``import CoreKit`` from three files
@@ -10630,6 +10656,14 @@ def _disambiguate_colliding_node_ids(
     so they must collapse to one shared node — disambiguating them by path would
     scatter a single module across N file-qualified duplicates.
     """
+    nodes = state.nodes
+    edges = state.edges
+    raw_calls = state.raw_calls
+    unresolved_stub_ids = {
+        node_id
+        for node in nodes
+        if not node.get("source_file") and isinstance((node_id := node.get("id")), str) and node_id
+    }
     by_id: dict[str, list[dict]] = {}
     for node in nodes:
         if node.get("type") in ("module", "namespace"):
@@ -10645,42 +10679,36 @@ def _disambiguate_colliding_node_ids(
         if len(group) < 2 or len(source_keys) < 2:
             continue
         ambiguous_ids.add(old_id)
-        # Salt the colliding id with the *path* it came from. The naive salt is
-        # ``_make_id(source_key, old_id)`` — source_key is the raw repo-relative
-        # path. But _make_id collapses every separator, so two DISTINCT paths
-        # whose only difference is a separator-vs-inner-punctuation swap
-        # (``a/b/c.md`` vs ``a.b/c.md``, ``foo/bar_baz.md`` vs ``foo_bar/baz.md``)
-        # normalize to the SAME salted id and still collide (#1522 — the residual
-        # of #1504 the 0.9.0 full-path stem didn't reach). When that happens,
-        # append a short stable hash of the *raw* source_key, which IS injective
-        # over distinct paths, so the colliders separate. Computed in code from
-        # source_file (never trusted from the LLM), so AST↔semantic parity holds.
-        naive: dict[str, str] = {}  # source_key -> _make_id(source_key, old_id)
-        for source_key in source_keys:
-            if source_key:
-                naive[source_key] = _make_id(source_key, old_id)
-        # source_keys that, after normalization, are not unique among themselves.
-        seen: dict[str, int] = {}
-        for nid in naive.values():
-            seen[nid] = seen.get(nid, 0) + 1
-        needs_hash = {sk for sk, nid in naive.items() if seen.get(nid, 0) > 1}
+        scoped_ids = disambiguate_path_scoped_ids(old_id, source_keys)
         for node in group:
             source_key = _node_disambiguation_source_key(node, root)
             if not source_key:
                 continue
-            if source_key in needs_hash:
-                salt = hashlib.sha1(source_key.encode("utf-8"), usedforsecurity=False).hexdigest()[
-                    :6
-                ]
-                new_id = _make_id(source_key, old_id, salt)
-            else:
-                new_id = naive.get(source_key) or _make_id(source_key, old_id)
+            new_id = scoped_ids[source_key]
             remap[(old_id, source_key)] = new_id
             if new_id != old_id:
-                node["id"] = new_id
+                apply_id_remap(
+                    ExtractionState(nodes=[node]),
+                    {old_id: new_id},
+                    channels=("nodes",),
+                )
+
+    skipped_contested_edges = 0
+    skipped_contested_raw_calls = 0
+    skipped_contested_hyperedge_members = 0
+    dropped_contested_hyperedges = 0
+
+    def _diagnostics() -> dict[str, object]:
+        return {
+            "contested_aliases": sorted(ambiguous_ids),
+            "skipped_contested_edges": skipped_contested_edges,
+            "skipped_contested_raw_calls": skipped_contested_raw_calls,
+            "skipped_contested_hyperedge_members": skipped_contested_hyperedge_members,
+            "dropped_contested_hyperedges": dropped_contested_hyperedges,
+        }
 
     if not remap:
-        return
+        return _diagnostics()
 
     unambiguous_remaps: dict[str, str] = {}
     for old_id, group in by_id.items():
@@ -10710,14 +10738,17 @@ def _disambiguate_colliding_node_ids(
                     header_remaps[old_id] = new_id
                     break
 
+    surviving_edges: list[dict] = []
     for edge in edges:
         edge_source_key = _source_key(str(edge.get("source_file", "")), root)
         source_key = (edge.get("source", ""), edge_source_key)
         target_key = (edge.get("target", ""), edge_source_key)
+        source_remap: dict[NodeId, NodeId] = {}
+        target_remap: dict[NodeId, NodeId] = {}
         if source_key in remap:
-            edge["source"] = remap[source_key]
+            source_remap[edge.get("source")] = remap[source_key]
         elif edge.get("source") in unambiguous_remaps:
-            edge["source"] = unambiguous_remaps[str(edge["source"])]
+            source_remap[edge.get("source")] = unambiguous_remaps[str(edge["source"])]
         # imports/imports_from always target a header file, so they must resolve to
         # the header variant BEFORE the same-source-file salt is considered. Keying
         # the import target by the importer's own source file mis-points a `.m`
@@ -10727,23 +10758,88 @@ def _disambiguate_colliding_node_ids(
             edge.get("relation") in ("imports", "imports_from")
             and edge.get("target") in header_remaps
         ):
-            edge["target"] = header_remaps[str(edge["target"])]
+            target_remap[edge.get("target")] = header_remaps[str(edge["target"])]
         elif target_key in remap:
-            edge["target"] = remap[target_key]
+            target_remap[edge.get("target")] = remap[target_key]
         elif edge.get("target") in unambiguous_remaps:
-            edge["target"] = unambiguous_remaps[str(edge["target"])]
+            target_remap[edge.get("target")] = unambiguous_remaps[str(edge["target"])]
+        apply_edge_reference_remap(
+            edge,
+            source_remap=source_remap,
+            target_remap=target_remap,
+        )
+        contested_source = (
+            edge.get("source") in ambiguous_ids and edge.get("source") not in unresolved_stub_ids
+        )
+        contested_target = (
+            edge.get("target") in ambiguous_ids and edge.get("target") not in unresolved_stub_ids
+        )
+        if contested_source or contested_target:
+            skipped_contested_edges += 1
+            continue
+        surviving_edges.append(edge)
+    edges[:] = surviving_edges
 
+    surviving_raw_calls: list[dict] = []
     for raw_call in raw_calls:
         call_source_key = _source_key(str(raw_call.get("source_file", "")), root)
         caller_key = (raw_call.get("caller_nid", ""), call_source_key)
+        caller_remap: dict[NodeId, NodeId] = {}
         if caller_key in remap:
-            raw_call["caller_nid"] = remap[caller_key]
+            caller_remap[raw_call.get("caller_nid")] = remap[caller_key]
         elif raw_call.get("caller_nid") in unambiguous_remaps:
-            raw_call["caller_nid"] = unambiguous_remaps[str(raw_call["caller_nid"])]
+            caller_remap[raw_call.get("caller_nid")] = unambiguous_remaps[
+                str(raw_call["caller_nid"])
+            ]
+        apply_id_remap(
+            ExtractionState(raw_calls=[raw_call]),
+            caller_remap,
+            channels=("raw_calls",),
+        )
+        if (
+            raw_call.get("caller_nid") in ambiguous_ids
+            and raw_call.get("caller_nid") not in unresolved_stub_ids
+        ):
+            skipped_contested_raw_calls += 1
+            continue
+        surviving_raw_calls.append(raw_call)
+    raw_calls[:] = surviving_raw_calls
+
+    surviving_hyperedges: list[dict] = []
+    for hyperedge in state.hyperedges:
+        hyperedge_source_key = _source_key(str(hyperedge.get("source_file", "")), root)
+        members = hyperedge.get("nodes")
+        if not isinstance(members, list):
+            members = hyperedge.get("members")
+        if not isinstance(members, list):
+            members = hyperedge.get("node_ids")
+        if not isinstance(members, list):
+            surviving_hyperedges.append(hyperedge)
+            continue
+        rewritten_members: list[NodeId] = []
+        skipped_members = 0
+        for member in members:
+            replacement = remap.get((member, hyperedge_source_key), member)
+            if replacement in ambiguous_ids and replacement not in unresolved_stub_ids:
+                skipped_members += 1
+                continue
+            rewritten_members.append(replacement)
+        skipped_contested_hyperedge_members += skipped_members
+        if skipped_members:
+            for field_name in ("nodes", "members", "node_ids"):
+                if isinstance(hyperedge.get(field_name), list):
+                    hyperedge[field_name] = list(dict.fromkeys(rewritten_members))
+        if len(rewritten_members) < 2:
+            dropped_contested_hyperedges += 1
+            continue
+        surviving_hyperedges.append(hyperedge)
+    state.hyperedges[:] = surviving_hyperedges
+    return _diagnostics()
 
 
-def _canonicalize_csharp_namespace_nodes(all_nodes: list[dict], all_edges: list[dict]) -> None:
+def _canonicalize_csharp_namespace_nodes(state: ExtractionState) -> None:
     """Collapse duplicate C# namespace node entries to one canonical node per label."""
+    all_nodes = state.nodes
     by_label: dict[str, list[dict]] = {}
     for node in all_nodes:
         if node.get("type") != "namespace":
@@ -10775,11 +10871,11 @@ def _canonicalize_csharp_namespace_nodes(all_nodes: list[dict], all_edges: list[
                 remap[dup_id] = canonical_id
 
     if remap:
-        for edge in all_edges:
-            if edge.get("source") in remap:
-                edge["source"] = remap[str(edge["source"])]
-            if edge.get("target") in remap:
-                edge["target"] = remap[str(edge["target"])]
+        apply_id_remap(
+            state,
+            remap,
+            channels=("edges", "hyperedges", "raw_calls", "swift_extensions"),
+        )
 
     if drop_node_ids:
         all_nodes[:] = [node for node in all_nodes if id(node) not in drop_node_ids]
@@ -10831,8 +10927,10 @@ def _is_type_like_definition(node: dict) -> bool:
     return node.get("file_type") == "code"
 
 
-def _rewire_unique_stub_nodes(nodes: list[dict], edges: list[dict]) -> None:
+def _rewire_unique_stub_nodes(state: ExtractionState) -> None:
     """Map unresolved no-source stubs to a unique real definition with the same label."""
+    nodes = state.nodes
+    edges = state.edges
     real_by_label: dict[str, list[dict]] = {}  # exact-case (all languages)
     real_by_label_ci: dict[str, list[dict]] = {}  # case-INSENSITIVE-language reals only
     stubs: list[dict] = []
@@ -10872,6 +10970,15 @@ def _rewire_unique_stub_nodes(nodes: list[dict], edges: list[dict]) -> None:
     if not remap:
         return
 
+    # Stub IDs may also appear outside ordinary edge endpoints. Keep every
+    # registered producer channel aligned before removing the now-unreferenced
+    # stub node; edge endpoints retain the C# scope-aware handling below.
+    apply_id_remap(
+        state,
+        remap,
+        channels=("hyperedges", "raw_calls", "swift_extensions"),
+    )
+
     by_id = {node.get("id"): node for node in nodes if node.get("id")}
     csharp_scoped_relations = {"inherits", "implements", "references", "imports"}
     for edge in edges:
@@ -10880,13 +10987,15 @@ def _rewire_unique_stub_nodes(nodes: list[dict], edges: list[dict]) -> None:
             and edge.get("relation") in csharp_scoped_relations
         )
         source = edge.get("source")
+        source_remap: dict[NodeId, NodeId] = {}
+        target_remap: dict[NodeId, NodeId] = {}
         if source in remap:
             remapped_source = remap[str(source)]
             if not (
                 is_csharp_scoped_edge
                 and str(by_id.get(remapped_source, {}).get("source_file", "")).endswith(".cs")
             ):
-                edge["source"] = remapped_source
+                source_remap[source] = remapped_source
         target = edge.get("target")
         if target in remap:
             remapped_target = remap[str(target)]
@@ -10894,7 +11003,12 @@ def _rewire_unique_stub_nodes(nodes: list[dict], edges: list[dict]) -> None:
                 is_csharp_scoped_edge
                 and str(by_id.get(remapped_target, {}).get("source_file", "")).endswith(".cs")
             ):
-                edge["target"] = remapped_target
+                target_remap[target] = remapped_target
+        apply_edge_reference_remap(
+            edge,
+            source_remap=source_remap,
+            target_remap=target_remap,
+        )
 
     referenced = {x for e in edges for x in (e.get("source"), e.get("target"))}
     drop_ids = {stub_id for stub_id in remap if stub_id not in referenced}
@@ -12341,6 +12455,37 @@ _DECLDEF_HEADER_SUFFIXES = frozenset({".h", ".hpp", ".hh", ".hxx"})
 _DECLDEF_IMPL_SUFFIXES = frozenset({".m", ".mm", ".cpp", ".cc", ".cxx", ".c"})
 
 
+def _exact_edge_record_key(edge: dict) -> str:
+    """Return a canonical identity that includes every serialized edge field."""
+    return json.dumps(edge, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _append_node_provenance(keeper: dict, contributors: list[dict]) -> None:
+    """Record flattened snapshots of nodes folded into ``keeper``.
+
+    Prior entries are snapshots of contributors eliminated by an earlier collapse,
+    not a different event type. Flattening them preserves every originating node
+    across repeated collapse passes without nesting histories inside histories.
+    """
+    field = "graphify_node_provenance"
+    records: list[dict] = []
+    for prior in keeper.get(field, []) or []:
+        if isinstance(prior, dict):
+            records.append(dict(prior))
+    for contributor in contributors:
+        for prior in contributor.get(field, []) or []:
+            if isinstance(prior, dict):
+                records.append(dict(prior))
+        records.append({key: value for key, value in contributor.items() if key != field})
+
+    by_key = {
+        json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False): record
+        for record in records
+    }
+    if by_key:
+        keeper[field] = [by_key[key] for key in sorted(by_key)]
+
+
 def _decldef_class_stem(source_file: str) -> tuple[str, str] | None:
     """Return ``(dir, base_stem)`` for a header/impl source file, else None.
 
@@ -12403,10 +12548,10 @@ def _merge_decl_def_classes(
         disambiguation to split (the conservative default).
 
     The class and its method/field members fold in together: members are keyed
-    ``_make_id(class_id, name)`` (ObjC) or, for an out-of-class C++ definition,
-    ``_make_id(stem, "Foo::bar")`` which normalizes to the same id as the in-class
-    member ``_make_id(class_id, "bar")``. So every decl/def member pair is itself an
-    id-collision across the same sibling file set and collapses by the same rule.
+    ``_make_id(class_id, name)``. Out-of-class C++ definitions reconstruct the
+    owning class id from the qualified declarator before creating the member id,
+    so every decl/def member pair is itself an id-collision across the same sibling
+    file set and collapses by the same rule.
     """
     # Group every code node by id, recording the distinct source files involved.
     by_id: dict[str, list[dict]] = {}
@@ -12446,6 +12591,8 @@ def _merge_decl_def_classes(
         if len(sibling_keys) != 1 or len(headers) != 1:
             continue
         keeper = headers[0]
+        contributors = [node for node in group if node is not keeper]
+        _append_node_provenance(keeper, contributors)
         for node in group:
             if node is not keeper:
                 drop_objs.add(id(node))
@@ -12454,19 +12601,15 @@ def _merge_decl_def_classes(
         return
 
     # Drop the redundant duplicate nodes. The surviving (header) node keeps its
-    # own label/source_file; edges are unchanged because the id is identical. Then
-    # de-dup any now-identical edges (e.g. the impl file's `contains`/`method`
-    # edge that duplicates the header's after the collapse).
+    # own label/source_file; edges are unchanged because the id is identical.
+    # Only byte-equivalent records are redundant here. Any partial identity would
+    # destroy call sites, provenance, context, keys, or real self-reference.
     all_nodes[:] = [n for n in all_nodes if id(n) not in drop_objs]
 
-    seen_keys: set[tuple] = set()
+    seen_keys: set[str] = set()
     rewritten: list[dict] = []
     for e in all_edges:
-        src = e.get("source")
-        tgt = e.get("target")
-        if src == tgt:
-            continue
-        k = (src, tgt, e.get("relation"), e.get("context"))
+        k = _exact_edge_record_key(e)
         if k in seen_keys:
             continue
         seen_keys.add(k)
@@ -12511,7 +12654,15 @@ def _merge_swift_extensions(
             continue
         label = n.get("label")
         nid = n.get("id")
+        source_file = n.get("source_file")
         if not (isinstance(label, str) and label and isinstance(nid, str) and nid):
+            continue
+        if not isinstance(source_file, str) or Path(source_file).suffix.lower() not in {
+            ".swift",
+            ".h",
+            ".m",
+            ".mm",
+        }:
             continue
         label_to_canonical.setdefault(label, []).append(nid)
 
@@ -12527,29 +12678,57 @@ def _merge_swift_extensions(
     if not remap:
         return
 
+    nodes_by_id = {node.get("id"): node for node in all_nodes if isinstance(node.get("id"), str)}
+    contributors_by_target: dict[str, list[dict]] = {}
+    for source_nid, target_nid in remap.items():
+        contributor = nodes_by_id.get(source_nid)
+        if contributor is not None:
+            contributors_by_target.setdefault(target_nid, []).append(contributor)
+    for target_nid, contributors in contributors_by_target.items():
+        keeper = nodes_by_id.get(target_nid)
+        if keeper is not None:
+            _append_node_provenance(keeper, contributors)
+
     all_nodes[:] = [n for n in all_nodes if n.get("id") not in remap]
 
     # Each extension file's `contains` edge ends up pointing at the canonical
     # type — multiple files containing the same node is the intended shape:
-    # the type owns the methods, the files own their slice. Self-loops are
-    # dropped (e.g. an in-file extension method whose call already pointed at
-    # the canonical type).
+    # the type owns the methods, the files own their slice. Unrelated records
+    # pass through unchanged and only loops created by this remap are removed.
+    unaffected_keys = {
+        _exact_edge_record_key(edge)
+        for edge in all_edges
+        if not (isinstance(edge.get("source"), str) and edge.get("source") in remap)
+        and not (isinstance(edge.get("target"), str) and edge.get("target") in remap)
+    }
     rewritten: list[dict] = []
-    seen_keys: set[tuple] = set()
+    seen_rewritten = set(unaffected_keys)
     for e in all_edges:
         old_source = e.get("source")
         old_target = e.get("target")
+        affected = (
+            (isinstance(old_source, str) and old_source in remap)
+            or isinstance(old_target, str)
+            and old_target in remap
+        )
+        if not affected:
+            rewritten.append(e)
+            continue
         src = remap.get(old_source, old_source) if isinstance(old_source, str) else old_source
         tgt = remap.get(old_target, old_target) if isinstance(old_target, str) else old_target
-        if src == tgt:
+        if old_source != old_target and src == tgt:
             continue
-        e["source"] = src
-        e["target"] = tgt
-        key = (src, tgt, e.get("relation"), e.get("source_file"), e.get("source_location"))
-        if key in seen_keys:
+        remapped_edge = dict(e)
+        apply_edge_reference_remap(
+            remapped_edge,
+            source_remap={old_source: src} if isinstance(old_source, str) else {},
+            target_remap={old_target: tgt} if isinstance(old_target, str) else {},
+        )
+        key = _exact_edge_record_key(remapped_edge)
+        if key in seen_rewritten:
             continue
-        seen_keys.add(key)
-        rewritten.append(e)
+        seen_rewritten.add(key)
+        rewritten.append(remapped_edge)
     all_edges[:] = rewritten
 
 
@@ -13610,7 +13789,7 @@ def extract_objc(path: Path) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     str_path = str(path)
@@ -13618,6 +13797,7 @@ def extract_objc(path: Path) -> dict:
     edges: list[dict] = []
     seen_ids: set[str] = set()
     method_bodies: list[tuple[str, Any, str]] = []
+    method_selectors: dict[str, str] = {}
     # #1556: unresolved message sends saved for the cross-file ObjC resolver, plus a
     # per-file `var -> ClassName` table from `Foo *f = ...;` local declarations.
     raw_calls: list[dict] = []
@@ -13880,6 +14060,7 @@ def extract_objc(path: Path) -> dict:
             method_name = "".join(parts) if parts else None
             if method_name:
                 method_nid = _make_id(container, method_name)
+                method_selectors[method_nid] = method_name
                 add_node(method_nid, f"{prefix}{method_name}", line)
                 add_edge(container, method_nid, "method", line)
                 if t == "method_definition":
@@ -13892,7 +14073,6 @@ def extract_objc(path: Path) -> dict:
     walk(root)
 
     # Second pass: resolve calls inside method bodies
-    all_method_nids = {n["id"] for n in nodes if n["id"] != file_nid}
     class_method_nids: dict[str, set[str]] = {}
     for m_nid, _, container_nid in method_bodies:
         class_method_nids.setdefault(container_nid, set()).add(m_nid)
@@ -13951,9 +14131,8 @@ def extract_objc(path: Path) -> dict:
                 ]
                 method_name = "".join(sel_parts)
                 if method_name:
-                    needle = _make_id("", method_name).lstrip("_")
-                    for candidate in all_method_nids:
-                        if candidate.endswith(needle):
+                    for candidate, selector in sorted(method_selectors.items()):
+                        if selector == method_name:
                             line = n.start_point[0] + 1
                             pair = (caller_nid, candidate, f"L{line}")
                             if pair not in seen_calls and caller_nid != candidate:
@@ -14133,7 +14312,7 @@ def extract_markdown(path: Path) -> dict:
     try:
         source = path.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     str_path = str(path)
@@ -14545,7 +14724,7 @@ def _extract_pascal_regex(path: Path) -> dict:
     try:
         raw = path.read_text(encoding="utf-8", errors="replace")
     except Exception as exc:
-        return {"nodes": [], "edges": [], "error": str(exc)}
+        return _error_result(exc)
 
     str_path = str(path)
     stem = _file_stem(path)
@@ -14968,7 +15147,7 @@ def extract_lazarus_form(path: Path) -> dict:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     import re
 
@@ -15068,7 +15247,7 @@ def extract_delphi_form(path: Path) -> dict:
     try:
         raw = path.read_bytes()
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     # Detect binary DFM: Delphi binary resource streams start with FF 0A
     if raw[:2] == b"\xff\x0a":
@@ -15082,7 +15261,7 @@ def extract_delphi_form(path: Path) -> dict:
     try:
         text = raw.decode("utf-8", errors="replace")
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     import re
 
@@ -15204,7 +15383,7 @@ def extract_lazarus_package(path: Path) -> dict:
     try:
         src = path.read_bytes()
     except OSError as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     if len(src) > _PROJECT_XML_MAX_BYTES:
         return {"nodes": [], "edges": [], "error": "package file too large"}
@@ -15214,7 +15393,7 @@ def extract_lazarus_package(path: Path) -> dict:
     try:
         xml_root = SafeET.fromstring(src)
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     str_path = str(path)
     stem = _file_stem(path)
@@ -15318,7 +15497,7 @@ def extract_bash(path: Path) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     str_path = str(path)
@@ -15551,7 +15730,26 @@ def extract_bash(path: Path) -> dict:
 # ── .NET project files (.sln, .slnx, .csproj, .razor) ───────────────────────
 
 
-def extract_sln(path: Path) -> dict:
+def _dotnet_project_reference(
+    container: Path,
+    reference: str,
+    source_root: Path | None,
+) -> tuple[str, str]:
+    """Return a portable project ID and the resolved source path."""
+    normalized = reference.replace("\\", "/")
+    try:
+        resolved = (container.parent / normalized).resolve()
+    except Exception:
+        resolved = container.parent / normalized
+    root = (source_root or container.parent).resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except (OSError, ValueError):
+        relative = Path(os.path.normpath(normalized.replace("/", os.sep)))
+    return _file_node_id(relative), str(resolved)
+
+
+def extract_sln(path: Path, *, source_root: Path | None = None) -> dict:
     """Extract projects and inter-project dependencies from a .sln file."""
     try:
         src = path.read_text(encoding="utf-8", errors="replace")
@@ -15580,14 +15778,10 @@ def extract_sln(path: Path) -> dict:
 
     for m in _PROJECT_RE.finditer(src):
         proj_name = m.group(1)
-        proj_path = m.group(2).replace("\\", "/")
+        proj_path = m.group(2)
         proj_guid = m.group(3).strip("{}")
 
-        try:
-            abs_proj = str((path.parent / proj_path).resolve())
-        except Exception:
-            abs_proj = proj_path
-        proj_nid = _make_id(abs_proj)
+        proj_nid, abs_proj = _dotnet_project_reference(path, proj_path, source_root)
         if proj_nid and proj_nid not in seen_ids:
             seen_ids.add(proj_nid)
             nodes.append(
@@ -15652,7 +15846,7 @@ def extract_sln(path: Path) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
-def extract_slnx(path: Path) -> dict:
+def extract_slnx(path: Path, *, source_root: Path | None = None) -> dict:
     """Extract projects and inter-project dependencies from a .slnx file.
 
     .slnx is the XML-based replacement for the legacy .sln format. Projects
@@ -15695,21 +15889,13 @@ def extract_slnx(path: Path) -> dict:
     if tree.tag.startswith("{"):
         ns = tree.tag.split("}")[0] + "}"
 
-    def _resolve(proj_path: str) -> str:
-        proj_path = proj_path.replace("\\", "/")
-        try:
-            return str((path.parent / proj_path).resolve())
-        except Exception:
-            return proj_path
-
     # First pass: collect projects (anywhere in the tree, incl. <Folder>).
     project_nids: set[str] = set()
     for proj in tree.iter(f"{ns}Project"):
         proj_path = proj.get("Path")
         if not proj_path:
             continue
-        abs_proj = _resolve(proj_path)
-        proj_nid = _make_id(abs_proj)
+        proj_nid, abs_proj = _dotnet_project_reference(path, proj_path, source_root)
         if proj_nid and proj_nid not in seen_ids:
             seen_ids.add(proj_nid)
             label = Path(proj_path).stem
@@ -15740,12 +15926,12 @@ def extract_slnx(path: Path) -> dict:
         proj_path = proj.get("Path")
         if not proj_path:
             continue
-        from_nid = _make_id(_resolve(proj_path))
+        from_nid, _from_path = _dotnet_project_reference(path, proj_path, source_root)
         for dep in proj.iter(f"{ns}BuildDependency"):
             dep_path = dep.get("Project")
             if not dep_path:
                 continue
-            to_nid = _make_id(_resolve(dep_path))
+            to_nid, _to_path = _dotnet_project_reference(path, dep_path, source_root)
             if from_nid and to_nid and from_nid != to_nid and to_nid in project_nids:
                 edges.append(
                     {
@@ -15761,7 +15947,7 @@ def extract_slnx(path: Path) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
-def extract_csproj(path: Path) -> dict:
+def extract_csproj(path: Path, *, source_root: Path | None = None) -> dict:
     """Extract packages, project refs, and target framework from a .csproj/.fsproj/.vbproj."""
     try:
         src = path.read_bytes()
@@ -15887,15 +16073,10 @@ def extract_csproj(path: Path) -> dict:
         ref_path = proj.get("Include") or proj.get("include") or ""
         if not ref_path:
             continue
-        ref_path_norm = ref_path.replace("\\", "/")
-        try:
-            abs_ref = str((path.parent / ref_path_norm).resolve())
-        except Exception:
-            abs_ref = ref_path_norm
-        proj_nid = _make_id(abs_ref)
+        proj_nid, abs_ref = _dotnet_project_reference(path, ref_path, source_root)
         if proj_nid and proj_nid not in seen_ids:
             seen_ids.add(proj_nid)
-            proj_label = Path(ref_path_norm).name
+            proj_label = Path(ref_path.replace("\\", "/")).name
             nodes.append(
                 {
                     "id": proj_nid,
@@ -16709,7 +16890,7 @@ def extract_json(path: Path) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     str_path = str(path)
@@ -16883,7 +17064,7 @@ def extract_dm(path: Path) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     stem = _file_stem(path)
     str_path = str(path)
@@ -17191,7 +17372,7 @@ def extract_dmi(path: Path) -> dict:
     try:
         data = path.read_bytes()
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     str_path = str(path)
     stem = _file_stem(path)
@@ -17313,7 +17494,7 @@ def extract_dmm(path: Path) -> dict:
             return {"nodes": [], "edges": [], "error": "file too large (>50 MB)"}
         text = path.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     str_path = str(path)
     file_nid = _make_id(str(path))
@@ -17400,7 +17581,7 @@ def extract_dmf(path: Path) -> dict:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     str_path = str(path)
     stem = _file_stem(path)
@@ -17528,7 +17709,7 @@ def extract_terraform(path: Path) -> dict:
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
-        return {"nodes": [], "edges": [], "error": str(e)}
+        return _error_result(e)
 
     str_path = str(path)
     file_nid = _make_id(str_path)
@@ -17899,6 +18080,8 @@ def _safe_extract_with_xaml_root(extractor, path: Path, root: Path) -> dict:
     previous_root = _XAML_ACTIVE_EXTRACT_ROOT
     _XAML_ACTIVE_EXTRACT_ROOT = root.resolve()
     try:
+        if extractor in {extract_sln, extract_slnx, extract_csproj}:
+            return _safe_extract(extractor, path, source_root=root)
         return _safe_extract(extractor, path)
     finally:
         _XAML_ACTIVE_EXTRACT_ROOT = previous_root
@@ -17910,7 +18093,7 @@ def _extract_stable_source(extractor, path: Path, root: Path) -> dict:
         before = hashlib.sha256(path.read_bytes()).digest()
     except OSError as exc:
         return {"nodes": [], "edges": [], "error": f"source read failed: {exc}"}
-    result = _safe_extract_with_xaml_root(extractor, path, root)
+    result = _normalize_extraction_result(_safe_extract_with_xaml_root(extractor, path, root))
     try:
         after = hashlib.sha256(path.read_bytes()).digest()
     except OSError as exc:
@@ -18025,11 +18208,7 @@ def _extract_parallel(
                 except Exception as exc:
                     pos = futures[future]
                     idx = work_items[pos][0]
-                    per_file[idx] = {
-                        "nodes": [],
-                        "edges": [],
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
+                    per_file[idx] = _error_result(exc)
                     _print_console(
                         f"  warning: worker failed for {work_items[pos][1]}: {exc}",
                         file=sys.stderr,
@@ -18226,13 +18405,14 @@ def extract(
     # that visible as a failure instead of silently converting it into an empty
     # successful file extraction.
     completed_per_file: list[dict] = [
-        result
+        _normalize_extraction_result(result)
         if result is not None
         else {"nodes": [], "edges": [], "error": "extractor returned no result"}
         for result in per_file
     ]
+    assert_no_unclassified_id_fields(completed_per_file)
     failed_files = [
-        str(path) for path, result in zip(paths, completed_per_file) if result.get("error")
+        str(path) for path, result in zip(paths, completed_per_file) if "error" in result
     ]
     deferred_cache_entries: list[dict] = []
     if defer_cache_writes:
@@ -18240,17 +18420,37 @@ def extract(
 
         for idx, path in uncached_work:
             result = completed_per_file[idx]
-            if path.suffix in _JS_CACHE_BYPASS_SUFFIXES or result.get("error"):
+            if path.suffix in _JS_CACHE_BYPASS_SUFFIXES or "error" in result:
                 continue
             deferred_cache_entries.append({"path": str(path), "result": _copy.deepcopy(result)})
 
     all_nodes: list[dict] = []
     all_edges: list[dict] = []
+    all_hyperedges: list[dict] = []
     all_raw_calls: list[dict] = []
+    all_swift_extensions: list[dict] = []
     for result in completed_per_file:
         all_nodes.extend(result.get("nodes", []))
         all_edges.extend(result.get("edges", []))
+        all_hyperedges.extend(result.get("hyperedges", []))
         all_raw_calls.extend(result.get("raw_calls", []))
+        all_swift_extensions.extend(result.get("swift_extensions", []))
+    extraction_state = ExtractionState(
+        nodes=all_nodes,
+        edges=all_edges,
+        hyperedges=all_hyperedges,
+        raw_calls=all_raw_calls,
+        swift_extensions=all_swift_extensions,
+    )
+
+    def _apply_registered_remap(remap: dict[str, str]) -> None:
+        allowed_unresolved = collect_unresolved_references(extraction_state)
+        apply_id_remap(extraction_state, remap)
+        assert_registered_references_live(
+            extraction_state,
+            allowed_unresolved=allowed_unresolved,
+        )
+
     # Function / method / class def ids for the cross-file indirect_call callable
     # guard. Built from the `_callable` node marker AFTER the id-remap / disambiguation
     # passes below (which rewrite node ids), so it can never go stale — see the
@@ -18316,14 +18516,7 @@ def extract(
         if old_prefs:
             prefix_remap[path.resolve()] = old_prefs
     if id_remap:
-        for n in all_nodes:
-            if n.get("id") in id_remap:
-                n["id"] = id_remap[n["id"]]
-        for e in all_edges:
-            if e.get("source") in id_remap:
-                e["source"] = id_remap[e["source"]]
-            if e.get("target") in id_remap:
-                e["target"] = id_remap[e["target"]]
+        _apply_registered_remap(id_remap)
     if prefix_remap:
         sym_remap: dict[str, str] = {}
         for n in all_nodes:
@@ -18353,26 +18546,42 @@ def extract(
                         sym_remap[nid] = new_nid
                     break
         if sym_remap:
-            for n in all_nodes:
-                if n.get("id") in sym_remap:
-                    n["id"] = sym_remap[n["id"]]
-            for e in all_edges:
-                if e.get("source") in sym_remap:
-                    e["source"] = sym_remap[e["source"]]
-                if e.get("target") in sym_remap:
-                    e["target"] = sym_remap[e["target"]]
-            # raw_calls carry caller_nid (a symbol id) consumed by the cross-file
-            # call pass below, after this remap — rewrite it too or those edges
-            # would dangle on their (stale) source.
-            for rc in all_raw_calls:
-                cn = rc.get("caller_nid")
-                if cn in sym_remap:
-                    rc["caller_nid"] = sym_remap[cn]
+            _apply_registered_remap(sym_remap)
 
+    allowed_unresolved = collect_unresolved_references(extraction_state)
     _merge_swift_extensions(completed_per_file, all_nodes, all_edges)
-    _disambiguate_colliding_node_ids(all_nodes, all_edges, all_raw_calls, root)
-    _canonicalize_csharp_namespace_nodes(all_nodes, all_edges)
-    _rewire_unique_stub_nodes(all_nodes, all_edges)
+    all_swift_extensions.clear()
+    assert_registered_references_live(
+        extraction_state,
+        allowed_unresolved=allowed_unresolved,
+    )
+    allowed_unresolved = collect_unresolved_references(extraction_state)
+    deferred_stub_ids = {
+        node_id
+        for node in all_nodes
+        if not node.get("source_file") and isinstance((node_id := node.get("id")), str) and node_id
+    }
+    identity_diagnostics = _disambiguate_colliding_node_ids(extraction_state, root)
+    for channel, references in collect_unresolved_references(extraction_state).items():
+        allowed_unresolved.setdefault(channel, set()).update(
+            reference for reference in references if reference in deferred_stub_ids
+        )
+    assert_registered_references_live(
+        extraction_state,
+        allowed_unresolved=allowed_unresolved,
+    )
+    allowed_unresolved = collect_unresolved_references(extraction_state)
+    _canonicalize_csharp_namespace_nodes(extraction_state)
+    assert_registered_references_live(
+        extraction_state,
+        allowed_unresolved=allowed_unresolved,
+    )
+    allowed_unresolved = collect_unresolved_references(extraction_state)
+    _rewire_unique_stub_nodes(extraction_state)
+    assert_registered_references_live(
+        extraction_state,
+        allowed_unresolved=allowed_unresolved,
+    )
 
     # Add cross-file class-level edges (Python only - uses Python parser internally)
     py_paths = [p for p in paths if p.suffix == ".py"]
@@ -18654,6 +18863,45 @@ def extract(
     # a new language plugs in without editing this body (#1356 Swift, #1446 Python).
     run_language_resolvers(paths, completed_per_file, all_nodes, all_edges)
 
+    # Sourceless stubs are an internal resolution form: assigning source_file before
+    # disambiguation/rewiring would path-salt a cross-file reference and prevent it
+    # from collapsing onto a real definition. At the output boundary, any stub still
+    # unresolved must retain the file that produced the reference as durable
+    # provenance. Existing origin_file hints cover most extractors; the per-file
+    # result owner closes older producer gaps without changing resolution semantics.
+    producer_by_node = {
+        id(node): str(path)
+        for path, per_file_result in zip(paths, completed_per_file)
+        for node in per_file_result.get("nodes", [])
+        if isinstance(node, dict)
+    }
+    producer_candidates_by_id: dict[object, set[str]] = {}
+    for edge in all_edges:
+        edge_source = edge.get("source_file")
+        if not edge_source:
+            continue
+        for endpoint in (edge.get("source"), edge.get("target")):
+            try:
+                producer_candidates_by_id.setdefault(endpoint, set()).add(str(edge_source))
+            except TypeError:
+                continue
+    unresolved_without_source: list[str] = []
+    for node in all_nodes:
+        if node.get("source_file"):
+            continue
+        producer = node.get("origin_file") or producer_by_node.get(id(node))
+        if not producer:
+            candidates = producer_candidates_by_id.get(node.get("id"), set())
+            if len(candidates) == 1:
+                producer = next(iter(candidates))
+        if not producer:
+            unresolved_without_source.append(str(node.get("id", "<missing-id>")))
+            continue
+        node["source_file"] = str(producer)
+    if unresolved_without_source:
+        sample = ", ".join(sorted(unresolved_without_source)[:5])
+        raise RuntimeError(f"unresolved nodes lack source provenance: {sample}")
+
     # Relativize source_file fields so paths are portable across machines (#555)
     for item in all_nodes + all_edges:
         sf = item.get("source_file")
@@ -18667,12 +18915,10 @@ def extract(
         except ValueError:
             pass
 
-    # origin_file is an internal disambiguation hint (#1462): the colliding-id pass
-    # above reads it to keep same-named cross-file stubs distinct, after which nothing
-    # consumes it. Drop it from the returned nodes so it never ships into graph.json as
-    # an absolute, machine-specific path — the same "no absolute paths in output"
-    # contract that relativizes source_file just above (#555, #932). The per-file AST
-    # cache keeps its own copy, which is what the colliding-id pass reads on a cache hit.
+    # origin_file is an internal disambiguation hint (#1462). Any unresolved stub has
+    # now promoted that hint to portable source_file provenance; drop the absolute
+    # internal form so it never ships into graph.json. The per-file AST cache retains
+    # its own copy for future collision handling.
     for n in all_nodes:
         n.pop("origin_file", None)
         n.pop("_callable", None)  # internal indirect_call marker — never ships to graph.json
@@ -18695,6 +18941,8 @@ def extract(
     return {
         "nodes": all_nodes,
         "edges": all_edges,
+        "hyperedges": all_hyperedges,
+        "graphify_identity_diagnostics": identity_diagnostics,
         "failed_files": failed_files,
         "_deferred_cache_entries": deferred_cache_entries,
         "input_tokens": 0,
@@ -18711,10 +18959,16 @@ def collect_files(
     if target.is_file():
         return [target] if _resolves_under_root(target, containment_root) else []
     _EXTENSIONS = set(_DISPATCH.keys())
-    from graphify.detect import _is_ignored, _is_noise_dir, _load_graphifyignore
+    from graphify.detect import (
+        _append_ignore_patterns,
+        _is_ignored,
+        _is_noise_dir,
+        _load_graphifyignore,
+    )
 
     ignore_root = root if root is not None else target
-    patterns = _load_graphifyignore(ignore_root)
+    patterns = _load_graphifyignore(ignore_root, discover_descendants=False)
+    loaded_ignore_dirs = {anchor for anchor, _pattern in patterns}
     # Shared across all _is_ignored calls in this scan so ancestor-directory
     # results are memoised instead of re-evaluated per file.
     ignore_cache: dict[Path, bool] = {}
@@ -18727,18 +18981,13 @@ def collect_files(
         # including components of target itself — preserve that.
         if any(_is_noise_dir(part) for part in target.parts):
             return []
-        # When negation (!) patterns exist, skip directory-level ignore pruning
-        # so negated files inside ignored dirs can still be reached (same
-        # conservatism as detect's scan walk).
-        has_negation = any(pat.startswith("!") for _, pat in patterns)
         results: list[Path] = []
         for dirpath, dirnames, filenames in os.walk(target):
             dp = Path(dirpath)
-            dirnames[:] = [
-                d
-                for d in dirnames
-                if not _is_noise_dir(d) and (has_negation or not _ignored(dp / d))
-            ]
+            if dp not in loaded_ignore_dirs:
+                _append_ignore_patterns(patterns, dp)
+                loaded_ignore_dirs.add(dp)
+            dirnames[:] = [d for d in dirnames if not _is_noise_dir(d) and not _ignored(dp / d)]
             for fname in filenames:
                 p = dp / fname
                 if (
@@ -18758,11 +19007,15 @@ def collect_files(
                 dirnames.clear()
                 continue
         dp = Path(dirpath)
+        if dp not in loaded_ignore_dirs:
+            _append_ignore_patterns(patterns, dp)
+            loaded_ignore_dirs.add(dp)
         dirnames[:] = [
             d
             for d in dirnames
             if not _is_noise_dir(d)
             and (not (dp / d).is_symlink() or _resolves_under_root(dp / d, containment_root))
+            and not _ignored(dp / d)
         ]
         for fname in filenames:
             p = dp / fname

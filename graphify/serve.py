@@ -7,17 +7,29 @@ import math
 import re
 import sys
 from array import array
+from collections import OrderedDict
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import networkx as nx
-from networkx.readwrite import json_graph
-from graphify.security import sanitize_label, check_graph_file_size_cap
+from graphify import paths as _paths
+from graphify.security import (
+    BindHostClassification,
+    classify_bind_host,
+    is_wildcard_host,
+    sanitize_label,
+)
 from graphify.installation import uv_tool_install_command
-from graphify.paths import default_graph_json as _default_graph_json
+from graphify.paths import GRAPHIFY_OUT_NAME, default_graph_json as _default_graph_json
 from graphify.projections import (
+    RelationshipEnvelope,
+    distinct_neighbor_degree,
     format_relationship_envelope,
+    project_for_context,
     relationship_envelope,
+    stable_shortest_path,
+    stable_value_key,
 )
 
 try:
@@ -28,7 +40,81 @@ else:
     _chinese_tokenizer = _ChineseTokenizer()
 
 
-_IPV4_UNSPECIFIED = str(ipaddress.IPv4Address(0))
+_GITHUB_REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_GITHUB_TOOL_NAMES = frozenset({"list_prs", "get_pr_impact", "triage_prs"})
+_DEFAULT_CONTEXT_CACHE_ENTRIES = 8
+_DEFAULT_CONTEXT_CACHE_BYTES = 256 * 1024 * 1024
+_MAX_QUERY_CHARS = 8192
+_MAX_QUERY_DEPTH = 6
+_MAX_QUERY_TOKENS = 16_000
+_MAX_CONTEXT_FILTERS = 32
+_MAX_CONTEXT_FILTER_CHARS = 128
+
+
+class _ProjectAccessDenied(ValueError):
+    pass
+
+
+class _GraphUnavailable(RuntimeError):
+    pass
+
+
+class _GitHubRequestFailed(RuntimeError):
+    pass
+
+
+class _BoundedContextCache:
+    """Deterministic LRU bounded by entry count and serialized graph bytes."""
+
+    def __init__(self, *, max_entries: int, max_bytes: int) -> None:
+        if max_entries <= 0 or max_bytes <= 0:
+            raise ValueError("Context-cache limits must be positive")
+        self.max_entries = max_entries
+        self.max_bytes = max_bytes
+        self._entries: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._bytes = 0
+
+    def get(self, path: str, key: tuple[int, int]) -> dict[str, Any] | None:
+        entry = self._entries.get(path)
+        if entry is None or entry["key"] != key:
+            return None
+        self._entries.move_to_end(path)
+        return entry
+
+    def put(
+        self,
+        path: str,
+        *,
+        key: tuple[int, int],
+        graph: Any,
+        communities: dict[int, list[str]],
+        serialized_bytes: int,
+    ) -> None:
+        previous = self._entries.pop(path, None)
+        if previous is not None:
+            self._bytes -= int(previous["retained_bytes"])
+        retained_bytes = serialized_bytes
+        if isinstance(graph, nx.Graph):
+            retained_bytes = max(
+                serialized_bytes * 4,
+                graph.number_of_nodes() * 512 + graph.number_of_edges() * 384,
+            )
+        if retained_bytes > self.max_bytes:
+            return
+        self._entries[path] = {
+            "key": key,
+            "G": graph,
+            "communities": communities,
+            "serialized_bytes": serialized_bytes,
+            "retained_bytes": retained_bytes,
+        }
+        self._bytes += retained_bytes
+        while len(self._entries) > self.max_entries or self._bytes > self.max_bytes:
+            _, evicted = self._entries.popitem(last=False)
+            self._bytes -= int(evicted["retained_bytes"])
+
+    def keys(self) -> tuple[str, ...]:
+        return tuple(self._entries)
 
 
 def _is_wildcard_bind_host(host: str) -> bool:
@@ -41,6 +127,54 @@ def _is_wildcard_bind_host(host: str) -> bool:
         return False
 
 
+def _validated_allowed_hosts(
+    host: str,
+    port: int,
+    configured: Sequence[str],
+    *,
+    wildcard: bool,
+) -> list[str]:
+    """Return exact MCP Host-header values for a validated bind."""
+    raw_hosts = [value.strip() for value in configured if value.strip()]
+    if wildcard and not raw_hosts:
+        raise ValueError("Wildcard HTTP binds require at least one explicit allowed Host")
+    if not raw_hosts:
+        raw_hosts = [host, "localhost", "127.0.0.1", "[::1]"]
+
+    allowed: set[str] = set()
+    for value in raw_hosts:
+        if (
+            is_wildcard_host(value)
+            or any(char.isspace() for char in value)
+            or "/" in value
+            or "\\" in value
+        ):
+            raise ValueError("Invalid allowed Host value")
+        allowed.add(value)
+        if value.startswith("[") and value.endswith("]"):
+            allowed.add(f"{value}:{port}")
+        elif value.count(":") == 0:
+            allowed.add(f"{value}:{port}")
+    return sorted(allowed)
+
+
+def _default_project_root(graph_path: str) -> Path:
+    path = Path(graph_path).expanduser().resolve(strict=False)
+    if path.parent.name == GRAPHIFY_OUT_NAME:
+        return path.parent.parent
+    return path.parent
+
+
+def _canonical_project_roots(
+    graph_path: str, roots: Sequence[str | Path] | None
+) -> tuple[Path, ...]:
+    candidates = roots or (_default_project_root(graph_path),)
+    canonical = {Path(root).expanduser().resolve(strict=False) for root in candidates}
+    if not canonical:
+        raise ValueError("At least one allowed project root is required")
+    return tuple(sorted(canonical, key=lambda path: path.as_posix()))
+
+
 def _load_graph(graph_path: str) -> nx.Graph:
     try:
         resolved = Path(graph_path).resolve()
@@ -48,27 +182,19 @@ def _load_graph(graph_path: str) -> nx.Graph:
             raise ValueError(f"Graph path must be a .json file, got: {graph_path!r}")
         if not resolved.exists():
             raise FileNotFoundError(f"Graph file not found: {resolved}")
-        check_graph_file_size_cap(resolved)
-        safe = resolved
-        data = json.loads(safe.read_text(encoding="utf-8"))
-        if "links" not in data and "edges" in data:
-            data = dict(data, links=data["edges"])
-        data = {**data, "directed": True}
-        try:
-            from graphify.build import graph_has_legacy_ids as _legacy
+        from graphify.graph_loader import load_graph_state_file
+        from graphify.graph_state import DecodeMode
 
-            if _legacy(data.get("nodes", [])):
-                print(
-                    "[graphify] note: this graph uses the pre-#1504 node-ID scheme; "
-                    "rebuild with `graphify extract --force` for path-qualified IDs.",
-                    file=sys.stderr,
-                )
-        except Exception:
-            pass
-        try:
-            G = json_graph.node_link_graph(data, edges="links")
-        except TypeError:
-            G = json_graph.node_link_graph(data)
+        state = load_graph_state_file(resolved, mode=DecodeMode.READ_ONLY_LEGACY)
+        from graphify.build import graph_has_legacy_ids as _legacy
+
+        if _legacy(list(state.nodes)):
+            print(
+                "[graphify] note: this graph uses the pre-#1504 node-ID scheme; "
+                "rebuild with `graphify extract --full --force` for path-qualified IDs.",
+                file=sys.stderr,
+            )
+        G = state.graph
         # Attach the work-memory overlay (derived sidecar next to graph.json) so
         # the query/MCP read surface can annotate NODE lines display-only. Empty
         # when no sidecar exists, leaving un-annotated output byte-identical.
@@ -314,7 +440,7 @@ def _get_trigram_index(G: nx.Graph) -> dict:
 
 def _trigram_candidates(
     G: nx.Graph, needles: list[str], *, guard_frac: float = 0.10
-) -> list[str] | None:
+) -> list[Any] | None:
     """Node IDs whose text could contain any `needle` as a substring, via the
     trigram index — a *superset* the caller then re-scores with the exact predicates.
 
@@ -366,7 +492,7 @@ def _trigram_candidates(
     return [ids[i] for i in sorted(cand)]
 
 
-def _score_nodes(G: nx.Graph, terms: list[str]) -> list[tuple[float, str]]:
+def _score_nodes(G: nx.Graph, terms: list[str]) -> list[tuple[float, Any]]:
     scored = []
     norm_terms = [tok for t in terms for tok in _search_tokens(t)]
     idf = _compute_idf(G, norm_terms)
@@ -403,7 +529,7 @@ def _score_nodes(G: nx.Graph, terms: list[str]) -> list[tuple[float, str]]:
         # tier never fires, and every node sharing the token set ties -> arbitrary
         # node-id sort -> wrong/disconnected endpoint -> false "No path found".
         if joined:
-            nid_lower = nid.lower()
+            nid_lower = str(nid).lower()
             if joined in (norm_label, bare_label, label_tokens, nid_lower):
                 score += _EXACT_MATCH_BONUS * 10 * joined_w
             elif (
@@ -428,13 +554,19 @@ def _score_nodes(G: nx.Graph, terms: list[str]) -> list[tuple[float, str]]:
             scored.append((score, nid))
     # Sort by score desc; break ties toward the shorter label so a concise exact
     # match beats a longer superset that happens to share the same score.
-    scored.sort(key=lambda s: (-s[0], len(G.nodes[s[1]].get("label") or s[1]), s[1]))
+    scored.sort(
+        key=lambda item: (
+            -item[0],
+            len(str(G.nodes[item[1]].get("label") or item[1])),
+            stable_value_key(item[1]),
+        )
+    )
     return scored
 
 
 def _pick_seeds(
-    scored: list[tuple[float, str]], max_k: int = 3, gap_ratio: float = 0.2
-) -> list[str]:
+    scored: list[tuple[float, Any]], max_k: int = 3, gap_ratio: float = 0.2
+) -> list[Any]:
     """Select BFS seed nodes, stopping when score drops too far below the top.
 
     Prevents high-frequency noise terms (error, exception) from stealing seed
@@ -545,23 +677,13 @@ def _filter_graph_by_context(G: nx.Graph, context_filters: list[str] | None) -> 
     filters = set(_normalize_context_filters(context_filters))
     if not filters:
         return G
-    H = G.__class__()
-    H.add_nodes_from(G.nodes(data=True))
-    if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)):
-        for u, v, key, data in G.edges(keys=True, data=True):
-            if data.get("context") in filters:
-                H.add_edge(u, v, key=key, **data)
-    else:
-        for u, v, data in G.edges(data=True):
-            if data.get("context") in filters:
-                H.add_edge(u, v, **data)
-    return H
+    return project_for_context(G, contexts=filters)
 
 
-def _bfs(G: nx.Graph, start_nodes: list[str], depth: int) -> tuple[set[str], list[tuple]]:
+def _bfs(G: nx.Graph, start_nodes: list[Any], depth: int) -> tuple[set[Any], list[tuple]]:
     # Compute hub threshold: nodes above this degree are not expanded as transit.
     # p99 of degree distribution, floored at 50 to avoid over-blocking small graphs.
-    degrees = [G.degree(n) for n in G.nodes()]
+    degrees = [distinct_neighbor_degree(G, node) for node in G.nodes()]
     if degrees:
         degrees_sorted = sorted(degrees)
         p99_idx = int(len(degrees_sorted) * 0.99)
@@ -569,17 +691,17 @@ def _bfs(G: nx.Graph, start_nodes: list[str], depth: int) -> tuple[set[str], lis
     else:
         hub_threshold = 50
     seed_set = set(start_nodes)
-    visited: set[str] = set(start_nodes)
+    visited: set[Any] = set(start_nodes)
     frontier = set(start_nodes)
     edges_seen: list[tuple] = []
     for _ in range(depth):
-        next_frontier: set[str] = set()
-        for n in frontier:
+        next_frontier: set[Any] = set()
+        for n in sorted(frontier, key=stable_value_key):
             # Don't expand through high-degree hubs (except seeds - a hub that
             # is the starting node should still be explored).
-            if n not in seed_set and G.degree(n) >= hub_threshold:
+            if n not in seed_set and distinct_neighbor_degree(G, n) >= hub_threshold:
                 continue
-            for neighbor in G.neighbors(n):
+            for neighbor in sorted(set(G.neighbors(n)), key=stable_value_key):
                 if neighbor not in visited:
                     next_frontier.add(neighbor)
                     edges_seen.append((n, neighbor))
@@ -588,8 +710,8 @@ def _bfs(G: nx.Graph, start_nodes: list[str], depth: int) -> tuple[set[str], lis
     return visited, edges_seen
 
 
-def _dfs(G: nx.Graph, start_nodes: list[str], depth: int) -> tuple[set[str], list[tuple]]:
-    degrees = [G.degree(n) for n in G.nodes()]
+def _dfs(G: nx.Graph, start_nodes: list[Any], depth: int) -> tuple[set[Any], list[tuple]]:
+    degrees = [distinct_neighbor_degree(G, node) for node in G.nodes()]
     if degrees:
         degrees_sorted = sorted(degrees)
         p99_idx = int(len(degrees_sorted) * 0.99)
@@ -597,17 +719,17 @@ def _dfs(G: nx.Graph, start_nodes: list[str], depth: int) -> tuple[set[str], lis
     else:
         hub_threshold = 50
     seed_set = set(start_nodes)
-    visited: set[str] = set()
+    visited: set[Any] = set()
     edges_seen: list[tuple] = []
-    stack = [(n, 0) for n in reversed(start_nodes)]
+    stack = [(node, 0) for node in reversed(sorted(start_nodes, key=stable_value_key))]
     while stack:
         node, d = stack.pop()
         if node in visited or d > depth:
             continue
         visited.add(node)
-        if node not in seed_set and G.degree(node) >= hub_threshold:
+        if node not in seed_set and distinct_neighbor_degree(G, node) >= hub_threshold:
             continue
-        for neighbor in G.neighbors(node):
+        for neighbor in reversed(sorted(set(G.neighbors(node)), key=stable_value_key)):
             if neighbor not in visited:
                 stack.append((neighbor, d + 1))
                 edges_seen.append((node, neighbor))
@@ -634,7 +756,8 @@ def _subgraph_to_text(
     overlay = getattr(G, "graph", {}).get("_learning_overlay", {}) or {}
     seed_set = set(seeds or [])
     ordered = [n for n in (seeds or []) if n in nodes] + sorted(
-        nodes - seed_set, key=lambda n: G.degree(n), reverse=True
+        nodes - seed_set,
+        key=lambda node: (-distinct_neighbor_degree(G, node), stable_value_key(node)),
     )
     for nid in ordered:
         d = G.nodes[nid]
@@ -670,7 +793,7 @@ def _subgraph_to_text(
             env = relationship_envelope(G, u, v, directed_only=True)
             if env["count"] == 0:
                 continue
-            if len(env["relations"]) <= 1:
+            if env["count"] == 1:
                 # Single relation: reconstruct the historical EDGE format
                 # byte-for-byte (confidence + optional context inside one square
                 # bracket group) so downstream EDGE-line parsers and the
@@ -716,6 +839,28 @@ def _query_graph_text(
     token_budget: int = 2000,
     context_filters: list[str] | None = None,
 ) -> str:
+    if not isinstance(question, str) or not question.strip() or len(question) > _MAX_QUERY_CHARS:
+        raise ValueError("question must be a non-empty bounded string")
+    if mode not in {"bfs", "dfs"}:
+        raise ValueError("mode must be bfs or dfs")
+    if isinstance(depth, bool) or not isinstance(depth, int) or not 1 <= depth <= _MAX_QUERY_DEPTH:
+        raise ValueError("depth is outside the supported range")
+    if (
+        isinstance(token_budget, bool)
+        or not isinstance(token_budget, int)
+        or not 1 <= token_budget <= _MAX_QUERY_TOKENS
+    ):
+        raise ValueError("token budget is outside the supported range")
+    if context_filters is not None:
+        if (
+            not isinstance(context_filters, list)
+            or len(context_filters) > _MAX_CONTEXT_FILTERS
+            or any(
+                not isinstance(value, str) or not value or len(value) > _MAX_CONTEXT_FILTER_CHARS
+                for value in context_filters
+            )
+        ):
+            raise ValueError("context filters are invalid")
     terms = _query_terms(question)
     scored = _score_nodes(G, terms)
     start_nodes = _pick_seeds(scored)
@@ -739,23 +884,25 @@ def _query_graph_text(
     return header + _subgraph_to_text(traversal_graph, nodes, edges, token_budget)
 
 
-def _find_node(G: nx.Graph, label: str) -> list[str]:
+def _find_node(G: nx.Graph, label: str) -> list[Any]:
     """Return node IDs whose label or ID matches the search term (diacritic-insensitive).
 
     Results are ordered by precedence: exact source-file path match first, then
     exact (label/ID) match, then prefix match, then substring match. Node-ID exact
     matches are grouped with label exact matches.
     """
+    raw_term = _strip_diacritics(str(label)).strip().lower()
     term = " ".join(_search_tokens(label))
     if not term:
         return []
-    source_exact: list[str] = []
-    exact: list[str] = []
-    prefix: list[str] = []
-    substring: list[str] = []
+    raw_exact: list[Any] = []
+    source_exact: list[Any] = []
+    normalized_exact: list[Any] = []
+    prefix: list[Any] = []
+    substring: list[Any] = []
     # Trigram prefilter (graph-iteration order preserved so exact/prefix/substring
     # ordering — and thus matches[0] — is byte-identical to the full scan).
-    candidate_ids = _trigram_candidates(G, [term])
+    candidate_ids = _trigram_candidates(G, [raw_term, term])
     node_iter = (
         G.nodes(data=True)
         if candidate_ids is None
@@ -766,11 +913,14 @@ def _find_node(G: nx.Graph, label: str) -> list[str]:
         bare_label = norm_label.rstrip("()")
         label_tokens = " ".join(_search_tokens(d.get("label") or ""))
         source_tokens = " ".join(_search_tokens(d.get("source_file") or ""))
-        nid_lower = nid.lower()
-        if term == source_tokens:
+        nid_lower = str(nid).lower()
+        raw_label = _strip_diacritics(str(d.get("label") or "")).strip().lower()
+        if raw_term == raw_label or raw_term == nid_lower:
+            raw_exact.append(nid)
+        elif term == source_tokens:
             source_exact.append(nid)
         elif term == norm_label or term == bare_label or term == label_tokens or term == nid_lower:
-            exact.append(nid)
+            normalized_exact.append(nid)
         elif (
             norm_label.startswith(term)
             or bare_label.startswith(term)
@@ -790,9 +940,19 @@ def _find_node(G: nx.Graph, label: str) -> list[str]:
             and _strip_diacritics(str(G.nodes[nid].get("label") or "")).lower() == query_basename
         ]
         if len(preferred) == 1:
-            source_exact = preferred + [nid for nid in source_exact if nid != preferred[0]]
+            source_exact = preferred + sorted(
+                [nid for nid in source_exact if nid != preferred[0]], key=stable_value_key
+            )
+        else:
+            source_exact.sort(key=stable_value_key)
 
-    return source_exact + exact + prefix + substring
+    return (
+        sorted(raw_exact, key=stable_value_key)
+        + source_exact
+        + sorted(normalized_exact, key=stable_value_key)
+        + sorted(prefix, key=stable_value_key)
+        + sorted(substring, key=stable_value_key)
+    )
 
 
 def _neighbors_text(G: nx.Graph, label: str, *, relation_filter: str = "") -> str:
@@ -819,12 +979,12 @@ def _neighbors_text(G: nx.Graph, label: str, *, relation_filter: str = "") -> st
             return True
         return any(rel_filter in rel.lower() for rel in relations)
 
-    def _relation_bracket(src: str, tgt: str, env: dict[str, Any]) -> str:
+    def _relation_bracket(src: str, tgt: str, env: RelationshipEnvelope) -> str:
         # Single relation (always true for a simple DiGraph/Graph): reconstruct
         # the historical two-bracket form `[rel] [conf]` byte-for-byte so the MCP
         # output stays consistent with the path/explain surfaces. Multiple
         # relations: emit the capped directional bundle.
-        if len(env["relations"]) <= 1:
+        if env["count"] == 1:
             d = env["shown"][0] if env["shown"] else {}
             rel = sanitize_label(str(d.get("relation", "")))
             confidence = sanitize_label(str(d.get("confidence", "")))
@@ -835,7 +995,7 @@ def _neighbors_text(G: nx.Graph, label: str, *, relation_filter: str = "") -> st
     # graphs render each neighbour once. In both cases the envelope is computed
     # once per neighbour and reused for filtering and rendering.
     if isinstance(G, nx.DiGraph):
-        for nb in G.successors(nid):
+        for nb in sorted(set(G.successors(nid)), key=stable_value_key):
             env = relationship_envelope(G, nid, nb, directed_only=True)
             if not _passes_filter(env["relations"]):
                 continue
@@ -843,7 +1003,7 @@ def _neighbors_text(G: nx.Graph, label: str, *, relation_filter: str = "") -> st
                 f"  --> {sanitize_label(G.nodes[nb].get('label', nb))} "
                 f"{_relation_bracket(nid, nb, env)}"
             )
-        for nb in G.predecessors(nid):
+        for nb in sorted(set(G.predecessors(nid)), key=stable_value_key):
             env = relationship_envelope(G, nb, nid, directed_only=True)
             if not _passes_filter(env["relations"]):
                 continue
@@ -852,7 +1012,7 @@ def _neighbors_text(G: nx.Graph, label: str, *, relation_filter: str = "") -> st
                 f"{_relation_bracket(nb, nid, env)}"
             )
     else:
-        for nb in G.neighbors(nid):
+        for nb in sorted(set(G.neighbors(nid)), key=stable_value_key):
             env = relationship_envelope(G, nid, nb, directed_only=True)
             if not _passes_filter(env["relations"]):
                 continue
@@ -895,7 +1055,7 @@ def _shortest_path_text(G: nx.Graph, source: str, target: str, *, max_hops: int 
                 )
     try:
         # Use undirected view for path-finding (works regardless of query src/tgt order)
-        path_nodes = nx.shortest_path(G.to_undirected(as_view=True), src_nid, tgt_nid)
+        path_nodes = stable_shortest_path(G, src_nid, tgt_nid)
     except (nx.NetworkXNoPath, nx.NodeNotFound):
         return (
             f"No path found between '{G.nodes[src_nid].get('label', src_nid)}' "
@@ -918,7 +1078,7 @@ def _shortest_path_text(G: nx.Graph, source: str, target: str, *, max_hops: int 
         # Single relation (always true for a simple DiGraph/Graph): reconstruct
         # the historical `{rel} [conf]` hop label byte-for-byte (no confidence
         # bracket when confidence is absent). Multiple relations: capped bundle.
-        if len(env["relations"]) <= 1:
+        if env["count"] == 1:
             d = env["shown"][0] if env["shown"] else {}
             rel = d.get("relation", "")
             conf = d.get("confidence", "")
@@ -980,7 +1140,15 @@ def _community_header(cid: int, community_name) -> str:
     return base
 
 
-def _build_server(graph_path: str):
+def _build_server(
+    graph_path: str,
+    *,
+    allowed_project_roots: Sequence[str | Path] | None = None,
+    enable_github_tools: bool = False,
+    github_repo: str | None = None,
+    context_cache_entries: int = _DEFAULT_CONTEXT_CACHE_ENTRIES,
+    context_cache_bytes: int = _DEFAULT_CONTEXT_CACHE_BYTES,
+):
     """Build the configured low-level MCP Server (shared by every transport).
 
     All graph query tools and resources are registered here over a single
@@ -992,21 +1160,31 @@ def _build_server(graph_path: str):
 
     try:
         from mcp.server import Server
+
+        # Optional MCP types stay function-local, but every registered handler
+        # below is nested in _build_server and closes over this binding.
         from mcp import types
         from pydantic import AnyUrl
     except ImportError as e:
         raise ImportError(f"mcp not installed. Run: {uv_tool_install_command('mcp')}") from e
-
-    from graphify import paths as _paths
 
     # Per-graph context cache: resolved graph.json path -> {key, G, communities}.
     # The server's default graph is just the first entry; a tool call carrying a
     # project_path adds its own. Routing every graph through one cache means the
     # eager trigram index and the mtime+size hot-reload behave identically for
     # the default graph and for any project graph.
-    _default_graph_path = graph_path
+    _default_graph_path = str(Path(graph_path).expanduser().resolve(strict=False))
+    _allowed_project_roots = _canonical_project_roots(_default_graph_path, allowed_project_roots)
+    _github_repo = (github_repo or "").strip() or None
+    if enable_github_tools and (
+        _github_repo is None or _GITHUB_REPOSITORY.fullmatch(_github_repo) is None
+    ):
+        raise ValueError("GitHub tools require a fixed GitHub repository in owner/repo form")
     _ctx_lock = threading.Lock()
-    _ctx_cache: dict[str, dict] = {}
+    _ctx_cache = _BoundedContextCache(
+        max_entries=context_cache_entries,
+        max_bytes=context_cache_bytes,
+    )
 
     def _load_ctx(path: str):
         """Return (G, communities) for a graph.json path, reusing a cached
@@ -1015,27 +1193,34 @@ def _build_server(graph_path: str):
         missing/corrupt file — it raises, so a bad project_path surfaces as a
         tool error instead of killing a server that is happily serving other
         projects."""
+        canonical_path = str(Path(path).expanduser().resolve(strict=False))
         try:
-            s = Path(path).stat()
+            s = Path(canonical_path).stat()
             key = (s.st_mtime_ns, s.st_size)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"graph.json not found: {path}")
-        ent = _ctx_cache.get(path)
-        if ent is not None and ent["key"] == key:
+        except FileNotFoundError as exc:
+            raise _GraphUnavailable("graph.json is unavailable") from exc
+        ent = _ctx_cache.get(canonical_path, key)
+        if ent is not None:
             return ent["G"], ent["communities"]
         with _ctx_lock:
-            ent = _ctx_cache.get(path)
-            if ent is not None and ent["key"] == key:
+            ent = _ctx_cache.get(canonical_path, key)
+            if ent is not None:
                 return ent["G"], ent["communities"]  # another thread built it
             try:
-                new_G = _load_graph(path)
+                new_G = _load_graph(canonical_path)
             except SystemExit as e:  # _load_graph exits on missing/corrupt file
-                raise RuntimeError(f"could not load graph.json at {path}") from e
+                raise _GraphUnavailable("graph.json could not be loaded") from e
             # Warm the trigram index before exposing the graph so the first query
             # against it is fast (same rationale as the original startup warm-up).
             _get_trigram_index(new_G)
             comm = _communities_from_graph(new_G)
-            _ctx_cache[path] = {"key": key, "G": new_G, "communities": comm}
+            _ctx_cache.put(
+                canonical_path,
+                key=key,
+                graph=new_G,
+                communities=comm,
+                serialized_bytes=s.st_size,
+            )
             return new_G, comm
 
     def _resolve_graph_path(project_path) -> str:
@@ -1045,7 +1230,17 @@ def _build_server(graph_path: str):
         GRAPHIFY_OUT override so worktree/shared-output setups keep working."""
         if not project_path:
             return _default_graph_path
-        return str(Path(project_path) / _paths.GRAPHIFY_OUT / "graph.json")
+        if not isinstance(project_path, str) or not Path(project_path).expanduser().is_absolute():
+            raise _ProjectAccessDenied("project path is not allowed")
+        project = Path(project_path).expanduser().resolve(strict=False)
+        if not any(
+            project == root or project.is_relative_to(root) for root in _allowed_project_roots
+        ):
+            raise _ProjectAccessDenied("project path is not allowed")
+        graph = (project / _paths.GRAPHIFY_OUT / "graph.json").resolve(strict=False)
+        if not any(graph == root or graph.is_relative_to(root) for root in _allowed_project_roots):
+            raise _ProjectAccessDenied("project graph is not allowed")
+        return str(graph)
 
     # Active per-request context, rebound by _select_graph() and read by the tool
     # handlers below. No lock needed on the hot path: _select_graph and the
@@ -1055,7 +1250,7 @@ def _build_server(graph_path: str):
     active_graph_path = _default_graph_path
     try:
         G, communities = _load_ctx(_default_graph_path)
-    except (FileNotFoundError, RuntimeError):
+    except _GraphUnavailable:
         # No default graph at startup → run as a pure multi-project server. Tools
         # then require project_path; a call without one gets a clear error rather
         # than the process refusing to start (which is what _load_graph would do).
@@ -1250,6 +1445,12 @@ def _build_server(graph_path: str):
                 },
             ),
         ]
+        if not enable_github_tools:
+            _tools = [tool for tool in _tools if tool.name not in _GITHUB_TOOL_NAMES]
+        else:
+            for tool in _tools:
+                if tool.name in _GITHUB_TOOL_NAMES:
+                    tool.inputSchema.get("properties", {}).pop("repo", None)
         # Multi-project support: every tool accepts an optional project_path.
         # Injected here (rather than repeated in 11 literal schemas) so the set
         # stays in lockstep as tools are added. Omitting it keeps the historical
@@ -1271,7 +1472,7 @@ def _build_server(graph_path: str):
 
         question = arguments["question"]
         mode = arguments.get("mode", "bfs")
-        depth = min(int(arguments.get("depth", 3)), 6)
+        depth = int(arguments.get("depth", 3))
         budget = int(arguments.get("token_budget", 2000))
         context_filter = arguments.get("context_filter")
         _t0 = _time.perf_counter()
@@ -1298,15 +1499,12 @@ def _build_server(graph_path: str):
 
     def _tool_get_node(arguments: dict) -> str:
         graph = _require_graph()
-        label = arguments["label"].lower()
-        matches = [
-            (nid, d)
-            for nid, d in graph.nodes(data=True)
-            if label in (d.get("label") or "").lower() or label == nid.lower()
-        ]
+        label = str(arguments["label"])
+        matches = _find_node(graph, label)
         if not matches:
-            return f"No node matching '{label}' found."
-        nid, d = matches[0]
+            return f"No node matching '{label.lower()}' found."
+        nid = matches[0]
+        d = graph.nodes[nid]
         # Sanitise every LLM-derived field before concatenation (F-010).
         return "\n".join(
             [
@@ -1315,7 +1513,7 @@ def _build_server(graph_path: str):
                 f"  Source: {sanitize_label(str(d.get('source_file', '')))} {sanitize_label(str(d.get('source_location', '')))}",
                 f"  Type: {sanitize_label(str(d.get('file_type', '')))}",
                 f"  Community: {sanitize_label(str(d.get('community_name') or d.get('community', '')))}",
-                f"  Degree: {graph.degree(nid)}",
+                f"  Distinct neighbors: {distinct_neighbor_degree(graph, nid)}",
             ]
         )
 
@@ -1348,7 +1546,10 @@ def _build_server(graph_path: str):
 
         nodes = _god_nodes(_require_graph(), top_n=int(arguments.get("top_n", 10)))
         lines = ["God nodes (most connected):"]
-        lines += [f"  {i}. {n['label']} - {n['degree']} edges" for i, n in enumerate(nodes, 1)]
+        lines += [
+            f"  {i}. {n['label']} - {n['degree']} distinct neighbors"
+            for i, n in enumerate(nodes, 1)
+        ]
         return "\n".join(lines)
 
     def _tool_graph_stats(_: dict) -> str:
@@ -1375,12 +1576,12 @@ def _build_server(graph_path: str):
     def _tool_list_prs(arguments: dict) -> str:
         from graphify.prs import fetch_prs, fetch_worktrees, format_prs_text, _detect_default_branch
 
-        repo = arguments.get("repo") or None
+        repo = _github_repo
         base = arguments.get("base") or _detect_default_branch(repo)
         try:
             prs = fetch_prs(repo=repo, base=base)
-        except RuntimeError as e:
-            return f"Error: {e}"
+        except RuntimeError as exc:
+            raise _GitHubRequestFailed("GitHub request failed") from exc
         worktrees = fetch_worktrees()
         for pr in prs:
             pr.worktree_path = worktrees.get(pr.branch)
@@ -1390,7 +1591,7 @@ def _build_server(graph_path: str):
         from graphify.prs import fetch_pr_files, compute_pr_impact, _gh, _parse_ci
 
         number = int(arguments["pr_number"])
-        repo = arguments.get("repo") or None
+        repo = _github_repo
         # Use gh pr view directly — works for any base branch, not just the default
         view_args = [
             "pr",
@@ -1451,12 +1652,12 @@ def _build_server(graph_path: str):
             _detect_default_branch,
         )
 
-        repo = arguments.get("repo") or None
+        repo = _github_repo
         base = arguments.get("base") or _detect_default_branch(repo)
         try:
             prs = fetch_prs(repo=repo, base=base)
-        except RuntimeError as e:
-            return f"Error: {e}"
+        except RuntimeError as exc:
+            raise _GitHubRequestFailed("GitHub request failed") from exc
         worktrees = fetch_worktrees()
         for pr in prs:
             pr.worktree_path = worktrees.get(pr.branch)
@@ -1474,8 +1675,8 @@ def _build_server(graph_path: str):
                 pr = future_to_pr[fut]
                 try:
                     files = fut.result()
-                except Exception:
-                    files = []
+                except Exception as exc:
+                    raise _GitHubRequestFailed("GitHub request failed") from exc
                 if files:
                     pr.files_changed = files
                     pr.communities_touched, pr.nodes_affected = compute_pr_impact(files, graph)
@@ -1489,7 +1690,10 @@ def _build_server(graph_path: str):
             key=lambda x: _STATUS_ORDER.index(x.status) if x.status in _STATUS_ORDER else 99,
         ):
             impact = f"  blast_radius={p.blast_radius}" if p.blast_radius else ""
-            wt = f"  worktree={p.worktree_path}" if p.worktree_path else ""
+            # HTTP MCP output may be forwarded to a remote model. Preserve the
+            # useful local-worktree signal without disclosing an absolute home
+            # or checkout path; the local ``graphify prs`` UI still shows it.
+            wt = "  worktree=active" if p.worktree_path else ""
             lines.append(
                 f"PR #{p.number} [{p.status}] CI={p.ci_status} review={p.review_decision or 'none'} "
                 f"age={p.days_old}d author={p.author}{impact}{wt}\n  title: {p.title}"
@@ -1508,6 +1712,9 @@ def _build_server(graph_path: str):
         "get_pr_impact": _tool_get_pr_impact,
         "triage_prs": _tool_triage_prs,
     }
+    if not enable_github_tools:
+        for tool_name in _GITHUB_TOOL_NAMES:
+            _handlers.pop(tool_name, None)
 
     def _load_community_labels() -> dict[int, str]:
         labels_path = Path(active_graph_path).parent / ".graphify_labels.json"
@@ -1589,8 +1796,8 @@ def _build_server(graph_path: str):
                         f"  {s.get('source', '')} <-> {s.get('target', '')} [{s.get('relation', '')}]"
                     )
                 return "\n".join(lines)
-            except Exception as exc:
-                return f"Could not compute surprising connections: {exc}"
+            except Exception:
+                return "Could not compute surprising connections."
         if uri_str == "graphify://audit":
             confs = [d.get("confidence", "EXTRACTED") for _, _, d in graph.edges(data=True)]
             total = len(confs) or 1
@@ -1615,27 +1822,53 @@ def _build_server(graph_path: str):
                     else:
                         lines.append(f"  - {q}")
                 return "\n".join(lines)
-            except Exception as exc:
-                return f"Could not generate questions: {exc}"
+            except Exception:
+                return "Could not generate questions."
         raise ValueError(f"Unknown resource: {uri_str}")
 
+    def _tool_error(code: str, message: str) -> types.CallToolResult:
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=message)],
+            structuredContent={"code": code},
+            isError=True,
+        )
+
     @server.call_tool()
-    async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    async def call_tool(name: str, arguments: dict) -> types.CallToolResult:
         arguments = dict(arguments or {})
         project_path = arguments.pop("project_path", None)
         handler = _handlers.get(name)
         if not handler:
-            return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
+            return _tool_error("unknown_tool", "Unknown tool.")
         try:
             _select_graph(project_path)  # bind G/communities to the target graph
-            return [types.TextContent(type="text", text=handler(arguments))]
-        except Exception as exc:
-            return [types.TextContent(type="text", text=f"Error executing {name}: {exc}")]
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=handler(arguments))],
+                isError=False,
+            )
+        except _ProjectAccessDenied:
+            return _tool_error("project_access_denied", "Project access denied.")
+        except _GraphUnavailable:
+            return _tool_error("graph_unavailable", "Graph is unavailable.")
+        except _GitHubRequestFailed:
+            return _tool_error("github_unavailable", "GitHub request failed.")
+        except (KeyError, TypeError, ValueError):
+            return _tool_error("invalid_arguments", "Tool arguments are invalid.")
+        except Exception:
+            if name in _GITHUB_TOOL_NAMES:
+                return _tool_error("github_unavailable", "GitHub request failed.")
+            return _tool_error("internal_error", "Tool request failed.")
 
     return server
 
 
-def serve(graph_path: str | None = None) -> None:
+def serve(
+    graph_path: str | None = None,
+    *,
+    allowed_project_roots: Sequence[str | Path] | None = None,
+    enable_github_tools: bool = False,
+    github_repo: str | None = None,
+) -> None:
     """Start the MCP server over stdio (the default, per-developer transport)."""
     graph_path = graph_path or _default_graph_json()
     try:
@@ -1644,7 +1877,12 @@ def serve(graph_path: str | None = None) -> None:
         raise ImportError(f"mcp not installed. Run: {uv_tool_install_command('mcp')}") from e
     import asyncio
 
-    server = _build_server(graph_path)
+    server = _build_server(
+        graph_path,
+        allowed_project_roots=allowed_project_roots,
+        enable_github_tools=enable_github_tools,
+        github_repo=github_repo,
+    )
 
     async def main() -> None:
         async with stdio_server() as streams:
@@ -1724,6 +1962,13 @@ def _build_http_app(
     json_response: bool = False,
     stateless: bool = False,
     session_timeout: float | None = 3600.0,
+    allowed_hosts: Sequence[str] = (),
+    allowed_project_roots: Sequence[str | Path] | None = None,
+    enable_github_tools: bool = False,
+    github_repo: str | None = None,
+    context_cache_entries: int = _DEFAULT_CONTEXT_CACHE_ENTRIES,
+    context_cache_bytes: int = _DEFAULT_CONTEXT_CACHE_BYTES,
+    _bind_classification: BindHostClassification | None = None,
 ):
     """Build the Starlette ASGI app for the Streamable HTTP transport.
 
@@ -1753,19 +1998,32 @@ def _build_http_app(
     # A blank key (e.g. --api-key "" or an empty GRAPHIFY_API_KEY) must not be
     # mistaken for "auth on" — normalize it to None so the gate is unambiguous.
     api_key = (api_key or "").strip() or None
+    bind = _bind_classification or classify_bind_host(host, port)
+    if bind.kind != "loopback" and api_key is None:
+        raise ValueError("Non-loopback HTTP binds require an API key")
+    configured_hosts = list(allowed_hosts)
+    if bind.kind != "loopback" and bind.kind != "wildcard" and not configured_hosts:
+        configured_hosts = [host]
+    host_allowlist = _validated_allowed_hosts(
+        host,
+        port,
+        configured_hosts,
+        wildcard=bind.kind == "wildcard",
+    )
 
-    server = _build_server(graph_path)
+    server = _build_server(
+        graph_path,
+        allowed_project_roots=allowed_project_roots,
+        enable_github_tools=enable_github_tools,
+        github_repo=github_repo,
+        context_cache_entries=context_cache_entries,
+        context_cache_bytes=context_cache_bytes,
+    )
 
-    # DNS-rebinding protection. When the operator binds a wildcard address they
-    # are intentionally exposing the server, so accept any Host header; for a
-    # loopback/specific bind, restrict Host to that address (with and without
-    # the port) plus the localhost aliases.
-    if _is_wildcard_bind_host(host):
-        security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
-    else:
-        allowed = {host, "localhost", "127.0.0.1"}
-        allowed |= {f"{h}:{port}" for h in list(allowed)}
-        security = TransportSecuritySettings(allowed_hosts=sorted(allowed))
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=host_allowlist,
+    )
 
     # The SDK rejects a non-positive timeout and forbids one in stateless mode.
     idle_timeout = (
@@ -1808,6 +2066,12 @@ def serve_http(
     json_response: bool = False,
     stateless: bool = False,
     session_timeout: float | None = 3600.0,
+    allowed_hosts: Sequence[str] = (),
+    allowed_project_roots: Sequence[str | Path] | None = None,
+    enable_github_tools: bool = False,
+    github_repo: str | None = None,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
 ) -> None:
     """Start the MCP server over Streamable HTTP (MCP spec 2025-03-26).
 
@@ -1831,6 +2095,14 @@ def serve_http(
 
     api_key = (api_key or "").strip() or None
 
+    bind = classify_bind_host(host, port)
+    tls_paths = [value.strip() for value in (ssl_certfile or "", ssl_keyfile or "")]
+    if any(tls_paths) != all(tls_paths):
+        raise ValueError("TLS certificate and key must be configured together")
+    if bind.kind != "loopback" and not all(tls_paths):
+        raise ValueError("Non-loopback HTTP binds require a TLS certificate and key")
+    if all(tls_paths) and not all(Path(value).is_file() for value in tls_paths):
+        raise ValueError("TLS certificate and key must be readable files")
     app = _build_http_app(
         graph_path,
         host=host,
@@ -1840,20 +2112,26 @@ def serve_http(
         json_response=json_response,
         stateless=stateless,
         session_timeout=session_timeout,
+        allowed_hosts=allowed_hosts,
+        allowed_project_roots=allowed_project_roots,
+        enable_github_tools=enable_github_tools,
+        github_repo=github_repo,
+        _bind_classification=bind,
     )
 
-    auth_note = "api-key required" if api_key else "no auth (set --api-key to require one)"
+    auth_note = "api-key required" if api_key else "no auth (loopback only)"
+    scheme = "https" if all(tls_paths) else "http"
     print(
-        f"graphify MCP server (streamable-http) on http://{host}:{port}{path} - {auth_note}",
+        f"graphify MCP server (streamable-http) on {scheme}://{host}:{port}{path} - {auth_note}",
         file=sys.stderr,
     )
-    if _is_wildcard_bind_host(host) and not api_key:
-        print(
-            f"WARNING: binding {host or _IPV4_UNSPECIFIED} with no api-key exposes the graph "
-            "unauthenticated on the network. Set --api-key (or GRAPHIFY_API_KEY).",
-            file=sys.stderr,
-        )
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(
+        app,
+        host=bind.addresses[0],
+        port=port,
+        ssl_certfile=tls_paths[0] or None,
+        ssl_keyfile=tls_paths[1] or None,
+    )
 
 
 def _main(argv: list[str] | None = None) -> None:
@@ -1861,7 +2139,7 @@ def _main(argv: list[str] | None = None) -> None:
     import os
 
     parser = argparse.ArgumentParser(
-        prog="python -m graphify.serve",
+        prog="graphify serve" if argv is not None else None,
         description="Serve a graphify knowledge graph over MCP (stdio or Streamable HTTP).",
     )
     parser.add_argument(
@@ -1889,6 +2167,32 @@ def _main(argv: list[str] | None = None) -> None:
         "--api-key",
         default=os.environ.get("GRAPHIFY_API_KEY"),
         help="Require this key on the HTTP transport (env: GRAPHIFY_API_KEY)",
+    )
+    parser.add_argument("--ssl-certfile", help="TLS certificate file for HTTP transport")
+    parser.add_argument("--ssl-keyfile", help="TLS private-key file for HTTP transport")
+    parser.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="HOST",
+        help="Allowed HTTP Host header (repeatable; required for wildcard binds)",
+    )
+    parser.add_argument(
+        "--allow-project-root",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Canonical root containing projects this server may open (repeatable)",
+    )
+    parser.add_argument(
+        "--enable-github-tools",
+        action="store_true",
+        help="Enable GitHub-backed MCP tools for one fixed repository",
+    )
+    parser.add_argument(
+        "--github-repo",
+        metavar="OWNER/REPO",
+        help="Fixed repository authority for enabled GitHub tools",
     )
     parser.add_argument("--path", default="/mcp", help="HTTP mount path (default: /mcp)")
     parser.add_argument(
@@ -1920,9 +2224,20 @@ def _main(argv: list[str] | None = None) -> None:
             json_response=args.json_response,
             stateless=args.stateless,
             session_timeout=args.session_timeout,
+            allowed_hosts=args.allow_host,
+            allowed_project_roots=args.allow_project_root or None,
+            enable_github_tools=args.enable_github_tools,
+            github_repo=args.github_repo,
+            ssl_certfile=args.ssl_certfile,
+            ssl_keyfile=args.ssl_keyfile,
         )
     else:
-        serve(graph_path)
+        serve(
+            graph_path,
+            allowed_project_roots=args.allow_project_root or None,
+            enable_github_tools=args.enable_github_tools,
+            github_repo=args.github_repo,
+        )
 
 
 if __name__ == "__main__":

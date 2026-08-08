@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.skillgen import gen  # noqa: E402
+from graphify.semantic_schema import EDGE_RELATIONS, render_semantic_schema  # noqa: E402
 
 
 def test_check_passes():
@@ -218,6 +219,34 @@ def test_enum_is_full_six_value_superset_in_extraction_spec():
     spec = refs["extraction-spec.md"]
     assert "`code`, `document`, `paper`, `image`, `rationale`, `concept`" in spec
     assert '"file_type":"code|document|paper|image|rationale|concept"' in spec
+
+
+def test_extraction_reference_schema_is_rendered_from_runtime_owner():
+    """Public references and runtime extraction share executable schema data."""
+    _, refs = _claude_artifacts()
+    spec = refs["extraction-spec.md"]
+    canonical = render_semantic_schema()
+
+    assert canonical in spec
+    assert "@@SEMANTIC_SCHEMA@@" not in spec
+    assert "|".join(EDGE_RELATIONS) in spec
+
+
+def test_every_split_extraction_variant_renders_the_runtime_schema():
+    variants = set()
+    for platform in gen.load_platforms().values():
+        if platform.refs_dst is None:
+            continue
+        variants.add(platform.extraction)
+        artifacts = gen.render_all({platform.key: platform}, only=platform.key)
+        spec = next(
+            artifact.content
+            for artifact in artifacts
+            if artifact.path.endswith("/extraction-spec.md")
+        )
+        assert "@@SEMANTIC_SCHEMA@@" not in spec
+        assert render_semantic_schema() in spec
+    assert variants == {"compact", "verbose"}
 
 
 # --- codex + windows (the divergent split hosts) -------------------------------
@@ -553,6 +582,49 @@ def test_generated_skills_use_strict_state_and_preserve_multigraph_updates():
         REPO_ROOT / "tools/skillgen/fragments/references/shared/update.md"
     ).read_text(encoding="utf-8")
     assert "save_manifest(" not in update_fragment
+
+
+def test_every_generated_runbook_commits_then_acknowledges_under_publication_lock():
+    for key, platform in gen.load_platforms().items():
+        body = "\n".join(artifact.content for artifact in gen.render(platform))
+        sections = {
+            "build": body.split("### Step 4 - Build graph", maxsplit=1)[1].split(
+                "### Step 5 - Label communities", maxsplit=1
+            )[0],
+            "labels": body.split("### Step 5 - Label communities", maxsplit=1)[1].split(
+                "### Step 6 -", maxsplit=1
+            )[0],
+            "manifest": body.split("### Step 9 - Save manifest", maxsplit=1)[1],
+        }
+        for section_name, section in sections.items():
+            lines = section.splitlines()
+            lock_i = next(i for i, line in enumerate(lines) if "with output_state_lock(" in line)
+            transaction_i = next(
+                i
+                for i, line in enumerate(lines[lock_i + 1 :], lock_i + 1)
+                if "FileStateTransaction(" in line
+            )
+            commit_i = next(
+                i
+                for i, line in enumerate(lines[transaction_i + 1 :], transaction_i + 1)
+                if "transaction.commit()" in line
+            )
+            lock_indent = len(lines[lock_i]) - len(lines[lock_i].lstrip())
+            transaction_indent = len(lines[transaction_i]) - len(lines[transaction_i].lstrip())
+            commit_indent = len(lines[commit_i]) - len(lines[commit_i].lstrip())
+            assert lock_i < transaction_i < commit_i, (key, section_name)
+            assert transaction_indent > lock_indent, (key, section_name)
+            assert commit_indent > transaction_indent, (key, section_name)
+
+            if section_name == "manifest":
+                acknowledge_i = next(
+                    i
+                    for i, line in enumerate(lines[commit_i + 1 :], commit_i + 1)
+                    if "acknowledge_pending_signal(" in line
+                )
+                acknowledge_indent = len(lines[acknowledge_i]) - len(lines[acknowledge_i].lstrip())
+                assert commit_i < acknowledge_i, key
+                assert acknowledge_indent == transaction_indent, key
 
 
 def test_generated_runbooks_pass_root_to_save_manifest():

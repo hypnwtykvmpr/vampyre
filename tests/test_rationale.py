@@ -249,7 +249,15 @@ def test_decorated_method_node_id_is_class_qualified(tmp_path):
     normal_ids = [nid for nid, n in nodes_by_id.items() if n.get("label") == ".normal()"]
     assert len(normal_ids) == 1, "expected exactly one ``.normal()`` method node"
     normal_id = normal_ids[0]
-    assert normal_id.endswith("_bar_normal"), normal_id
+    bar_ids = {nid for nid, node in nodes_by_id.items() if node.get("label") == "Bar"}
+    assert len(bar_ids) == 1
+    bar_id = next(iter(bar_ids))
+    owned_methods = {
+        edge["target"]
+        for edge in result["edges"]
+        if edge.get("source") == bar_id and edge.get("relation") == "method"
+    }
+    assert normal_id in owned_methods
 
     # Each decorated method must share the same class-qualified id shape so the
     # rationale_for edge target matches the method node id.
@@ -261,13 +269,7 @@ def test_decorated_method_node_id_is_class_qualified(tmp_path):
             f"expected exactly one ``.{decorated_name}()`` method node, got {matches}"
         )
         method_id = matches[0]
-        assert method_id.endswith(f"_bar_{decorated_name}"), method_id
-        # Unqualified id (the buggy form) must NOT also be present.
-        unqualified_buggy_id = method_id.replace(f"_bar_{decorated_name}", f"_{decorated_name}")
-        assert unqualified_buggy_id not in nodes_by_id, (
-            f"buggy unqualified id {unqualified_buggy_id} should not exist alongside "
-            f"the class-qualified id"
-        )
+        assert method_id in owned_methods
 
     # Every rationale_for edge's target must resolve to an actual node in the
     # extraction (no dangling edges into phantom unqualified ids).

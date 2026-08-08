@@ -9,9 +9,13 @@ import stat
 import time
 import uuid
 from collections.abc import Iterable, Iterator
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO
+
+if TYPE_CHECKING:
+    from graphify.graph_state import GraphState
 
 
 def _sync_directory(path: Path) -> None:
@@ -71,6 +75,18 @@ def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None
     atomic_write_bytes(Path(path), text.encode(encoding))
 
 
+def publish_graph_state(path: Path, state: GraphState) -> None:
+    """Publish one fully encoded graph state under its output-directory lease."""
+    from graphify.graph_state import encode_graph_state_bytes
+
+    payload = encode_graph_state_bytes(state)
+    target = Path(path)
+    with output_state_lock(target.parent) as lease:
+        if lease is None:
+            raise RuntimeError("could not acquire graph publication lock")
+        atomic_write_bytes(target, payload)
+
+
 @dataclass(frozen=True)
 class _FileSnapshot:
     existed: bool
@@ -78,13 +94,60 @@ class _FileSnapshot:
     mode: int | None = None
 
 
+@dataclass(frozen=True)
+class PublicationLease:
+    """One generation of exclusive authority over an output directory."""
+
+    output_dir: Path
+    generation_path: Path
+    generation: bytes
+
+    def is_current(self) -> bool:
+        try:
+            return self.generation_path.read_bytes() == self.generation
+        except OSError:
+            return False
+
+
+class FileRollbackError(OSError):
+    """Report every state path that could not be restored."""
+
+    def __init__(self, failures: Iterable[tuple[Path, OSError]]) -> None:
+        self.failures = tuple(failures)
+        details = "; ".join(f"{path}: {error}" for path, error in self.failures)
+        super().__init__(
+            errno.EIO, f"rollback incomplete for {len(self.failures)} path(s): {details}"
+        )
+
+
+_active_publication_lease: ContextVar[PublicationLease | None] = ContextVar(
+    "graphify_publication_lease",
+    default=None,
+)
+
+
+def holds_output_state_lock(output_dir: Path) -> bool:
+    """Return whether this context owns the resolved output-directory lease."""
+    active = _active_publication_lease.get()
+    if active is None:
+        return False
+    output = Path(output_dir).expanduser().resolve(strict=False)
+    return active.output_dir == output
+
+
 class FileStateTransaction:
     """Restore a small known set of state files if publication fails."""
 
-    def __init__(self, paths: Iterable[Path] = ()) -> None:
+    def __init__(
+        self,
+        paths: Iterable[Path] = (),
+        *,
+        lease: PublicationLease | None = None,
+    ) -> None:
         self._files: dict[Path, _FileSnapshot] = {}
         self._directories: dict[Path, bool] = {}
         self._committed = False
+        self._lease = lease or _active_publication_lease.get()
         for path in paths:
             self.capture(path)
 
@@ -108,21 +171,36 @@ class FileStateTransaction:
     def commit(self) -> None:
         self._committed = True
 
-    def rollback(self) -> None:
+    def rollback(self) -> bool:
         if self._committed:
-            return
+            return True
+        if self._lease is not None and not self._lease.is_current():
+            return False
+        failures: list[tuple[Path, OSError]] = []
         for path, snapshot in reversed(list(self._files.items())):
-            if snapshot.existed:
-                atomic_write_bytes(path, snapshot.payload)
-                if snapshot.mode is not None:
-                    os.chmod(path, snapshot.mode)
-            else:
-                with contextlib.suppress(FileNotFoundError):
+            try:
+                if snapshot.existed:
+                    atomic_write_bytes(path, snapshot.payload)
+                    if snapshot.mode is not None:
+                        os.chmod(path, snapshot.mode)
+                else:
                     path.unlink()
+            except FileNotFoundError as exc:
+                if snapshot.existed:
+                    failures.append((path, exc))
+            except OSError as exc:
+                failures.append((path, exc))
         for directory, existed in reversed(list(self._directories.items())):
             if not existed:
-                with contextlib.suppress(OSError):
+                try:
                     directory.rmdir()
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    failures.append((directory, exc))
+        if failures:
+            raise FileRollbackError(failures)
+        return True
 
     def __enter__(self) -> FileStateTransaction:
         return self
@@ -206,6 +284,49 @@ def locked_file(path: Path, *, blocking: bool = True) -> Iterator[bool]:
                 with contextlib.suppress(OSError):
                     fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
         stream.close()
+
+
+@contextlib.contextmanager
+def output_state_lock(
+    output_dir: Path,
+    *,
+    blocking: bool = True,
+    reentrant: bool = True,
+) -> Iterator[PublicationLease | None]:
+    """Hold one reentrant lock across a complete output-state lifecycle.
+
+    Lock ordering is publication guard first, then any pending-signal or queue
+    guard. Non-blocking hook writers may publish queue records before attempting
+    this lock, but they release the queue guard before acquisition.
+    """
+    output = Path(output_dir).expanduser().resolve(strict=False)
+    active = _active_publication_lease.get()
+    if reentrant and active is not None and active.output_dir == output:
+        yield active
+        return
+
+    with locked_file(output / ".rebuild.guard", blocking=blocking) as acquired:
+        if not acquired:
+            yield None
+            return
+        generation = f"{time.time_ns()}:{os.getpid()}:{uuid.uuid4().hex}\n".encode("ascii")
+        generation_path = output / ".publication-generation"
+        atomic_write_bytes(generation_path, generation)
+        lease = PublicationLease(output, generation_path, generation)
+        token = _active_publication_lease.set(lease)
+        try:
+            yield lease
+        finally:
+            _active_publication_lease.reset(token)
+            try:
+                if generation_path.read_bytes() == generation:
+                    generation_path.unlink()
+                    _sync_directory(output)
+            except OSError:
+                pass
+            # Keep the guard inode stable for the lifetime of the output path.
+            # Unlinking it while another process has the file open creates a
+            # second lock domain when a third process recreates the pathname.
 
 
 def _pending_signal_guard(path: Path) -> Path:

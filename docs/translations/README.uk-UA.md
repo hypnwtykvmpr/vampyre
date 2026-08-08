@@ -279,10 +279,10 @@ graphify query "покажи потік автентифікації"
 graphify query "що пов'язує DigestAuth з Response?" --graph graphify-out/graph.json
 
 # відкрити граф як MCP-сервер (для повторного доступу через інструменти)
-python -m graphify.serve graphify-out/graph.json
+graphify serve graphify-out/graph.json
 
 # зареєструвати в Kimi Code:
-kimi mcp add --transport stdio graphify -- python -m graphify.serve graphify-out/graph.json
+kimi mcp add --transport stdio graphify -- graphify-mcp graphify-out/graph.json
 ```
 
 MCP-сервер надає асистенту структурований доступ: `query_graph`, `get_node`, `get_neighbors`, `shortest_path`, `list_prs`, `get_pr_impact`, `triage_prs`.
@@ -316,7 +316,7 @@ MCP-сервер надає асистенту структурований до
 | `GRAPHIFY_MAX_WORKERS` | Кількість потоків паралелізму AST | опціонально — також прапор `--max-workers` |
 | `GRAPHIFY_MAX_OUTPUT_TOKENS` | Підвищити ліміт виводу для щільних корпусів | опціонально — напр. `32768` для великих файлів |
 | `GRAPHIFY_API_TIMEOUT` | HTTP тайм-аут у секундах (типово: 600) | опціонально — також прапор `--api-timeout` |
-| `GRAPHIFY_FORCE` | Примусове перебудування графу навіть із меншою кількістю вузлів | опціонально — також прапор `--force` |
+| `GRAPHIFY_FORCE` | Прийняти перевірене непорожнє зменшення графу; не вмикає `--full` і не обходить кеш | опціонально — також прапор `--force` |
 | `GRAPHIFY_GOOGLE_WORKSPACE` | Автоввімкнення експорту Google Workspace | опціонально — встановіть в `1` |
 | `GRAPHIFY_TRIAGE_BACKEND` | Backend для `graphify prs --triage` | опціонально — автовизначення з наявних ключів |
 | `GRAPHIFY_TRIAGE_MODEL` | Перевизначення моделі для triage | опціонально — напр. `claude-opus-4-7` |
@@ -344,12 +344,12 @@ pip встановлює скрипти в директорію bin для ко�
 PowerShell трактує ведучий `/` як роздільник шляху. Використовуйте `graphify .` (без слеша) на Windows.
 
 **Граф має менше вузлів після `--update` або перебудови**
-Якщо рефакторинг видалив файли, старі вузли залишаються. Передайте `--force` (або встановіть `GRAPHIFY_FORCE=1`), щоб перезаписати навіть якщо перебудова має менше вузлів.
+Якщо ви перевірили непорожнє зменшення графу, передайте `--force` (або встановіть `GRAPHIFY_FORCE=1`). Для повного сканування разом із прийняттям зменшення використовуйте `--full --force`.
 
 **Граф має дублікати вузлів для однієї сутності (фантомні дублікати)**
 Це трапляється, коли семантичне та AST-витягування не погодилось щодо формату ID вузла. Запустіть повне повторне витягування для очищення:
 ```bash
-graphify extract . --force
+graphify extract . --full --force
 ```
 
 **Ollama вичерпує VRAM / перевищено вікно контексту**
@@ -450,7 +450,8 @@ graphify extract ./docs --max-concurrency 2    # менше паралельни
 graphify extract ./docs --api-timeout 900      # довший HTTP тайм-аут для повільних локальних моделей (типово 600с)
 graphify extract ./docs --google-workspace     # експортувати .gdoc/.gsheet/.gslides через gws перед витягуванням
 graphify extract ./docs --no-cluster           # лише сире витягування, пропустити кластеризацію
-graphify extract ./docs --force                # перезаписати graph.json навіть якщо новий граф має менше вузлів (використовуйте після рефакторингу або для очищення фантомних дублікатів)
+graphify extract ./docs --force                # прийняти перевірене непорожнє зменшення без зміни області сканування чи кешу
+graphify extract ./docs --full --force         # повне сканування та прийняття зменшення для відновлення старих ID/фантомів
 graphify extract ./docs --dedup-llm            # LLM-арбітр для неоднозначних пар сутностей (використовує той самий API-ключ)
 graphify extract ./docs --global --as myrepo   # витягнути і зареєструвати в крос-проектний глобальний граф
 GRAPHIFY_MAX_OUTPUT_TOKENS=32768 graphify extract ./docs --backend claude  # підвищити ліміт виводу для щільних корпусів
@@ -517,37 +518,33 @@ graphify cluster-only ./my-project --exclude-hubs 99           # виключи�
 
 ```bash
 git clone https://github.com/hypnwtykvmpr/vampyre.git
-cd graphify
-git checkout v8                        # гілка активної розробки
+cd vampyre
+git checkout main                      # гілка активної розробки
 
-# Створіть віртуальне середовище (потрібен Python 3.10+):
-python3 -m venv .venv
-source .venv/bin/activate              # Windows: .venv\Scripts\activate
-
-# Встановіть у редагованому режимі з усіма опціональними пакетами:
+# Створіть середовище проєкту та встановіть усі опціональні пакети:
+uv sync --all-extras
 ```
 
 Перевірте редаговане встановлення:
 ```bash
-graphify --version
-python -c "import graphify; print(graphify.__file__)"
+uv run graphify --version
+uv run python -c "import graphify; print(graphify.__file__)"
 ```
 
 ### Запуск тестів
 
 ```bash
-pytest tests/ -q                       # запустити весь набір тестів
-pytest tests/test_extract.py -q        # один модуль
-pytest tests/ -q -k "python"           # фільтрація за назвою
+uv run pytest tests/ -n auto --dist loadgroup -q  # запустити весь набір тестів
+uv run pytest tests/test_extract.py -q             # один модуль
 ```
 
 > Примітка для macOS: набір тестів включає обидва файли `sample.f90` та `sample.F90`. Вони конфліктують на файлових системах HFS+ / APFS без урахування регістру. Запускайте на Linux або в Docker-контейнері, якщо потрібно тестувати обидва варіанти Fortran одночасно.
 
 ### Робочий процес з git
 
-- Активна розробка відбувається в гілці `v8`.
+- Активна розробка відбувається в гілці `main`; `v9` є дзеркалом встановлення.
 - Стиль комітів: `fix: <опис>` / `feat: <опис>` / `docs: <опис>`
-- Перед відкриттям PR запустіть `pytest tests/ -q` і переконайтесь, що він проходить.
+- Перед відкриттям PR запустіть повну команду тестування вище й переконайтесь, що вона проходить.
 - Додайте файл-фікстуру до `tests/fixtures/` і тести до `tests/test_languages.py` для будь-якого нового екстрактора мови.
 
 ### Що варто додати

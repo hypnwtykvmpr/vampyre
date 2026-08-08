@@ -3,6 +3,8 @@
 from pathlib import Path
 import shutil
 import tempfile
+
+import pytest
 from graphify.extract import (
     extract,
     extract_sln,
@@ -124,6 +126,57 @@ def test_csproj_invalid_xml():
         f.flush()
         r = extract_csproj(Path(f.name))
     assert "error" in r
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "extractor", "content"),
+    [
+        (
+            "Solution.sln",
+            extract_sln,
+            'Project("{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}") = "App", "src\\App\\App.csproj", "{11111111-1111-1111-1111-111111111111}"\n'
+            "EndProject\n"
+            'Project("{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}") = "Lib", "src\\Lib\\Lib.csproj", "{22222222-2222-2222-2222-222222222222}"\n'
+            "EndProject\n",
+        ),
+        (
+            "Solution.slnx",
+            extract_slnx,
+            '<Solution><Project Path="src/App/App.csproj">'
+            '<BuildDependency Project="src/Lib/Lib.csproj"/>'
+            '</Project><Project Path="src/Lib/Lib.csproj"/></Solution>',
+        ),
+        (
+            "src/App/App.csproj",
+            extract_csproj,
+            '<Project><ItemGroup><ProjectReference Include="../Lib/Lib.csproj"/>'
+            "</ItemGroup></Project>",
+        ),
+    ],
+)
+def test_dotnet_project_reference_ids_are_checkout_root_independent(
+    tmp_path, relative_path, extractor, content
+):
+    fingerprints = []
+    for checkout_name in ("checkout-a", "checkout-b"):
+        root = tmp_path / checkout_name
+        project_file = root / relative_path
+        project_file.parent.mkdir(parents=True)
+        project_file.write_text(content, encoding="utf-8")
+
+        result = extractor(project_file, source_root=root)
+        referenced_ids = {
+            node["id"] for node in result["nodes"] if node.get("id") != result["nodes"][0]["id"]
+        }
+        reference_edges = {
+            (edge["relation"], edge["target"])
+            for edge in result["edges"]
+            if edge["relation"] in {"contains", "imports"}
+        }
+        fingerprints.append((referenced_ids, reference_edges))
+        assert all(str(root).casefold() not in node_id for node_id in referenced_ids)
+
+    assert fingerprints[0] == fingerprints[1]
 
 
 # ── .xaml ────────────────────────────────────────────────────────────────────

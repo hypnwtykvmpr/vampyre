@@ -1,5 +1,6 @@
 """Tests for graphify.wiki — Wikipedia-style article generation."""
 
+import json
 import re
 import urllib.parse
 import pytest
@@ -38,6 +39,14 @@ COHESION = {0: 0.85, 1: 0.72}
 GOD_NODES = [{"id": "n1", "label": "parse", "degree": 2}]
 
 
+def _tree_snapshot(root):
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path.name != ".publication-generation"
+    }
+
+
 def test_to_wiki_writes_index(tmp_path):
     G = _make_graph()
     to_wiki(
@@ -63,6 +72,116 @@ def test_to_wiki_returns_article_count(tmp_path):
         god_nodes_data=GOD_NODES,
     )
     assert n == 3
+
+
+def test_wiki_preserves_unowned_markdown_and_prunes_only_owned_stale_pages(tmp_path):
+    user_page = tmp_path / "Home.md"
+    user_page.write_text("# User-authored home\n", encoding="utf-8")
+    graph = _make_graph()
+
+    to_wiki(graph, COMMUNITIES, tmp_path, community_labels={0: "Old", 1: "Rendering"})
+    assert (tmp_path / "Old.md").exists()
+    to_wiki(graph, COMMUNITIES, tmp_path, community_labels={0: "New", 1: "Rendering"})
+
+    assert user_page.read_text(encoding="utf-8") == "# User-authored home\n"
+    assert not (tmp_path / "Old.md").exists()
+    assert (tmp_path / "New.md").exists()
+    manifest = json.loads((tmp_path / ".graphify_wiki_manifest.json").read_text(encoding="utf-8"))
+    assert "Home.md" not in manifest["files"]
+    assert "New.md" in manifest["files"]
+
+
+def test_wiki_refuses_unowned_filename_collision_without_mutation(tmp_path):
+    collision = tmp_path / "Parsing_Layer.md"
+    collision.write_text("# User content\n", encoding="utf-8")
+    before = _tree_snapshot(tmp_path)
+
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        to_wiki(_make_graph(), COMMUNITIES, tmp_path, community_labels=LABELS)
+
+    assert _tree_snapshot(tmp_path) == before
+
+
+def test_wiki_publication_failure_restores_previous_generation(monkeypatch, tmp_path):
+    graph = _make_graph()
+    to_wiki(graph, COMMUNITIES, tmp_path, community_labels=LABELS)
+    before = _tree_snapshot(tmp_path)
+    from graphify.persistence import atomic_write_text as original
+
+    writes = 0
+
+    def fail_second_write(path, content, *, encoding="utf-8"):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("injected publication failure")
+        return original(path, content, encoding=encoding)
+
+    monkeypatch.setattr("graphify.wiki.atomic_write_text", fail_second_write, raising=False)
+
+    with pytest.raises(OSError, match="injected publication failure"):
+        to_wiki(graph, COMMUNITIES, tmp_path, community_labels={0: "Changed", 1: "Other"})
+
+    assert _tree_snapshot(tmp_path) == before
+
+
+def test_wiki_three_repeated_runs_are_byte_identical(tmp_path):
+    graph = _make_graph()
+    snapshots = []
+    for _ in range(3):
+        to_wiki(
+            graph,
+            COMMUNITIES,
+            tmp_path,
+            community_labels=LABELS,
+            cohesion=COHESION,
+            god_nodes_data=GOD_NODES,
+        )
+        snapshots.append(_tree_snapshot(tmp_path))
+
+    assert snapshots[0] == snapshots[1] == snapshots[2]
+
+
+def test_wiki_god_article_separates_direction_and_parallel_record_counts(tmp_path):
+    graph = nx.MultiDiGraph()
+    graph.add_node("a", label="Alpha", source_file="a.py")
+    graph.add_node("b", label="Beta", source_file="b.py")
+    graph.add_node("c", label="Gamma", source_file="c.py")
+    graph.add_edge(
+        "a",
+        "b",
+        key="call-L5",
+        relation="calls",
+        source_location="L5",
+        confidence="EXTRACTED",
+        _origin="ast",
+    )
+    graph.add_edge(
+        "a",
+        "b",
+        key="call-L9",
+        relation="calls",
+        source_location="L9",
+        confidence="INFERRED",
+        provenance={"provider": "semantic"},
+    )
+    graph.add_edge("c", "a", key="incoming", relation="imports", confidence="EXTRACTED")
+
+    to_wiki(
+        graph,
+        {0: ["a", "b", "c"]},
+        tmp_path,
+        god_nodes_data=[{"id": "a", "label": "Alpha", "degree": 2}],
+    )
+    article = (tmp_path / "Alpha.md").read_text(encoding="utf-8")
+
+    assert "2 distinct neighbors" in article
+    assert "3 edge records" in article
+    assert "## Outgoing Connections" in article
+    assert "## Incoming Connections" in article
+    assert "2 records" in article
+    assert "key=call-L5" in article and "key=call-L9" in article
+    assert "Beta" in article and "Gamma" in article
 
 
 def test_to_wiki_community_articles_created(tmp_path):
@@ -91,7 +210,7 @@ def test_index_lists_god_nodes(tmp_path):
     to_wiki(G, COMMUNITIES, tmp_path, community_labels=LABELS, god_nodes_data=GOD_NODES)
     index = (tmp_path / "index.md").read_text(encoding="utf-8")
     assert "[parse](parse.md)" in index
-    assert "2 connections" in index
+    assert "2 distinct neighbors" in index
 
 
 def test_community_article_has_cross_links(tmp_path):
@@ -296,6 +415,9 @@ def test_to_wiki_god_node_label_case_collides_with_community(tmp_path):
     assert len(articles) == n == 2, [p.name for p in articles]
     lowered = [p.stem.lower() for p in articles]
     assert len(set(lowered)) == len(lowered), [p.name for p in articles]
+    index = (tmp_path / "index.md").read_text(encoding="utf-8")
+    assert "[Parser](Parser.md)" in index
+    assert "[parser](parser_2.md)" in index
 
 
 # Regression tests for portable wiki links - Obsidian [[wikilinks]] break in
@@ -431,3 +553,23 @@ def test_wiki_links_use_collision_suffixed_slug(tmp_path):
     assert "parser_2.md" in index_targets  # link points at the suffixed file...
     for t in index_targets:
         assert (tmp_path / t).exists(), t  # ...and every target is a real file
+
+
+def test_wiki_index_links_exact_duplicate_labels_to_distinct_articles(tmp_path):
+    graph = nx.Graph()
+    graph.add_nodes_from(
+        [
+            ("a", {"label": "A", "source_file": "a.py"}),
+            ("b", {"label": "B", "source_file": "b.py"}),
+        ]
+    )
+    graph.add_edge("a", "b", relation="calls")
+
+    to_wiki(graph, {0: ["a"], 1: ["b"]}, tmp_path, community_labels={0: "Parser", 1: "Parser"})
+
+    targets = [
+        target for _, target in _inline_links((tmp_path / "index.md").read_text(encoding="utf-8"))
+    ]
+    assert targets.count("Parser.md") == 1
+    assert targets.count("Parser_2.md") == 1
+    assert all((tmp_path / target).exists() for target in targets)

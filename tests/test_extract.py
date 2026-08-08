@@ -1,4 +1,5 @@
 import io
+import hashlib
 import json
 import os
 from collections import Counter
@@ -19,6 +20,161 @@ from graphify.graph_loader import load_graph
 from graphify.projections import edge_records_between
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_id_channel_registry_remaps_only_declared_node_references():
+    from graphify.id_channels import (
+        ExtractionState,
+        apply_id_remap,
+        assert_registered_references_live,
+    )
+
+    state = ExtractionState(
+        nodes=[
+            {"id": "old", "label": "old", "source_file": "old"},
+            {"id": "keep", "label": "keep"},
+        ],
+        edges=[
+            {
+                "source": "old",
+                "target": "keep",
+                "relation": "calls",
+                "source_file": "old",
+                "context": "old",
+            }
+        ],
+        hyperedges=[{"nodes": ["old", "keep"], "label": "old"}],
+        raw_calls=[{"caller_nid": "old", "callee": "old", "source_file": "old"}],
+        swift_extensions=[{"nid": "old", "label": "old"}],
+    )
+
+    apply_id_remap(state, {"old": "canonical"})
+    assert_registered_references_live(state)
+
+    assert state.nodes[0] == {"id": "canonical", "label": "old", "source_file": "old"}
+    assert state.edges[0]["source"] == "canonical"
+    assert state.edges[0]["source_file"] == "old"
+    assert state.edges[0]["context"] == "old"
+    assert state.hyperedges[0]["nodes"] == ["canonical", "keep"]
+    assert state.hyperedges[0]["label"] == "old"
+    assert state.raw_calls[0] == {
+        "caller_nid": "canonical",
+        "callee": "old",
+        "source_file": "old",
+    }
+    assert state.swift_extensions[0] == {"nid": "canonical", "label": "old"}
+
+
+def test_id_channel_registry_rejects_new_unclassified_producer_field():
+    import pytest
+
+    from graphify.id_channels import assert_no_unclassified_id_fields
+
+    with pytest.raises(ValueError, match="raw_calls.*target_nid"):
+        assert_no_unclassified_id_fields(
+            [{"raw_calls": [{"caller_nid": "caller", "target_nid": "target"}]}]
+        )
+
+
+def test_type_table_paths_and_names_are_classified_as_non_ids():
+    from graphify.id_channels import (
+        SIDE_CHANNEL_CLASSIFICATIONS,
+        assert_no_unclassified_id_fields,
+    )
+
+    expected = {
+        "swift_type_table",
+        "ts_type_table",
+        "cpp_type_table",
+        "csharp_type_table",
+        "objc_type_table",
+    }
+    assert expected <= SIDE_CHANNEL_CLASSIFICATIONS.keys()
+    assert_no_unclassified_id_fields(
+        [
+            {
+                channel: {"path": "/absolute/source.ext", "table": {"value": "TypeName"}}
+                for channel in expected
+            }
+        ]
+    )
+
+
+def test_colliding_ids_skip_only_references_without_a_unique_claimant(tmp_path):
+    from graphify.extract import _disambiguate_colliding_node_ids
+    from graphify.id_channels import ExtractionState, assert_registered_references_live
+
+    first = tmp_path / "first.py"
+    second = tmp_path / "second.py"
+    unrelated = tmp_path / "unrelated.py"
+    state = ExtractionState(
+        nodes=[
+            {"id": "string", "label": "String", "source_file": str(first)},
+            {"id": "string", "label": "String", "source_file": str(second)},
+            {"id": "sink", "label": "sink", "source_file": str(unrelated)},
+        ],
+        edges=[
+            {
+                "source": "string",
+                "target": "sink",
+                "relation": "calls",
+                "source_file": str(first),
+            },
+            {
+                "source": "sink",
+                "target": "string",
+                "relation": "calls",
+                "source_file": str(unrelated),
+            },
+        ],
+        raw_calls=[{"caller_nid": "string", "callee": "work", "source_file": str(unrelated)}],
+        hyperedges=[
+            {"nodes": ["string", "sink"], "source_file": str(unrelated), "label": "ambiguous"}
+        ],
+    )
+
+    diagnostics = _disambiguate_colliding_node_ids(state, tmp_path)
+
+    assert len({node["id"] for node in state.nodes}) == 3
+    assert len(state.edges) == 1
+    assert state.edges[0]["source"] != "string"
+    assert state.edges[0]["target"] == "sink"
+    assert state.raw_calls == []
+    assert state.hyperedges == []
+    assert diagnostics == {
+        "contested_aliases": ["string"],
+        "skipped_contested_edges": 1,
+        "skipped_contested_raw_calls": 1,
+        "skipped_contested_hyperedge_members": 1,
+        "dropped_contested_hyperedges": 1,
+    }
+    assert_registered_references_live(state)
+
+
+def test_empty_error_marker_is_failed_and_never_deferred_for_cache(tmp_path, monkeypatch):
+    source = tmp_path / "broken.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    monkeypatch.setattr(extract_module, "_get_extractor", lambda path: object())
+    monkeypatch.setattr(
+        extract_module,
+        "_extract_stable_source",
+        lambda extractor, path, root: {"nodes": [], "edges": [], "error": ""},
+    )
+
+    result = extract_module.extract(
+        [source],
+        cache_root=tmp_path,
+        source_root=tmp_path,
+        parallel=False,
+        defer_cache_writes=True,
+    )
+
+    assert result["failed_files"] == [str(source)]
+    assert result["_deferred_cache_entries"] == []
+
+
+def test_empty_exception_message_keeps_exception_type():
+    assert extract_module._error_result(MemoryError())["error"] == "MemoryError"
 
 
 def test_safe_extract_diagnostics_survive_a_strict_legacy_console(tmp_path, monkeypatch):
@@ -238,9 +394,8 @@ def test_go_cross_file_type_refs_resolve_to_single_node(tmp_path):
 
 def test_imported_type_stubs_do_not_collide_across_source_files(tmp_path):
     """#1462: imported stdlib/type stubs with the same label are distinct uses
-    when there is no single project definition to rewire onto. They need the
-    referencing file as a disambiguator while still keeping ``source_file`` empty
-    so real project definitions can be rewired by #1402."""
+    when there is no single project definition to rewire onto. They stay sourceless
+    while resolution runs, then retain the referencing file as durable provenance."""
     first = tmp_path / "pkg/a.py"
     second = tmp_path / "pkg/b.py"
     first.parent.mkdir(parents=True)
@@ -256,7 +411,7 @@ def test_imported_type_stubs_do_not_collide_across_source_files(tmp_path):
 
     assert len(path_nodes) == 2
     assert len({node["id"] for node in path_nodes}) == 2
-    assert all(not node.get("source_file") for node in path_nodes)
+    assert {node["source_file"] for node in path_nodes} == {"pkg/a.py", "pkg/b.py"}
 
 
 def test_origin_file_is_not_serialized_into_extract_output(tmp_path):
@@ -298,8 +453,8 @@ def test_go_imported_type_stubs_do_not_collide_across_source_files(tmp_path):
     ``origin_file`` key) landed only in the generic extractor, so the six dedicated
     extractors (Go, Rust, Julia, Fortran, PowerShell, ObjC) still collapsed same-label
     cross-file stubs into one conflated bare-id node — a false cross-package link.
-    They must stay distinct per file while keeping ``source_file`` empty so the #1402
-    rewire still collapses them onto a real definition when one exists."""
+    They must stay distinct per file while resolution runs, then retain the producing
+    file as durable provenance."""
     first = tmp_path / "a/use_a.go"
     second = tmp_path / "b/use_b.go"
     first.parent.mkdir(parents=True)
@@ -312,7 +467,27 @@ def test_go_imported_type_stubs_do_not_collide_across_source_files(tmp_path):
 
     assert len(widget_nodes) == 2
     assert len({node["id"] for node in widget_nodes}) == 2
-    assert all(not node.get("source_file") for node in widget_nodes)
+    assert {node["source_file"] for node in widget_nodes} == {"a/use_a.go", "b/use_b.go"}
+
+
+def test_extract_finalizes_every_unresolved_stub_source_deterministically(tmp_path):
+    source = tmp_path / "pkg/models.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "from typing import MissingType\n\ndef use(value: MissingType) -> MissingType:\n"
+        "    return value\n",
+        encoding="utf-8",
+    )
+
+    first = extract([source], cache_root=tmp_path)
+    second = extract([source], cache_root=tmp_path)
+
+    assert all(node.get("source_file") for node in first["nodes"])
+    missing = [node for node in first["nodes"] if node.get("label") == "MissingType"]
+    assert len(missing) == 1
+    assert missing[0]["source_file"] == "pkg/models.py"
+    assert "origin_file" not in missing[0]
+    assert first["nodes"] == second["nodes"]
 
 
 def test_extract_updates_raw_call_callers_after_duplicate_id_disambiguation(tmp_path):
@@ -380,7 +555,7 @@ def test_extract_keeps_stub_when_multiple_real_definitions_match(tmp_path):
     stubs = [
         node
         for node in result["nodes"]
-        if node["label"] == "BookStore" and not node.get("source_file")
+        if node["label"] == "BookStore" and node.get("source_file") == "services/BookStore.cs"
     ]
 
     assert stubs
@@ -398,7 +573,8 @@ def test_extract_does_not_rewire_inheritance_stub_to_same_named_function(tmp_pat
     inherits_edges = [edge for edge in result["edges"] if edge["relation"] == "inherits"]
 
     assert any(
-        node["label"] == "BookStore" and not node.get("source_file") for node in result["nodes"]
+        node["label"] == "BookStore" and node.get("source_file") == "services/BookStore.cs"
+        for node in result["nodes"]
     )
     assert not any(
         node_by_id[edge["source"]]["label"] == "SqliteBookStore"
@@ -1834,8 +2010,16 @@ def test_separator_collision_paths_get_distinct_ids(tmp_path):
     file_nodes = [n for n in result["nodes"] if str(n.get("label", "")).endswith(".py")]
     assert len(file_nodes) == 2
     file_ids = {n["id"] for n in file_nodes}
-    assert len(file_ids) == 2, sorted(file_ids)
-    assert {node_id.rsplit("_", 1)[-1] for node_id in file_ids} == {"50ab1c", "70fe68"}
+    old_id = _make_id("foo/bar_baz")
+    expected = {
+        _make_id(
+            source_key,
+            old_id,
+            hashlib.sha1(source_key.encode("utf-8"), usedforsecurity=False).hexdigest()[:6],
+        )
+        for source_key in ("foo/bar_baz.py", "foo_bar/baz.py")
+    }
+    assert file_ids == expected
 
 
 def test_non_colliding_path_id_is_not_salted(tmp_path):
@@ -2278,7 +2462,12 @@ def test_extract_external_cache_warm_and_cold_results_match(tmp_path):
     )
 
     assert warm == cold
-    assert {node["id"] for node in warm["nodes"]} >= {"a", "a_alpha", "b", "b_beta"}
+    assert {node["id"] for node in warm["nodes"]} >= {
+        "a",
+        _make_id("a", "alpha"),
+        "b",
+        _make_id("b", "beta"),
+    }
     assert not (source_root / "graphify-out").exists()
 
 

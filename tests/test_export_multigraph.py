@@ -30,6 +30,7 @@ from graphify.export import (
     to_obsidian,
     to_svg,
 )
+from graphify.graph_state import DecodeMode, decode_graph_state
 from graphify.projections import DEFAULT_RELATIONSHIP_CAP
 
 # Relations on the A->B pair (3 parallel edges, distinct source_location).
@@ -152,6 +153,28 @@ def test_json_roundtrip_preserves_all_parallel_edges():
         G2 = json_graph.node_link_graph(data, edges="links")
     assert isinstance(G2, nx.MultiDiGraph)
     assert G2.number_of_edges() == original == 9
+
+
+def test_json_export_is_current_schema_and_canonical_across_insertion_order(tmp_path):
+    first = make_multigraph()
+    second = nx.MultiDiGraph()
+    second.graph.update(reversed(list(first.graph.items())))
+    second.add_nodes_from(reversed(list(first.nodes(data=True))))
+    for source, target, key, attrs in reversed(list(first.edges(keys=True, data=True))):
+        second.add_edge(source, target, key=key, **attrs)
+    first_path = tmp_path / "first.json"
+    second_path = tmp_path / "second.json"
+
+    assert to_json(first, COMMUNITIES, str(first_path), force=True, built_at_commit="fixed")
+    assert to_json(second, COMMUNITIES, str(second_path), force=True, built_at_commit="fixed")
+
+    assert first_path.read_bytes() == second_path.read_bytes()
+    payload = json.loads(first_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["hyperedges"] == []
+    state = decode_graph_state(payload, mode=DecodeMode.STRICT_CURRENT)
+    assert state.graph_type == "multidigraph"
+    assert state.graph.number_of_edges() == 9
 
 
 def test_graphml_roundtrip_preserves_parallel_edges():
@@ -289,6 +312,42 @@ def test_obsidian_shows_all_relations():
     assert len(c_conn) == 1
     assert "more" in c_conn[0]
     assert "5 total" in c_conn[0]
+
+
+def test_obsidian_separates_directions_and_shows_same_relation_records():
+    graph = nx.MultiDiGraph()
+    for node_id in ("A", "B", "C"):
+        graph.add_node(node_id, label=node_id, file_type="code")
+    graph.add_edge(
+        "A",
+        "B",
+        key="call-L5",
+        relation="calls",
+        source_location="L5",
+        confidence="EXTRACTED",
+        _origin="ast",
+    )
+    graph.add_edge(
+        "A",
+        "B",
+        key="call-L9",
+        relation="calls",
+        source_location="L9",
+        confidence="INFERRED",
+        provenance={"provider": "semantic"},
+    )
+    graph.add_edge("C", "A", key="incoming", relation="imports", confidence="EXTRACTED")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        to_obsidian(graph, {0: ["A", "B", "C"]}, str(out))
+        note = (out / "A.md").read_text(encoding="utf-8")
+
+    assert "## Outgoing Connections" in note
+    assert "## Incoming Connections" in note
+    assert "2 records" in note
+    assert "key=call-L5" in note and "key=call-L9" in note
+    assert "[[B]]" in note and "[[C]]" in note
 
 
 # ── HTML / SVG: visual cap + summary label ───────────────────────────────────

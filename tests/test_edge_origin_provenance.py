@@ -156,6 +156,14 @@ def test_norm_source_file_none_passthrough():
     assert _norm_source_file("") == ""
 
 
+def test_norm_source_file_preserves_uri_scheme_and_authority():
+    from graphify.build import _norm_source_file
+
+    assert _norm_source_file("https://example.invalid/context") == (
+        "https://example.invalid/context"
+    )
+
+
 # --- backward compatibility + future tertiary _origin ---
 
 
@@ -193,9 +201,15 @@ def test_unmarked_and_tertiary_origin_edges_load(tmp_path):
                 "confidence": "INFERRED",
             }
         )
+        for index, edge in enumerate(links):
+            edge.setdefault("key", f"fixture-{index}")
         data["links"] = links
         data["multigraph"] = True
         data["directed"] = True
+        data.pop("schema_version", None)
+        data.setdefault("graph", {}).setdefault("graphify_profile", {})["graph_type"] = (
+            "multidigraph"
+        )
         gpath.write_text(json.dumps(data), encoding="utf-8")
 
         assert _rebuild_code(tmp_path, no_cluster=True, acquire_lock=False) is True
@@ -209,6 +223,8 @@ def test_unmarked_and_tertiary_origin_edges_load(tmp_path):
     assert "derived_link" in rels, (
         "future tertiary _origin edge must survive (no binary assumption)"
     )
+    legacy = next(edge for edge in after_links if edge.get("relation") == "relates_to")
+    assert legacy["_origin"] == "legacy"
     reloaded = load_graph(after)
     assert isinstance(reloaded, nx.MultiDiGraph)
 
@@ -227,8 +243,11 @@ def test_cli_semantic_merge_stamps_cached_edges(tmp_path):
     _git_init(tmp_path)
     (tmp_path / "a.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
     (tmp_path / "NOTES.md").write_text("# Notes\n\nalpha is documented here.\n", encoding="utf-8")
-    # Seed the semantic cache with UNSTAMPED nodes/edges (the pre-stamp cache
-    # format) so check_semantic_cache merges them without any LLM call.
+    from graphify.llm import BACKENDS, _default_model_for_backend, _egress_endpoint
+    from graphify.semantic_schema import semantic_provenance
+
+    # Seed the semantic cache with UNSTAMPED nodes/edges and the exact request
+    # identity so check_semantic_cache merges them without any LLM call.
     save_semantic_cache(
         nodes=[
             {
@@ -257,6 +276,11 @@ def test_cli_semantic_merge_stamps_cached_edges(tmp_path):
             },
         ],
         root=tmp_path,
+        semantic_provenance=semantic_provenance(
+            backend="gemini",
+            model=_default_model_for_backend("gemini"),
+            endpoint=_egress_endpoint("gemini", BACKENDS["gemini"]),
+        ),
     )
     env = {
         k: v

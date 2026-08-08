@@ -4,9 +4,31 @@ from __future__ import annotations
 import inspect
 import json
 import math
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 import networkx as nx
 
-from graphify.projections import project_for_community
+from graphify.projections import project_for_community, stable_value_key
+
+NodeId = Any
+
+
+def _sorted_nodes(nodes: Iterable[NodeId]) -> list[NodeId]:
+    """Return node IDs in the repository-wide heterogeneous total order."""
+    return sorted(nodes, key=stable_value_key)
+
+
+def _member_identity(nodes: Iterable[NodeId]) -> tuple[tuple[str, str], ...]:
+    return tuple(stable_value_key(node) for node in _sorted_nodes(nodes))
+
+
+def _normalize_partition(partition: dict[NodeId, Any]) -> dict[NodeId, int]:
+    """Replace backend community labels with stable membership-derived IDs."""
+    groups: dict[Any, list[NodeId]] = {}
+    for node, cid in partition.items():
+        groups.setdefault(cid, []).append(node)
+    ordered = sorted(groups.values(), key=lambda nodes: (-len(nodes), _member_identity(nodes)))
+    return {node: cid for cid, nodes in enumerate(ordered) for node in _sorted_nodes(nodes)}
 
 
 def _is_usable_weight(raw: object) -> bool:
@@ -30,7 +52,7 @@ def _effective_weight(data: dict) -> float:
     return float(raw) if _is_usable_weight(raw) else 1.0  # type: ignore[arg-type]
 
 
-def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
+def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[NodeId, int]:
     """Run community detection. Returns {node_id: community_id}.
 
     Tries the native Leiden engine first, then falls back to NetworkX Louvain.
@@ -40,60 +62,44 @@ def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
 
     """
     stable = nx.Graph()
-    stable.add_nodes_from(sorted(G.nodes(), key=str))
-    edge_rows = sorted(
-        G.edges(data=True),
-        key=lambda row: (
-            str(row[0]),
-            str(row[1]),
-            json.dumps(row[2], sort_keys=True, ensure_ascii=False, default=str),
-        ),
-    )
-    for src, tgt, attrs in edge_rows:
-        stable.add_edge(src, tgt, **attrs)
+    stable.add_nodes_from(_sorted_nodes(G.nodes()))
 
-    # The native engine does not validate edge weights before handing them to its
-    # Rust core. A negative, NaN, or all-zero graph can trigger PanicException,
-    # while infinities raise ParameterRangeError. Drop anything that is not a
-    # finite, non-negative real so it receives the established default of 1.0,
-    # exactly like an edge carrying no `weight` key. The simple-graph path reaches
-    # this with stored attrs untouched (cluster() only calls to_undirected), so
-    # a corrupt weight in graph.json is a live crash vector; the multigraph path
-    # is incidentally safe because project_for_community overwrites `weight`.
-    for _, _, data in stable.edges(data=True):
-        if "weight" in data and not _is_usable_weight(data["weight"]):
-            del data["weight"]
+    # Canonicalize orientation before sorting. Sorting the raw orientation leaves
+    # adjacency insertion order dependent on the input graph's node insertion
+    # order, and both Leiden and Louvain can distinguish that order despite their
+    # random seeds being fixed.
+    edge_rows: list[tuple[NodeId, NodeId, float]] = []
+    for raw_src, raw_tgt, data in G.edges(data=True):
+        src, tgt = raw_src, raw_tgt
+        if stable_value_key(tgt) < stable_value_key(src):
+            src, tgt = tgt, src
+        edge_rows.append((src, tgt, _effective_weight(data)))
+    edge_rows.sort(key=lambda row: (stable_value_key(row[0]), stable_value_key(row[1]), row[2]))
 
-    # Separately, a graph whose weights are all a legitimate 0.0 has zero total
-    # weight and panics the same way. project_for_community scores an edge whose
-    # `confidence` is missing/unrecognized as 0.0, so a graph whose edges ALL
-    # lack confidence projects to all-zero weights. Fall back to uniform
-    # weighting; a graph with any positive weight keeps its weights untouched.
-    if (
-        stable.number_of_edges()
-        and sum(_effective_weight(data) for _, _, data in stable.edges(data=True)) <= 0
-    ):
-        for _, _, data in stable.edges(data=True):
-            data.pop("weight", None)
+    # The native engine can panic on a legitimate all-zero graph. Invalid values
+    # already map to the established default 1.0 in _effective_weight; if every
+    # explicit usable weight is zero, use uniform weights for both backends.
+    if edge_rows and sum(weight for _, _, weight in edge_rows) <= 0:
+        edge_rows = [(src, tgt, 1.0) for src, tgt, _weight in edge_rows]
+    for src, tgt, weight in edge_rows:
+        stable.add_edge(src, tgt, weight=weight)
 
     try:
         from graspologic_native import leiden
 
-        node_by_native: dict[str, object] = {}
-        native_by_node: dict[object, str] = {}
-        for node in stable.nodes():
-            native_id = str(node)
-            if native_id in node_by_native and node_by_native[native_id] != node:
-                raise ValueError(
-                    "Leiden node IDs must have unique string representations: "
-                    f"{node_by_native[native_id]!r} and {node!r}"
-                )
+        # Native Leiden only accepts string IDs. Stable synthetic IDs preserve
+        # distinct JSON node identities such as 1 and "1" without exposing their
+        # representation or relying on backend label numbering.
+        node_by_native: dict[str, NodeId] = {}
+        native_by_node: dict[NodeId, str] = {}
+        for index, node in enumerate(stable.nodes()):
+            native_id = f"n{index}"
             node_by_native[native_id] = node
             native_by_node[node] = native_id
 
         native_edges = [
-            (native_by_node[source], native_by_node[target], _effective_weight(data))
-            for source, target, data in stable.edges(data=True)
+            (native_by_node[source], native_by_node[target], weight)
+            for source, target, weight in edge_rows
         ]
         # The native API returns (quality, {string_node_id: community_id}).
         _quality, partition = leiden(
@@ -106,7 +112,8 @@ def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
             seed=42,
             trials=1,
         )
-        return {node_by_native[node]: cid for node, cid in partition.items()}  # type: ignore[misc]
+        decoded = {node_by_native[node]: cid for node, cid in partition.items()}
+        return _normalize_partition(decoded)
     except (ImportError, SyntaxError):
         pass
 
@@ -117,7 +124,9 @@ def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
     if "max_level" in inspect.signature(nx.community.louvain_communities).parameters:
         kwargs["max_level"] = 10
     communities = nx.community.louvain_communities(stable, **kwargs)
-    return {node: cid for cid, nodes in enumerate(communities) for node in nodes}
+    return _normalize_partition(
+        {node: cid for cid, nodes in enumerate(communities) for node in nodes}
+    )
 
 
 _MAX_COMMUNITY_FRACTION = 0.25  # communities larger than 25% of graph get split
@@ -126,7 +135,9 @@ _COHESION_SPLIT_THRESHOLD = 0.05  # re-split communities with cohesion below thi
 _COHESION_SPLIT_MIN_SIZE = 50  # only cohesion-split if community has at least this many nodes
 
 
-def label_communities_by_hub(G: nx.Graph, communities: dict[int, list[str]]) -> dict[int, str]:
+def label_communities_by_hub(
+    G: nx.Graph, communities: Mapping[int, Sequence[NodeId]]
+) -> dict[int, str]:
     """Deterministic, LLM-free community labels: name each community after its
     highest-degree member — the structural hub — so a report reads ``auth`` /
     ``log_action`` instead of ``Community 70``. Degree is measured on the full graph
@@ -143,7 +154,7 @@ def label_communities_by_hub(G: nx.Graph, communities: dict[int, list[str]]) -> 
             labels[cid] = f"Community {cid}"
             continue
         # highest degree wins; ties broken by node id (ascending) for determinism
-        hub = min(present, key=lambda n: (-G.degree(n), str(n)))
+        hub = min(present, key=lambda n: (-G.degree(n), stable_value_key(n)))
         name = str(G.nodes[hub].get("label") or hub).strip()
         if name.endswith("()"):
             name = name[:-2]
@@ -151,7 +162,7 @@ def label_communities_by_hub(G: nx.Graph, communities: dict[int, list[str]]) -> 
     return labels
 
 
-def community_member_sigs(communities: dict[int, list[str]]) -> dict[int, str]:
+def community_member_sigs(communities: Mapping[int, Sequence[NodeId]]) -> dict[int, str]:
     """Per-community membership fingerprints: ``{cid: sha256(sorted member ids)}``.
 
     Persisted next to ``.graphify_labels.json`` so a later ``cluster-only`` can tell
@@ -165,8 +176,9 @@ def community_member_sigs(communities: dict[int, list[str]]) -> dict[int, str]:
     sigs: dict[int, str] = {}
     for cid, members in communities.items():
         h = hashlib.sha256()
-        for nid in sorted(str(n) for n in members):
-            h.update(nid.encode("utf-8", "replace"))
+        for node in _sorted_nodes(members):
+            encoded = json.dumps(stable_value_key(node), ensure_ascii=True, separators=(",", ":"))
+            h.update(encoded.encode("utf-8"))
             h.update(b"\x00")
         sigs[cid] = h.hexdigest()[:16]
     return sigs
@@ -176,7 +188,7 @@ def cluster(
     G: nx.Graph,
     resolution: float = 1.0,
     exclude_hubs_percentile: float | None = None,
-) -> dict[int, list[str]]:
+) -> dict[int, list[NodeId]]:
     """Run Leiden community detection. Returns {community_id: [node_ids]}.
 
     Community IDs are stable across runs: 0 = largest community after splitting.
@@ -202,10 +214,10 @@ def cluster(
     elif G.is_directed():
         G = G.to_undirected()
     if G.number_of_edges() == 0:
-        return {i: [n] for i, n in enumerate(sorted(G.nodes))}
+        return {i: [n] for i, n in enumerate(_sorted_nodes(G.nodes()))}
 
     # Compute hub exclusion set before removing anything so degree is based on full graph
-    hub_nodes: set[str] = set()
+    hub_nodes: set[NodeId] = set()
     if exclude_hubs_percentile is not None:
         degrees = sorted(d for _, d in G.degree())
         if degrees:
@@ -221,7 +233,7 @@ def cluster(
     connected_nodes = [n for n in G.nodes() if G.degree(n) > 0 and n not in excluded]
     connected = G.subgraph(connected_nodes)
 
-    raw: dict[int, list[str]] = {}
+    raw: dict[int, list[NodeId]] = {}
     if connected.number_of_nodes() > 0:
         partition = _partition(connected, resolution=resolution)
         for node, cid in partition.items():
@@ -235,8 +247,8 @@ def cluster(
 
     # Reattach excluded hubs by majority-vote neighbour community
     if hub_nodes:
-        node_community: dict[str, int] = {n: cid for cid, nodes in raw.items() for n in nodes}
-        for hub in sorted(hub_nodes):
+        node_community: dict[NodeId, int] = {n: cid for cid, nodes in raw.items() for n in nodes}
+        for hub in _sorted_nodes(hub_nodes):
             votes: dict[int, int] = {}
             for nb in G.neighbors(hub):
                 cid = node_community.get(nb)
@@ -253,7 +265,7 @@ def cluster(
 
     # Split oversized communities
     max_size = max(_MIN_SPLIT_SIZE, int(G.number_of_nodes() * _MAX_COMMUNITY_FRACTION))
-    final_communities: list[list[str]] = []
+    final_communities: list[list[NodeId]] = []
     for nodes in raw.values():
         if len(nodes) > max_size:
             final_communities.extend(_split_community(G, nodes))
@@ -262,7 +274,7 @@ def cluster(
 
     # Second pass: re-split low-cohesion communities caused by doc-hub nodes
     # that bridge otherwise-unrelated subsystems (e.g. CLAUDE.md connected to everything).
-    second_pass: list[list[str]] = []
+    second_pass: list[list[NodeId]] = []
     for nodes in final_communities:
         if (
             len(nodes) >= _COHESION_SPLIT_MIN_SIZE
@@ -280,92 +292,126 @@ def cluster(
     # partitioner's (not seed-stable) enumeration order, so their integer IDs
     # permute run-to-run - which reads as massive "community churn" in a per-node
     # cid diff even though the actual grouping is reproducible (#1090 follow-up).
-    final_communities.sort(key=lambda nodes: (-len(nodes), tuple(sorted(map(str, nodes)))))
-    return {i: sorted(nodes) for i, nodes in enumerate(final_communities)}
+    final_communities.sort(key=lambda nodes: (-len(nodes), _member_identity(nodes)))
+    return {i: _sorted_nodes(nodes) for i, nodes in enumerate(final_communities)}
 
 
-def _split_community(G: nx.Graph, nodes: list[str]) -> list[list[str]]:
+def _split_community(G: nx.Graph, nodes: list[NodeId]) -> list[list[NodeId]]:
     """Run a second Leiden pass on a community subgraph to split it further."""
     subgraph = G.subgraph(nodes)
     if subgraph.number_of_edges() == 0:
         # No edges - split into individual nodes
-        return [[n] for n in sorted(nodes)]
+        return [[n] for n in _sorted_nodes(nodes)]
     try:
         sub_partition = _partition(subgraph)
-        sub_communities: dict[int, list[str]] = {}
+        sub_communities: dict[int, list[NodeId]] = {}
         for node, cid in sub_partition.items():
             sub_communities.setdefault(cid, []).append(node)
         if len(sub_communities) <= 1:
-            return [sorted(nodes)]
-        return [sorted(v) for v in sub_communities.values()]
+            return [_sorted_nodes(nodes)]
+        return [_sorted_nodes(v) for v in sub_communities.values()]
     except Exception:
-        return [sorted(nodes)]
+        return [_sorted_nodes(nodes)]
 
 
-def cohesion_score(G: nx.Graph, community_nodes: list[str]) -> float:
+def cohesion_score(G: nx.Graph, community_nodes: Sequence[NodeId]) -> float:
     """Ratio of actual intra-community edges to maximum possible."""
     n = len(community_nodes)
     if n <= 1:
         return 1.0
-    subgraph = G.subgraph(community_nodes)
-    # Project multigraphs to simple graph so parallel edges don't inflate cohesion
-    if isinstance(subgraph, (nx.MultiGraph, nx.MultiDiGraph)):
-        subgraph = project_for_community(subgraph)
+    # Cohesion is an undirected topology metric. Project every graph class so
+    # reciprocal directed records and multigraph parallels each count once.
+    subgraph = project_for_community(G.subgraph(community_nodes))
     actual = subgraph.number_of_edges()
     possible = n * (n - 1) / 2
     return actual / possible if possible > 0 else 0.0
 
 
-def score_all(G: nx.Graph, communities: dict[int, list[str]]) -> dict[int, float]:
+def score_all(G: nx.Graph, communities: Mapping[int, Sequence[NodeId]]) -> dict[int, float]:
     return {cid: cohesion_score(G, nodes) for cid, nodes in communities.items()}
 
 
 def remap_communities_to_previous(
-    communities: dict[int, list[str]],
-    previous_node_community: dict[str, int],
-) -> dict[int, list[str]]:
+    communities: Mapping[int, Sequence[NodeId]],
+    previous_node_community: Mapping[NodeId, int],
+) -> dict[int, list[NodeId]]:
     """Remap community IDs to maximize overlap with a previous assignment.
 
-    Uses greedy one-to-one matching by intersection size, then assigns fresh IDs
-    to unmatched communities in deterministic order (size desc, lexical tie-break).
+    Maximizes total intersection size globally. Equal optima are resolved by a
+    unique bit-weighted preference over stable old IDs and new member identities.
+    Unmatched communities receive IDs not present in the prior assignment.
     """
     if not communities:
         return {}
 
     new_sets = {cid: set(nodes) for cid, nodes in communities.items()}
-    old_sets: dict[int, set[str]] = {}
+    old_sets: dict[int, set[NodeId]] = {}
     for node, old_cid in previous_node_community.items():
         old_sets.setdefault(old_cid, set()).add(node)
 
-    overlaps: list[tuple[int, int, int]] = []
+    overlap_graph = nx.Graph()
     for old_cid, old_nodes in old_sets.items():
         for new_cid, new_nodes in new_sets.items():
             overlap = len(old_nodes & new_nodes)
             if overlap > 0:
-                overlaps.append((overlap, old_cid, new_cid))
-    overlaps.sort(key=lambda x: (-x[0], x[1], x[2]))
+                overlap_graph.add_edge(("old", old_cid), ("new", new_cid), overlap=overlap)
 
     new_to_final: dict[int, int] = {}
-    used_old_ids: set[int] = set()
     matched_new_ids: set[int] = set()
-    for _overlap, old_cid, new_cid in overlaps:
-        if old_cid in used_old_ids or new_cid in matched_new_ids:
-            continue
-        new_to_final[new_cid] = old_cid
-        used_old_ids.add(old_cid)
-        matched_new_ids.add(new_cid)
+    if overlap_graph.number_of_edges():
+        components = sorted(
+            nx.connected_components(overlap_graph),
+            key=lambda nodes: min(stable_value_key(node) for node in nodes),
+        )
+        for component_nodes in components:
+            component = overlap_graph.subgraph(component_nodes)
+            rows: list[tuple[int, int, int]] = []
+            for left, right, data in component.edges(data=True):
+                if left[0] == "new":
+                    left, right = right, left
+                rows.append((int(data["overlap"]), int(left[1]), int(right[1])))
+            rows.sort(
+                key=lambda row: (
+                    -row[0],
+                    stable_value_key(row[1]),
+                    _member_identity(new_sets[row[2]]),
+                )
+            )
+
+            # Primary score is total overlap. The sum of all unique tie bits is
+            # smaller than `scale`, so it cannot alter that optimum; it only makes
+            # the preferred stable edge set uniquely optimal.
+            scale = 1 << len(rows)
+            weighted = nx.Graph()
+            for rank, (overlap, old_cid, new_cid) in enumerate(rows):
+                tie_bit = 1 << (len(rows) - rank - 1)
+                weighted.add_edge(
+                    ("old", old_cid),
+                    ("new", new_cid),
+                    score=overlap * scale + tie_bit,
+                )
+            matching = nx.max_weight_matching(weighted, weight="score")
+            for left, right in matching:
+                if left[0] == "new":
+                    left, right = right, left
+                old_cid = int(left[1])
+                new_cid = int(right[1])
+                new_to_final[new_cid] = old_cid
+                matched_new_ids.add(new_cid)
 
     unmatched = [cid for cid in communities if cid not in matched_new_ids]
-    unmatched.sort(key=lambda cid: (-len(communities[cid]), tuple(sorted(communities[cid]))))
+    unmatched.sort(key=lambda cid: (-len(communities[cid]), _member_identity(communities[cid])))
+    reserved_ids = set(old_sets)
+    assigned_ids = set(new_to_final.values())
     next_id = 0
     for new_cid in unmatched:
-        while next_id in used_old_ids:
+        while next_id in reserved_ids or next_id in assigned_ids:
             next_id += 1
         new_to_final[new_cid] = next_id
-        used_old_ids.add(next_id)
+        assigned_ids.add(next_id)
         next_id += 1
 
-    remapped: dict[int, list[str]] = {}
+    remapped: dict[int, list[NodeId]] = {}
     for new_cid, nodes in communities.items():
-        remapped[new_to_final[new_cid]] = sorted(nodes)
+        remapped[new_to_final[new_cid]] = _sorted_nodes(nodes)
     return dict(sorted(remapped.items(), key=lambda kv: kv[0]))

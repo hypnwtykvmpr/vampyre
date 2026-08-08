@@ -353,11 +353,11 @@ graphify query "جریان احراز هویت را نشان بده"
 graphify query "چه چیزی DigestAuth را به Response متصل می‌کند؟" --graph graphify-out/graph.json
 
 # نمایش گراف به‌عنوان سرور MCP
-python -m graphify.serve graphify-out/graph.json
+graphify serve graphify-out/graph.json
 
 # یا سرویس‌دهی از طریق HTTP برای دسترسی تیمی:
-python -m graphify.serve graphify-out/graph.json --transport http --port 8080
-python -m graphify.serve graphify-out/graph.json --transport http --host 0.0.0.0 --api-key "$SECRET"
+graphify serve graphify-out/graph.json --transport http --port 8080
+graphify serve graphify-out/graph.json --transport http --host 0.0.0.0 --api-key "$SECRET"
 ```
 
 <div dir="rtl">
@@ -382,7 +382,7 @@ python -m graphify.serve graphify-out/graph.json --transport http --host 0.0.0.0
 | `OLLAMA_BASE_URL` | URL استنتاج محلی Ollama | `--backend ollama` |
 | `AZURE_OPENAI_API_KEY` | بک‌اند Azure OpenAI | `--backend azure` |
 | `GRAPHIFY_MAX_WORKERS` | تعداد thread های موازی AST | اختیاری |
-| `GRAPHIFY_FORCE` | بازسازی اجباری گراف | اختیاری |
+| `GRAPHIFY_FORCE` | پذیرش کاهش تأییدشده و غیرخالی گراف؛ `--full` را فعال نمی‌کند و cache را دور نمی‌زند | اختیاری |
 | `GRAPHIFY_QUERY_LOG_DISABLE` | برای غیرفعال کردن ثبت پرس‌وجو `1` تنظیم کنید | اختیاری |
 
 ---
@@ -408,12 +408,12 @@ pip اسکریپت‌ها را در دایرکتوری bin کاربر نصب م�
 PowerShell `/` ابتدایی را به‌عنوان جداکننده مسیر در نظر می‌گیرد. از `graphify .` (بدون اسلش) در Windows استفاده کنید.
 
 **گراف پس از `--update` یا بازسازی گره کمتری دارد**
-اگر یک refactor فایل‌ها را حذف کرده، گره‌های قدیمی باقی می‌مانند. `--force` (یا `GRAPHIFY_FORCE=1`) را پاس دهید:
+اگر کاهش غیرخالی گراف را تأیید کرده‌اید، `--force` (یا `GRAPHIFY_FORCE=1`) را پاس دهید. برای اسکن کامل همراه با پذیرش کاهش، از `--full --force` استفاده کنید:
 
 </div>
 
 ```bash
-graphify extract . --force
+graphify extract . --full --force
 ```
 
 <div dir="rtl">
@@ -527,8 +527,8 @@ graphify --version
 
 ```bash
 git clone https://github.com/hypnwtykvmpr/vampyre.git
-cd graphify
-git checkout v8                        # شاخه توسعه فعال
+cd vampyre
+git checkout main                      # شاخه توسعه فعال
 
 uv sync --all-extras
 ```
@@ -548,7 +548,7 @@ uv run pytest tests/test_extract.py -q # یک ماژول
 
 ### جریان کار Git
 
-- توسعه فعال روی شاخه `v8` انجام می‌شود.
+- توسعه فعال روی شاخه `main` انجام می‌شود؛ `v9` مرجع نصب همسان است.
 - سبک commit: `fix: <توضیح>` / `feat: <توضیح>` / `docs: <توضیح>`
 - قبل از باز کردن PR، `uv run pytest tests/ -q` اجرا کنید و از موفقیت آن مطمئن شوید.
 

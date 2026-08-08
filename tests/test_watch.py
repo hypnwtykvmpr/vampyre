@@ -210,6 +210,131 @@ def test_graphify_root_preserves_absolute_when_user_supplied(tmp_path):
     assert saved == "marker-relative:.."
 
 
+def test_clustered_rebuild_repairs_and_stabilizes_analysis_sidecar(tmp_path):
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "app.py").write_text(
+        "def helper():\n    return 1\n\ndef main():\n    return helper()\n",
+        encoding="utf-8",
+    )
+    output = corpus / "graphify-out"
+    output.mkdir()
+    analysis_path = output / ".graphify_analysis.json"
+    analysis_path.write_text(
+        json.dumps(
+            {
+                "communities": {"999": ["ghost"]},
+                "cohesion": {"999": 1.0},
+                "gods": [],
+                "surprises": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert _rebuild_code(corpus, no_viz=True, acquire_lock=False)
+
+    def _assert_current() -> bytes:
+        from graphify.graph_loader import load_graph_state_file
+        from graphify.graph_state import DecodeMode, graph_analysis_fingerprint
+
+        graph = json.loads((output / "graph.json").read_text(encoding="utf-8"))
+        analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+        expected: dict[str, set[str]] = {}
+        for node in graph["nodes"]:
+            expected.setdefault(str(node["community"]), set()).add(str(node["id"]))
+        actual = {
+            key: {str(node_id) for node_id in members}
+            for key, members in analysis["communities"].items()
+        }
+        assert actual == expected
+        assert set(analysis["cohesion"]) == set(expected)
+        assert "built_at_commit" in analysis
+        assert analysis["built_at_commit"] == graph.get("built_at_commit")
+        assert analysis["graph_fingerprint"] == graph_analysis_fingerprint(
+            load_graph_state_file(
+                output / "graph.json",
+                mode=DecodeMode.STRICT_CURRENT,
+            )
+        )
+        return analysis_path.read_bytes()
+
+    first = _assert_current()
+    valid_analysis = json.loads(first)
+    analysis_path.write_text(
+        json.dumps(
+            {
+                "built_at_commit": valid_analysis["built_at_commit"],
+                "graph_fingerprint": valid_analysis["graph_fingerprint"],
+                "communities": {"999": ["ghost"]},
+                "cohesion": {"999": 1.0},
+                "gods": [],
+                "surprises": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _rebuild_code(corpus, no_viz=True, acquire_lock=False)
+    second = _assert_current()
+    assert second == first
+
+    invalid_fingerprint = json.loads(second)
+    invalid_fingerprint["graph_fingerprint"] = "0" * 64
+    analysis_path.write_text(json.dumps(invalid_fingerprint), encoding="utf-8")
+    assert _rebuild_code(corpus, no_viz=True, acquire_lock=False)
+    assert _assert_current() == second
+
+    assert _rebuild_code(corpus, no_viz=True, acquire_lock=False)
+    assert _assert_current() == second
+
+
+def test_no_cluster_rebuild_invalidates_cluster_derived_outputs(tmp_path):
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    source = corpus / "app.py"
+    source.write_text("def first():\n    return 1\n", encoding="utf-8")
+    assert _rebuild_code(corpus, acquire_lock=False)
+
+    output = corpus / "graphify-out"
+    derived = [
+        output / ".graphify_analysis.json",
+        output / "GRAPH_REPORT.md",
+        output / "graph.html",
+    ]
+    assert all(path.exists() for path in derived)
+    callflow = output / "app-callflow.html"
+    callflow.write_text("stale", encoding="utf-8")
+    before = {path: path.read_bytes() for path in [*derived, callflow]}
+    graph_path = output / "graph.json"
+    legacy_graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    legacy_graph["input_tokens"] = 7
+    legacy_graph["output_tokens"] = 3
+    graph_path.write_text(json.dumps(legacy_graph), encoding="utf-8")
+
+    assert _rebuild_code(corpus, no_cluster=True, acquire_lock=False)
+    assert {path: path.read_bytes() for path in before} == before
+    migrated_graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    assert "input_tokens" not in migrated_graph
+    assert "output_tokens" not in migrated_graph
+
+    source.write_text(
+        "def first():\n    return 1\n\ndef second():\n    return 2\n",
+        encoding="utf-8",
+    )
+    assert _rebuild_code(corpus, no_cluster=True, acquire_lock=False)
+    assert all(not path.exists() for path in derived)
+    assert not callflow.exists()
+    graph = json.loads((output / "graph.json").read_text(encoding="utf-8"))
+    assert all("community" not in node for node in graph["nodes"])
+    assert "input_tokens" not in graph
+    assert "output_tokens" not in graph
+    assert "graphify_identity_diagnostics" in graph
+
+
 def test_rebuild_code_evicts_nodes_from_deleted_files(tmp_path):
     """#1007: graphify update (_rebuild_code with no changed_paths) must remove
     nodes and edges from files deleted since the last run."""
@@ -367,6 +492,38 @@ def test_rebuild_code_preupgrade_marker_less_node_one_cycle_lag(tmp_path):
     assert "bar()" in labels(healed), "surviving symbol must be kept throughout"
 
 
+def test_full_rebuild_prunes_stale_sourceless_ast_node(tmp_path):
+    """A complete AST result is authoritative even when an old AST node has no owner."""
+    import json
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "app.py").write_text("def live():\n    return 1\n", encoding="utf-8")
+
+    assert _rebuild_code(corpus, acquire_lock=False, no_cluster=True) is True
+    graph_path = corpus / "graphify-out" / "graph.json"
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
+    data["nodes"].append(
+        {
+            "id": "stale_import_stub",
+            "label": "StaleImport",
+            "file_type": "code",
+            "source_file": "",
+            "source_location": "",
+            "_origin": "ast",
+        }
+    )
+    graph_path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert _rebuild_code(corpus, acquire_lock=False, no_cluster=True, force=True) is True
+    rebuilt = json.loads(graph_path.read_text(encoding="utf-8"))
+    node_ids = {node["id"] for node in rebuilt["nodes"]}
+
+    assert "stale_import_stub" not in node_ids
+    assert any(node.get("label") == "live()" for node in rebuilt["nodes"])
+
+
 def test_rebuild_lock_non_blocking_does_not_clobber_holder(tmp_path):
     """GH-858: a non-blocking caller that fails to acquire the lock must not
     truncate the holder's PID payload."""
@@ -414,6 +571,36 @@ def test_rebuild_code_is_idempotent_when_cluster_ids_flap(tmp_path, monkeypatch)
 
     assert first_graph == second_graph
     assert first_report == second_report
+
+
+def test_rebuild_report_receives_full_detected_corpus(tmp_path, monkeypatch):
+    from graphify import report as report_mod
+    from graphify.watch import _rebuild_code
+
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    note = tmp_path / "notes.txt"
+    note.write_text("Operational context that belongs in corpus totals.\n", encoding="utf-8")
+    captured = {}
+
+    def capture_generate(
+        _graph,
+        _communities,
+        _cohesion,
+        _labels,
+        _gods,
+        _surprises,
+        detection,
+        _token_cost,
+        _root,
+        **_kwargs,
+    ):
+        captured.update(detection)
+        return "# Stable report\n"
+
+    monkeypatch.setattr(report_mod, "generate", capture_generate)
+
+    assert _rebuild_code(tmp_path, no_viz=True)
+    assert str(note) in captured["files"]["document"]
 
 
 def test_rebuild_code_skips_cluster_when_topology_unchanged(tmp_path, monkeypatch):
@@ -584,17 +771,48 @@ def test_check_shrink_allows_force_override():
     assert ok is True
 
 
-def test_check_shrink_allows_explicit_deletions(capsys):
-    """Caller declared deletions → shrink is expected → guard skipped silently."""
+def test_check_shrink_allows_losses_owned_by_explicit_deletions(capsys):
+    """A declared deletion allows only nodes owned by that deleted source."""
+    existing = {
+        "nodes": [
+            {"id": "gone", "source_file": "gone.py"},
+            {"id": "live", "source_file": "live.py"},
+        ],
+        "links": [],
+    }
+    new = {"nodes": [{"id": "live", "source_file": "live.py"}], "links": []}
     ok = _check_shrink(
         force=False,
-        existing_data=_shrink_payload(100),
-        new_data=_shrink_payload(80),
+        existing_data=existing,
+        new_data=new,
         had_explicit_deletions=True,
+        rebuilt_sources={"gone.py"},
     )
     assert ok is True
-    # And critically, no scary warning is printed when the shrink is intentional.
     assert "Refusing to overwrite" not in capsys.readouterr().err
+
+
+def test_check_shrink_blocks_unexplained_loss_in_mixed_deletion_batch(capsys):
+    existing = {
+        "nodes": [
+            {"id": "gone", "source_file": "gone.py"},
+            {"id": "lost", "source_file": "untouched.py"},
+            {"id": "live", "source_file": "live.py"},
+        ],
+        "links": [],
+    }
+    new = {"nodes": [{"id": "live", "source_file": "live.py"}], "links": []}
+
+    ok = _check_shrink(
+        False,
+        existing,
+        new,
+        had_explicit_deletions=True,
+        rebuilt_sources={"gone.py"},
+    )
+
+    assert ok is False
+    assert "Refusing to overwrite" in capsys.readouterr().err
 
 
 def test_check_shrink_allows_no_existing_data():
@@ -677,12 +895,21 @@ def test_check_shrink_keeps_tmp_when_deletions_declared(tmp_path):
     """
     tmp = tmp_path / "graph.tmp.json"
     tmp.write_text("{}", encoding="utf-8")
+    existing = {
+        "nodes": [
+            {"id": "gone", "source_file": "gone.py"},
+            {"id": "live", "source_file": "live.py"},
+        ],
+        "links": [],
+    }
+    new = {"nodes": [{"id": "live", "source_file": "live.py"}], "links": []}
     ok = _check_shrink(
-        force=False,
-        existing_data=_shrink_payload(100),
-        new_data=_shrink_payload(80),
+        False,
+        existing,
+        new,
         tmp=tmp,
         had_explicit_deletions=True,
+        rebuilt_sources={"gone.py"},
     )
     assert ok is True
     assert tmp.exists()
@@ -1117,13 +1344,23 @@ def _build_multigraph_repo(tmp_path: Path) -> tuple[Path, str, str]:
     return graph_path, a_id, b_id
 
 
+def _promote_to_multidigraph(data: dict) -> None:
+    links = data.get("links", data.get("edges", []))
+    for index, edge in enumerate(links):
+        edge.setdefault("key", f"fixture-edge-{index}")
+    data["multigraph"] = True
+    data["directed"] = True
+    data.setdefault("graph", {}).setdefault("graphify_profile", {})["graph_type"] = "multidigraph"
+
+
 def _set_links(graph_path: Path, base_data: dict, a_id: str, b_id: str, edges: list) -> None:
     """Append `edges` (A->B parallel records) and stamp multigraph flags on disk."""
     links = base_data.get("links", base_data.get("edges", []))
+    for edge in edges:
+        edge.setdefault("_origin", "ast")
     links += edges
     base_data["links"] = links
-    base_data["multigraph"] = True
-    base_data["directed"] = True
+    _promote_to_multidigraph(base_data)
     graph_path.write_text(json.dumps(base_data, indent=2), encoding="utf-8")
 
 
@@ -1446,6 +1683,63 @@ def test_watch_simple_mode_unchanged_regression(tmp_path, monkeypatch):
     assert calls["n"] == 1, "topology-unchanged simple-graph rebuild must not re-cluster"
 
 
+def test_full_state_compare_detects_metadata_only_changes():
+    from graphify.watch import _canonical_graph_for_compare, _canonical_topology_for_compare
+
+    left = {
+        "nodes": [{"id": "a"}],
+        "links": [],
+        "hyperedges": [],
+        "graph": {"graphify_profile": {"graph_type": "simple"}, "diagnostic": "old"},
+        "graphify_identity_diagnostics": {"collisions": 1},
+    }
+    right = json.loads(json.dumps(left))
+    right["graph"]["diagnostic"] = "fresh"
+    right["graphify_identity_diagnostics"] = {"collisions": 0}
+
+    assert _canonical_graph_for_compare(left) != _canonical_graph_for_compare(right)
+    assert _canonical_topology_for_compare(left) == _canonical_topology_for_compare(right)
+
+
+@pytest.mark.parametrize("no_cluster", [False, True])
+def test_rebuild_publishes_fresh_diagnostics_and_keeps_custom_metadata(
+    tmp_path, monkeypatch, no_cluster
+):
+    import graphify.extract as extract_mod
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    assert _rebuild_code(corpus, no_cluster=no_cluster, no_viz=True, acquire_lock=False)
+    graph_path = corpus / "graphify-out" / "graph.json"
+    payload = json.loads(graph_path.read_text(encoding="utf-8"))
+    payload.setdefault("graph", {})["custom_meta"] = "keep"
+    payload["graph"]["graphify_identity_diagnostics"] = {"generation": "old"}
+    graph_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    real_extract = extract_mod.extract
+
+    def extract_with_fresh_diagnostics(*args, **kwargs):
+        result = real_extract(*args, **kwargs)
+        result["graphify_identity_diagnostics"] = {"generation": "fresh"}
+        return result
+
+    monkeypatch.setattr(extract_mod, "extract", extract_with_fresh_diagnostics)
+    assert _rebuild_code(corpus, no_cluster=no_cluster, no_viz=True, acquire_lock=False)
+
+    rebuilt = json.loads(graph_path.read_text(encoding="utf-8"))
+    assert rebuilt["graph"]["custom_meta"] == "keep"
+    diagnostics = rebuilt.get("graphify_identity_diagnostics") or rebuilt["graph"].get(
+        "graphify_identity_diagnostics"
+    )
+    assert diagnostics != {"generation": "old"}
+    if no_cluster:
+        assert diagnostics == {"generation": "fresh"}
+    else:
+        assert "skipped_contested_endpoints" in diagnostics
+
+
 def test_watch_multigraph_full_rebuild_preserves_profile_flag(tmp_path, monkeypatch):
     """Regression for the DEFERRED silent collapse to simple graph.
 
@@ -1642,8 +1936,7 @@ def test_watch_full_rebuild_preserves_real_call_site_parallels(tmp_path):
         assert _rebuild_code(tmp_path, no_cluster=True, acquire_lock=False) is True
         graph_path = tmp_path / "graphify-out" / "graph.json"
         data = json.loads(graph_path.read_text(encoding="utf-8"))
-        data["multigraph"] = True
-        data["directed"] = True
+        _promote_to_multidigraph(data)
         graph_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
         # Full re-extraction (changed_paths is None) re-extracts app.py and must
@@ -1710,7 +2003,8 @@ def test_watch_full_rebuild_prunes_removed_import_edge(tmp_path):
     )
 
 
-def test_watch_full_rebuild_preserves_semantic_edge(tmp_path):
+@pytest.mark.parametrize("no_cluster", [False, True])
+def test_watch_full_rebuild_preserves_non_ast_edges(tmp_path, no_cluster):
     """A full rebuild is AST-only (the LLM/semantic pass is NOT re-run from the
     CLI), so a semantic / INFERRED (_origin != "ast") edge whose endpoints survive
     must be PRESERVED across a full rebuild. #1521's blanket source_file eviction
@@ -1728,7 +2022,7 @@ def test_watch_full_rebuild_preserves_semantic_edge(tmp_path):
     cwd = os.getcwd()
     try:
         os.chdir(corpus)
-        assert _rebuild_code(corpus, acquire_lock=False) is True
+        assert _rebuild_code(corpus, no_cluster=no_cluster, acquire_lock=False) is True
         graph_path = corpus / "graphify-out" / "graph.json"
         data = json.loads(graph_path.read_text(encoding="utf-8"))
         foo = next(n["id"] for n in data["nodes"] if n.get("label", "").startswith("foo("))
@@ -1745,6 +2039,20 @@ def test_watch_full_rebuild_preserves_semantic_edge(tmp_path):
                 "source_file": "a.py",
             }
         )
+        # A legacy edge between AST endpoints still is not AST-owned. Inferring
+        # its producer from endpoint types silently loses relationships that the
+        # fresh AST pass does not recreate.
+        links.append(
+            {
+                "source": foo,
+                "target": bar,
+                "relation": "legacy_context",
+                "confidence": "EXTRACTED",
+                "_origin": "legacy",
+                "source_file": "a.py",
+                "key": "legacy-context-key",
+            }
+        )
         # Sourceless semantic edge — must also survive.
         links.append(
             {
@@ -1759,12 +2067,11 @@ def test_watch_full_rebuild_preserves_semantic_edge(tmp_path):
         # Multigraph so the two semantic edges on the same foo->bar pair coexist as
         # parallels — a simple DiGraph collapses them to one, masking the assertion.
         # The fork's real semantic layer lives in a MultiDiGraph anyway.
-        data["multigraph"] = True
-        data["directed"] = True
+        _promote_to_multidigraph(data)
         graph_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
         # Full rebuild re-extracts a.py and b.py (AST only).
-        assert _rebuild_code(corpus, acquire_lock=False) is True
+        assert _rebuild_code(corpus, no_cluster=no_cluster, acquire_lock=False) is True
         after = json.loads(graph_path.read_text(encoding="utf-8"))
     finally:
         os.chdir(cwd)
@@ -1777,6 +2084,55 @@ def test_watch_full_rebuild_preserves_semantic_edge(tmp_path):
         "sourced semantic (_origin!=ast) edge must survive a full rebuild "
         "(hybrid: scope eviction to AST/structural edges only)"
     )
+    assert any(
+        e.get("relation") == "legacy_context" and e.get("key") == "legacy-context-key"
+        for e in after_links
+    ), "legacy edges are not AST-owned merely because both endpoints are AST nodes"
+
+
+def test_watch_incremental_rebuild_preserves_semantic_edge_and_prunes_stale_ast(tmp_path):
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    _git_init(corpus)
+    source = corpus / "a.py"
+    source.write_text("import b\n\ndef use():\n    return b.thing\n", encoding="utf-8")
+    (corpus / "b.py").write_text("thing = 1\n", encoding="utf-8")
+
+    assert _rebuild_code(
+        corpus,
+        graph_type="multidigraph",
+        no_cluster=True,
+        acquire_lock=False,
+    )
+    graph_path = corpus / "graphify-out" / "graph.json"
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
+    import_edge = next(edge for edge in data["links"] if edge.get("relation") == "imports")
+    data["links"].append(
+        {
+            "source": import_edge["source"],
+            "target": import_edge["target"],
+            "key": "semantic:dependency",
+            "relation": "depends_on",
+            "confidence": "INFERRED",
+            "_origin": "semantic",
+            "source_file": "a.py",
+        }
+    )
+    graph_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+    source.write_text("def use():\n    return 1\n", encoding="utf-8")
+    assert _rebuild_code(
+        corpus,
+        changed_paths=[source],
+        no_cluster=True,
+        acquire_lock=False,
+    )
+
+    updated = json.loads(graph_path.read_text(encoding="utf-8"))
+    assert not any(edge.get("relation") == "imports" for edge in updated["links"])
+    assert any(edge.get("relation") == "depends_on" for edge in updated["links"])
 
 
 @pytest.mark.parametrize("no_cluster", [True, False])
@@ -2023,12 +2379,11 @@ def test_watch_full_rebuild_prunes_stale_semantic_sources_and_hyperedges(tmp_pat
         },
         {
             "id": "dangling_group",
-            "nodes": ["semantic_live", "missing_node"],
+            "nodes": ["semantic_live", "semantic_stale"],
             "source_file": "docs/live.md",
         },
     ]
-    data["multigraph"] = True
-    data["directed"] = True
+    _promote_to_multidigraph(data)
     graph_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     assert _rebuild_code(corpus, no_cluster=True, acquire_lock=False) is True
@@ -2135,6 +2490,117 @@ def test_full_rebuild_prunes_sources_newly_excluded_by_graphifyignore(tmp_path, 
     assert graph_path.read_bytes() == stable_bytes
 
 
+def test_incremental_non_code_change_preserves_semantic_records_and_signals(tmp_path):
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    notes = corpus / "notes.txt"
+    notes.write_text("Notes\n", encoding="utf-8")
+    assert _rebuild_code(corpus, no_cluster=True, no_viz=True, acquire_lock=False)
+
+    graph_path = corpus / "graphify-out" / "graph.json"
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
+    data["nodes"].append(
+        {
+            "id": "notes_semantic",
+            "label": "Notes semantic",
+            "file_type": "concept",
+            "source_file": "notes.txt",
+            "_origin": "semantic",
+        }
+    )
+    graph_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    notes.write_text("# Notes changed\n", encoding="utf-8")
+    assert _rebuild_code(
+        corpus,
+        changed_paths=[notes],
+        no_cluster=True,
+        no_viz=True,
+        acquire_lock=False,
+    )
+
+    preserved = json.loads(graph_path.read_text(encoding="utf-8"))
+    assert any(node.get("id") == "notes_semantic" for node in preserved["nodes"])
+    assert (corpus / "graphify-out" / "needs_update").exists()
+
+
+def test_incremental_deleted_extensionless_source_is_evicted(tmp_path):
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "app.py").write_text("def keep():\n    return 1\n", encoding="utf-8")
+    script = corpus / "run-tool"
+    script.write_text("#!/usr/bin/env python3\nprint('run')\n", encoding="utf-8")
+    assert _rebuild_code(corpus, no_cluster=True, no_viz=True, acquire_lock=False)
+    graph_path = corpus / "graphify-out" / "graph.json"
+    before = json.loads(graph_path.read_text(encoding="utf-8"))
+    before["nodes"].append(
+        {
+            "id": "extensionless_semantic",
+            "label": "Extensionless semantic",
+            "file_type": "concept",
+            "source_file": "run-tool",
+            "_origin": "semantic",
+        }
+    )
+    graph_path.write_text(json.dumps(before, indent=2), encoding="utf-8")
+    assert any(node.get("source_file") == "run-tool" for node in before["nodes"])
+
+    script.unlink()
+    assert _rebuild_code(
+        corpus,
+        changed_paths=[script],
+        no_cluster=True,
+        no_viz=True,
+        acquire_lock=False,
+    )
+    after = json.loads(graph_path.read_text(encoding="utf-8"))
+    assert all(node.get("source_file") != "run-tool" for node in after["nodes"])
+
+
+def test_rebuild_git_provenance_uses_scan_root_from_unrelated_cwd(tmp_path, monkeypatch):
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    _git_init(corpus)
+    (corpus / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(corpus), "add", "--", "app.py"], check=True)
+    subprocess.run(["git", "-C", str(corpus), "commit", "-qm", "corpus"], check=True)
+    corpus_commit = subprocess.run(
+        ["git", "-C", str(corpus), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.strip()
+
+    caller = tmp_path / "caller"
+    _git_init(caller)
+    (caller / "caller.txt").write_text("caller\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(caller), "add", "--", "caller.txt"], check=True)
+    subprocess.run(["git", "-C", str(caller), "commit", "-qm", "caller"], check=True)
+    monkeypatch.chdir(caller)
+
+    output_root = tmp_path / "external"
+    output = output_root / "graphify-out"
+    output.mkdir(parents=True)
+    for _ in range(3):
+        assert _rebuild_code(
+            corpus,
+            output_dir=output,
+            output_root=output_root,
+            no_cluster=True,
+            no_viz=True,
+            acquire_lock=False,
+        )
+        payload = json.loads((output / "graph.json").read_text(encoding="utf-8"))
+        assert payload["built_at_commit"] == corpus_commit
+
+
 @pytest.mark.parametrize("no_cluster", [False, True])
 def test_full_rebuild_preserves_foreign_absolute_semantic_sources(tmp_path, no_cluster):
     from graphify.paths import is_absolute_path
@@ -2220,7 +2686,46 @@ def test_full_rebuild_preserves_foreign_absolute_semantic_sources(tmp_path, no_c
     )
 
 
-def test_watch_repairs_carried_hyperedge_alias_before_restoring_metadata(tmp_path):
+@pytest.mark.parametrize("no_cluster", [False, True])
+def test_full_rebuild_preserves_integer_hyperedge_members(tmp_path, no_cluster):
+    from graphify.watch import _rebuild_code
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "app.py").write_text(
+        "def first():\n    return 1\n\ndef second():\n    return first()\n",
+        encoding="utf-8",
+    )
+    assert _rebuild_code(corpus, no_cluster=no_cluster, no_viz=True, acquire_lock=False)
+    graph_path = corpus / "graphify-out" / "graph.json"
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
+    live_id = next(node["id"] for node in data["nodes"] if node.get("label") == "first()")
+    data["nodes"].append(
+        {
+            "id": 7,
+            "label": "external seven",
+            "file_type": "concept",
+            "source_file": "https://example.invalid/context",
+            "_origin": "semantic",
+        }
+    )
+    data["hyperedges"] = [
+        {
+            "id": "mixed-members",
+            "nodes": [7, live_id],
+            "source_file": "https://example.invalid/context",
+        }
+    ]
+    graph_path.write_text(json.dumps(data), encoding="utf-8")
+
+    for _ in range(2):
+        assert _rebuild_code(corpus, no_cluster=no_cluster, no_viz=True, acquire_lock=False)
+        rebuilt = json.loads(graph_path.read_text(encoding="utf-8"))
+        mixed = next(item for item in rebuilt["hyperedges"] if item["id"] == "mixed-members")
+        assert 7 in mixed["nodes"]
+
+
+def test_watch_refuses_current_state_with_dangling_hyperedge_member(tmp_path, capsys):
     from graphify.watch import _rebuild_code
 
     corpus = tmp_path / "corpus"
@@ -2236,11 +2741,6 @@ def test_watch_repairs_carried_hyperedge_alias_before_restoring_metadata(tmp_pat
     assert _rebuild_code(corpus, no_viz=True, acquire_lock=False)
     graph_path = corpus / "graphify-out" / "graph.json"
     data = json.loads(graph_path.read_text(encoding="utf-8"))
-    file_node = next(
-        node["id"]
-        for node in data["nodes"]
-        if node.get("label") == "app.py" and node.get("source_location") == "L1"
-    )
     run_node = next(
         node["id"] for node in data["nodes"] if node.get("label", "").startswith("run(")
     )
@@ -2254,19 +2754,11 @@ def test_watch_repairs_carried_hyperedge_alias_before_restoring_metadata(tmp_pat
     data.setdefault("graph", {})["hyperedges"] = [dict(stale)]
     data["graph"]["custom_meta"] = "kept"
     graph_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    before = graph_path.read_bytes()
 
-    assert _rebuild_code(corpus, no_viz=True, acquire_lock=False)
-    rebuilt = json.loads(graph_path.read_text(encoding="utf-8"))
-
-    assert rebuilt["hyperedges"] == [
-        {
-            "id": "app_group",
-            "label": "App group",
-            "nodes": [file_node, run_node],
-            "source_file": "docs/design.md",
-        }
-    ]
-    assert rebuilt["graph"]["custom_meta"] == "kept"
+    assert not _rebuild_code(corpus, no_viz=True, acquire_lock=False)
+    assert graph_path.read_bytes() == before
+    assert "dangling member" in capsys.readouterr().err
 
 
 # --- RISK 3: no-cluster compare must not flap on a legacy edges-keyed graph.json ---
@@ -2287,6 +2779,8 @@ def _downgrade_to_legacy_edges(graph_path: Path) -> None:
     links = data.pop("links", data.pop("edges", []))
     data["edges"] = [{**edge, "confidence_score": 0.9} for edge in links]
     data.pop("hyperedges", None)
+    data.pop("schema_version", None)
+    data.pop("graphify_state_diagnostics", None)
     graph_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
@@ -2576,6 +3070,209 @@ def test_full_rebuild_snapshots_every_manifest_source(tmp_path):
     assert set(manifest) == {"app.py", "notes.txt"}
 
 
+@pytest.mark.parametrize("no_cluster", [False, True])
+def test_full_ast_update_losslessly_migrates_legacy_identity_references(
+    tmp_path, capsys, no_cluster
+):
+    from graphify.ids import CURRENT_AST_NODE_ID_SCHEMA, make_id
+    from graphify.semantic_schema import LEGACY_SEMANTIC_NODE_ID_SCHEMA
+    from graphify.watch import _rebuild_code
+
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text(
+        '[project]\nname = "demo"\nversion = "1.0"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "notes.txt").write_text("Semantic package context\n", encoding="utf-8")
+    assert _rebuild_code(
+        tmp_path,
+        graph_type="multidigraph",
+        no_cluster=True,
+        acquire_lock=False,
+    )
+
+    graph_path = tmp_path / "graphify-out" / "graph.json"
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    current_id = make_id("pkg", "python", "demo")
+    legacy_id = "pkg_demo"
+    assert legacy_id != current_id
+    for node in graph["nodes"]:
+        if node["id"] == current_id:
+            node["id"] = legacy_id
+    for edge in graph["links"]:
+        if edge["source"] == current_id:
+            edge["source"] = legacy_id
+        if edge["target"] == current_id:
+            edge["target"] = legacy_id
+    graph["nodes"].append(
+        {
+            "id": "semantic_owner",
+            "label": "Semantic owner",
+            "file_type": "concept",
+            "source_file": "notes.txt",
+            "_origin": "semantic",
+        }
+    )
+    graph["links"].append(
+        {
+            "source": "semantic_owner",
+            "target": legacy_id,
+            "relation": "references",
+            "confidence": "INFERRED",
+            "confidence_score": 0.85,
+            "source_file": "notes.txt",
+            "_origin": "semantic",
+            "key": "semantic-package-reference",
+        }
+    )
+    graph["hyperedges"] = [
+        {
+            "id": "semantic-package-group",
+            "nodes": ["semantic_owner", legacy_id],
+            "source_file": "notes.txt",
+        }
+    ]
+    graph.pop("schema_version")
+    graph["graph"]["graphify_profile"].pop("ast_node_id_schema")
+    graph["graph"]["graphify_profile"].pop("semantic_node_id_schema")
+    graph_path.write_text(json.dumps(graph, indent=2) + "\n", encoding="utf-8")
+    output_dir = graph_path.parent
+    before = {
+        path.relative_to(output_dir).as_posix(): path.read_bytes()
+        for path in output_dir.rglob("*")
+        if path.is_file()
+    }
+
+    manifest.write_text(
+        '[project]\nname = "demo"\nversion = "2.0"\n',
+        encoding="utf-8",
+    )
+    assert not _rebuild_code(
+        tmp_path,
+        changed_paths=[manifest],
+        no_cluster=True,
+        acquire_lock=False,
+    )
+    assert "ordinary `graphify update`" in capsys.readouterr().err
+    after_refusal = {
+        path.relative_to(output_dir).as_posix(): path.read_bytes()
+        for path in output_dir.rglob("*")
+        if path.is_file()
+    }
+    assert after_refusal == before
+
+    stable_bytes = None
+    for iteration in range(3):
+        assert _rebuild_code(
+            tmp_path,
+            no_cluster=no_cluster,
+            no_viz=True,
+            acquire_lock=False,
+        )
+        updated = json.loads(graph_path.read_text(encoding="utf-8"))
+        profile = updated["graph"]["graphify_profile"]
+        assert profile["ast_node_id_schema"] == CURRENT_AST_NODE_ID_SCHEMA
+        assert profile["semantic_node_id_schema"] == LEGACY_SEMANTIC_NODE_ID_SCHEMA
+        package_nodes = [node for node in updated["nodes"] if node.get("type") == "package"]
+        assert [(node["id"], node.get("version")) for node in package_nodes] == [
+            (current_id, "2.0")
+        ]
+        assert legacy_id not in {node["id"] for node in updated["nodes"]}
+        semantic_edge = next(
+            edge for edge in updated["links"] if edge.get("key") == "semantic-package-reference"
+        )
+        assert semantic_edge["source"] == "semantic_owner"
+        assert semantic_edge["target"] == current_id
+        assert len(updated["hyperedges"]) == 1
+        semantic_group = updated["hyperedges"][0]
+        assert semantic_group["id"] == "semantic-package-group"
+        assert set(semantic_group["nodes"]) == {"semantic_owner", current_id}
+        assert semantic_group["source_file"] == "notes.txt"
+        current_bytes = graph_path.read_bytes()
+        if iteration == 0:
+            continue
+        if stable_bytes is not None:
+            assert current_bytes == stable_bytes
+        stable_bytes = current_bytes
+
+
+def test_legacy_ast_reference_migration_refuses_ambiguous_matches_without_mutation(tmp_path):
+    from copy import deepcopy
+
+    from graphify.watch import _legacy_ast_reference_remap
+
+    old_nodes = [
+        {
+            "id": "legacy_item",
+            "label": "item()",
+            "type": "function",
+            "file_type": "code",
+            "source_file": "app.py",
+            "source_location": "L1",
+            "_origin": "ast",
+        }
+    ]
+    fresh_nodes = [
+        {
+            **old_nodes[0],
+            "id": "current_item_a",
+            "source_location": "L2",
+        },
+        {
+            **old_nodes[0],
+            "id": "current_item_b",
+            "source_location": "L3",
+        },
+    ]
+    edge = {
+        "source": "semantic_owner",
+        "target": "legacy_item",
+        "relation": "references",
+        "_origin": "semantic",
+    }
+
+    unique_edge = deepcopy(edge)
+    assert _legacy_ast_reference_remap(
+        old_nodes,
+        fresh_nodes[:1],
+        [unique_edge],
+        [],
+        root=tmp_path,
+    ) == {"legacy_item": "current_item_a"}
+    assert unique_edge["target"] == "current_item_a"
+
+    ambiguous_edge = deepcopy(edge)
+    before = deepcopy(ambiguous_edge)
+    with pytest.raises(ValueError, match="could not be mapped uniquely"):
+        _legacy_ast_reference_remap(
+            old_nodes,
+            fresh_nodes,
+            [ambiguous_edge],
+            [],
+            root=tmp_path,
+        )
+    assert ambiguous_edge == before
+
+
+def test_raw_edge_filter_drops_only_fresh_ast_dangling_edges():
+    from graphify.watch import _filter_raw_dangling_edges
+
+    nodes = [{"id": "a"}, {"id": "b"}]
+    live = {"source": "a", "target": "b", "relation": "calls", "_origin": "ast"}
+    external = {
+        "source": "a",
+        "target": "stdlib_external",
+        "relation": "calls",
+        "_origin": "ast",
+    }
+
+    assert _filter_raw_dangling_edges(nodes, [external, live]) == ([live], 1)
+
+    carried = {**external, "_origin": "semantic"}
+    with pytest.raises(ValueError, match="preserved non-AST edge"):
+        _filter_raw_dangling_edges(nodes, [carried])
+
+
 def test_update_cli_passes_no_viz_to_rebuild(tmp_path, monkeypatch):
     """`graphify update --no-viz <path>` must parse the flag and forward
     no_viz=True to _rebuild_code. Regression: the flag was dropped from the
@@ -2583,6 +3280,8 @@ def test_update_cli_passes_no_viz_to_rebuild(tmp_path, monkeypatch):
     import sys as _sys
     import graphify.watch as _watch
     import graphify.__main__ as _main
+    from graphify.ids import CURRENT_AST_NODE_ID_SCHEMA
+    from graphify.semantic_schema import PROMPT_SCHEMA_VERSION
 
     (tmp_path / "x.py").write_text("def f():\n    return 1\n", encoding="utf-8")
     output = tmp_path / "graphify-out"
@@ -2592,7 +3291,13 @@ def test_update_cli_passes_no_viz_to_rebuild(tmp_path, monkeypatch):
             {
                 "directed": False,
                 "multigraph": False,
-                "graph": {"graphify_profile": {"graph_type": "simple"}},
+                "graph": {
+                    "graphify_profile": {
+                        "graph_type": "simple",
+                        "ast_node_id_schema": CURRENT_AST_NODE_ID_SCHEMA,
+                        "semantic_node_id_schema": PROMPT_SCHEMA_VERSION,
+                    }
+                },
                 "nodes": [],
                 "links": [],
             }
@@ -2620,6 +3325,8 @@ def test_watch_cli_passes_resolved_external_output_context(tmp_path, monkeypatch
     import sys as _sys
     import graphify.watch as _watch_module
     import graphify.__main__ as _main
+    from graphify.ids import CURRENT_AST_NODE_ID_SCHEMA
+    from graphify.semantic_schema import PROMPT_SCHEMA_VERSION
 
     source_root = tmp_path / "Sources"
     source_root.mkdir()
@@ -2631,7 +3338,13 @@ def test_watch_cli_passes_resolved_external_output_context(tmp_path, monkeypatch
             {
                 "directed": True,
                 "multigraph": True,
-                "graph": {"graphify_profile": {"graph_type": "multidigraph"}},
+                "graph": {
+                    "graphify_profile": {
+                        "graph_type": "multidigraph",
+                        "ast_node_id_schema": CURRENT_AST_NODE_ID_SCHEMA,
+                        "semantic_node_id_schema": PROMPT_SCHEMA_VERSION,
+                    }
+                },
                 "nodes": [],
                 "links": [],
             }

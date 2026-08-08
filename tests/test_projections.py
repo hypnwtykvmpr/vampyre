@@ -161,6 +161,7 @@ def test_edge_records_between_returns_copies_from_both_directions() -> None:
     records = edge_records_between(graph, "a", "b")
 
     assert [record["relation"] for record in records] == ["imports", "calls", "returns"]
+    assert [record["key"] for record in records] == ["imports-high", "calls-low", "returns"]
     records[0]["relation"] = "mutated"
     assert graph["a"]["b"]["imports-high"]["relation"] == "imports"
 
@@ -187,8 +188,8 @@ def test_normalize_to_multidigraph_preserves_parallel_keys_and_simple_edges() ->
     graph.graph["name"] = "mixed"
     graph.add_node("a", label="A")
     graph.add_node("b", label="B")
-    graph.add_edge("a", "b", key="one", relation="calls")
-    graph.add_edge("a", "b", key="two", relation="imports")
+    graph.add_edge("a", "b", key="one", relation="calls", _src="a", _tgt="b")
+    graph.add_edge("a", "b", key="two", relation="imports", _src="a", _tgt="b")
 
     normalized = normalize_to_multidigraph(graph)
 
@@ -197,7 +198,7 @@ def test_normalize_to_multidigraph_preserves_parallel_keys_and_simple_edges() ->
     assert set(normalized["a"]["b"]) == {"one", "two"}
 
     simple = nx.Graph()
-    simple.add_edge("x", "y", relation="uses")
+    simple.add_edge("x", "y", relation="uses", _src="x", _tgt="y")
     simple_normalized = normalize_to_multidigraph(simple)
 
     assert isinstance(simple_normalized, nx.MultiDiGraph)
@@ -237,6 +238,25 @@ def test_relationship_envelope_single_edge() -> None:
     assert envelope["truncated"] == 0
     assert envelope["relations"] == ["calls"]
     assert envelope["confidences"] == ["EXTRACTED"]
+
+
+@pytest.mark.parametrize("graph_type", [nx.Graph, nx.DiGraph, nx.MultiGraph, nx.MultiDiGraph])
+def test_default_relationship_envelope_schema_and_record_count_contract(graph_type) -> None:
+    graph = graph_type()
+    graph.add_edge("a", "b", relation="calls", confidence="EXTRACTED")
+    if graph.is_multigraph():
+        graph.add_edge("a", "b", relation="calls", confidence="INFERRED")
+
+    envelope = relationship_envelope(graph, "a", "b", directed_only=True)
+    expected_count = 2 if graph.is_multigraph() else 1
+
+    assert set(envelope) == {"count", "shown", "truncated", "relations", "confidences"}
+    assert envelope["count"] == expected_count
+    assert len(envelope["shown"]) == expected_count
+    assert envelope["truncated"] == 0
+    assert envelope["relations"] == ["calls"]
+    if graph.is_multigraph():
+        assert envelope["count"] > len(envelope["relations"])
 
 
 def test_relationship_envelope_multidigraph_bundles_all() -> None:
@@ -324,17 +344,20 @@ def test_format_relationship_envelope_multiple_within_cap() -> None:
         ["imports", "calls", "contains"], confidence="EXTRACTED"
     )
 
-    # 3 unique relations within the default cap; confidence omitted for multi-relation lines
-    assert format_relationship_envelope(graph, "a", "b") == "calls, contains, imports"
+    assert format_relationship_envelope(graph, "a", "b") == (
+        "3 records: calls [key=calls-1, confidence=EXTRACTED] | "
+        "contains [key=contains-2, confidence=EXTRACTED] | "
+        "imports [key=imports-0, confidence=EXTRACTED]"
+    )
 
 
 def test_format_relationship_envelope_capped() -> None:
     graph = _multidigraph_with_parallel_relations(["gamma", "alpha", "epsilon", "beta", "delta"])
 
-    # sorted unique relations: alpha, beta, delta, epsilon, gamma -> first 3 shown
     assert (
         format_relationship_envelope(graph, "a", "b", cap=3)
-        == "alpha, beta, delta (+2 more, 5 total)"
+        == "5 records: alpha [key=alpha-1] | beta [key=beta-3] | "
+        "delta [key=delta-4] (+2 more, 5 total)"
     )
 
 

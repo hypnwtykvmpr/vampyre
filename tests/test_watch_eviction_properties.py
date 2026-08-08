@@ -9,12 +9,11 @@ Two layers:
 
    The reference is a VERBATIM copy of the production predicate (the nested
    ``_is_ast_node`` / ``_edge_ast_resuppliable`` / ``_edge_evicted`` closures). The
-   crucial nuance — that a full rebuild evicts ONLY AST-re-suppliable edges (it does
-   NOT evict everything) — is preserved here. (Two independent LLM drafts of this
-   mirror both collapsed it to "full rebuild → evict all", i.e. the #1521 BLANKET
-   behavior; this file encodes the real HYBRID.) The closures are nested and not
-   importable, so this is a mirror; the generated-corpus layer below binds to the REAL
-   code and is the drift detector.
+   crucial nuance is that an AST-only rebuild evicts only AST-resuppliable edges;
+   semantic-owned records survive in both full and incremental mode unless their
+   source is explicitly deleted or ignored. The closures are nested and not
+   importable, so this is a mirror; the generated-corpus layer below binds to the
+   real code and is the drift detector.
 
 2. GENERATED CORPUS layer (e2e): builds reproducible real corpora on disk, drives
    the ACTUAL ``_rebuild_code`` full rebuild, injects random semantic edges, and
@@ -35,26 +34,19 @@ import pytest
 
 # ---------------------------------------------------------------------------
 # Reference predicate — VERBATIM mirror of graphify/watch.py::_rebuild_code
-# (the existing-graph preservation block). ``full_rebuild`` does NOT evict
-# everything: it evicts only edges the
-# AST pass can re-supply (both endpoints AST-origin, no non-AST _origin marker).
+# (the existing-graph preservation block). Mode changes extraction scope, not
+# record ownership: only AST-resuppliable edges may be replaced by an AST pass.
 # ---------------------------------------------------------------------------
 def _edge_evicted_ref(
     e: dict,
     *,
-    full_rebuild: bool,
     edge_evict_sources: set,
-    new_ast_ids: set,
-    origin_by_id: dict,
+    explicit_evict_sources: set | None = None,
 ) -> bool:
-    def _is_ast_node(nid) -> bool:
-        return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
-
     def _edge_ast_resuppliable(edge: dict) -> bool:
-        origin = edge.get("_origin")
-        if origin is not None and origin != "ast":
-            return False
-        return _is_ast_node(edge.get("source")) and _is_ast_node(edge.get("target"))
+        # Endpoint ownership is not producer ownership. Only an explicitly AST-
+        # owned edge is guaranteed to be re-emitted by an AST-only rebuild.
+        return edge.get("_origin") == "ast"
 
     if not edge_evict_sources:
         return False
@@ -63,7 +55,9 @@ def _edge_evicted_ref(
         return False
     if sf not in edge_evict_sources:  # (real code also tries a normalized fallback)
         return False
-    if full_rebuild and not _edge_ast_resuppliable(e):
+    if sf in (explicit_evict_sources or set()):
+        return True
+    if not _edge_ast_resuppliable(e):
         return False
     return True
 
@@ -88,53 +82,41 @@ def test_full_rebuild_does_not_evict_everything():
     assert (
         _edge_evicted_ref(
             semantic,
-            full_rebuild=True,
             edge_evict_sources={"a.py"},
-            new_ast_ids={"a"},
-            origin_by_id={"a": "ast", "doc1": None},
         )
         is False
     ), "semantic edge must survive full rebuild"
 
 
 def test_full_rebuild_evicts_stale_ast_edge():
-    ast_edge = {"source": "a", "target": "b", "source_file": "a.py"}
+    ast_edge = {"source": "a", "target": "b", "source_file": "a.py", "_origin": "ast"}
     assert (
         _edge_evicted_ref(
             ast_edge,
-            full_rebuild=True,
             edge_evict_sources={"a.py"},
-            new_ast_ids={"a", "b"},
-            origin_by_id={"a": "ast", "b": "ast"},
         )
         is True
     ), "stale AST edge must evict on full rebuild"
 
 
 @pytest.mark.parametrize(
-    "origin,both_ast,sf_evicted,full,expected",
+    "origin,sf_evicted,expected",
     [
-        ("semantic", True, True, True, False),  # I2 explicit non-AST marker -> kept
-        (None, False, True, True, False),  # I2 non-AST endpoint -> kept
-        (None, True, True, True, True),  # I3 AST-AST stale -> evicted
-        (None, True, False, True, False),  # I5 not in evict set -> kept
-        (None, True, True, False, True),  # I4 incremental: guard off -> evicted
-        ("semantic", False, True, False, True),  # I4 incremental: semantic on changed file evicts
+        ("semantic", True, False),
+        ("document", True, False),
+        (None, True, False),
+        ("ast", True, True),
+        ("ast", False, False),
     ],
 )
-def test_eviction_truth_table(origin, both_ast, sf_evicted, full, expected):
+def test_eviction_truth_table(origin, sf_evicted, expected):
     e = {"source": "s", "target": "t", "source_file": "f.py"}
     if origin is not None:
         e["_origin"] = origin
-    origin_by_id = {"s": "ast", "t": "ast" if both_ast else None}
-    new_ast_ids = {"s", "t"} if both_ast else {"s"}
     assert (
         _edge_evicted_ref(
             e,
-            full_rebuild=full,
             edge_evict_sources=({"f.py"} if sf_evicted else set()),
-            new_ast_ids=new_ast_ids,
-            origin_by_id=origin_by_id,
         )
         is expected
     )
@@ -148,7 +130,6 @@ _FILES = ("a.py", "b.py", "c.py")
 
 def _graph(seed: int):
     rng = random.Random(seed)
-    origin_by_id = {nid: rng.choice(_ORIGINS) for nid in _NODE_IDS}
     new_ast_ids = {nid for nid in _NODE_IDS if rng.choice((False, True))}
     edges = []
     for _ in range(rng.randrange(13)):
@@ -163,8 +144,7 @@ def _graph(seed: int):
         edges.append(edge)
     files = {source_file for e in edges if isinstance(source_file := e.get("source_file"), str)}
     evict = {name for name in sorted(files) if rng.choice((False, True))}
-    full = rng.choice((False, True))
-    return edges, evict, new_ast_ids, origin_by_id, full
+    return edges, evict, new_ast_ids
 
 
 def _generated_graphs():
@@ -172,105 +152,68 @@ def _generated_graphs():
 
 
 def test_I1_sourceless_never_evicted():
-    for edges, evict, new_ast_ids, origin_by_id, full in _generated_graphs():
+    for edges, evict, _new_ast_ids in _generated_graphs():
         for e in edges:
             if not e.get("source_file"):
                 assert not _edge_evicted_ref(
                     e,
-                    full_rebuild=full,
                     edge_evict_sources=evict,
-                    new_ast_ids=new_ast_ids,
-                    origin_by_id=origin_by_id,
                 ), f"I1: sourceless edge evicted: {e}"
 
 
 def test_I2_full_rebuild_preserves_nonast_touching():
-    for edges, evict, new_ast_ids, origin_by_id, _full in _generated_graphs():
-
-        def is_ast(nid):
-            return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
-
+    for edges, evict, _new_ast_ids in _generated_graphs():
         for e in edges:
-            nonast = (
-                not is_ast(e.get("source"))
-                or not is_ast(e.get("target"))
-                or e.get("_origin") not in (None, "ast")
-            )
-            if nonast:
+            if e.get("_origin") != "ast":
                 assert not _edge_evicted_ref(
                     e,
-                    full_rebuild=True,
                     edge_evict_sources=evict,
-                    new_ast_ids=new_ast_ids,
-                    origin_by_id=origin_by_id,
-                ), f"I2: non-AST-touching edge evicted on full rebuild: {e}"
+                ), f"I2: non-AST-owned edge evicted on full rebuild: {e}"
 
 
 def test_I3_full_rebuild_evicts_resuppliable_ast():
-    for edges, evict, new_ast_ids, origin_by_id, _full in _generated_graphs():
-
-        def is_ast(nid):
-            return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
-
+    for edges, evict, _new_ast_ids in _generated_graphs():
         for e in edges:
             sf = e.get("source_file")
-            resup = (
-                e.get("_origin") in (None, "ast")
-                and is_ast(e.get("source"))
-                and is_ast(e.get("target"))
-            )
-            if sf and sf in evict and resup:
+            if sf and sf in evict and e.get("_origin") == "ast":
                 assert _edge_evicted_ref(
                     e,
-                    full_rebuild=True,
                     edge_evict_sources=evict,
-                    new_ast_ids=new_ast_ids,
-                    origin_by_id=origin_by_id,
                 ), f"I3: AST-re-suppliable edge NOT evicted on full rebuild: {e}"
 
 
 def test_I5_unre_extracted_file_preserved():
-    for edges, evict, new_ast_ids, origin_by_id, full in _generated_graphs():
+    for edges, evict, _new_ast_ids in _generated_graphs():
         for e in edges:
             sf = e.get("source_file")
             if sf and sf not in evict:
                 assert not _edge_evicted_ref(
                     e,
-                    full_rebuild=full,
                     edge_evict_sources=evict,
-                    new_ast_ids=new_ast_ids,
-                    origin_by_id=origin_by_id,
                 ), f"I5: edge from un-re-extracted file evicted: {e}"
 
 
-def test_I4_incremental_guard_off():
-    """The endpoint-AST guard applies ONLY on full rebuild: incrementally, any
-    source_file-evicted edge evicts regardless of origin."""
-    for edges, evict, new_ast_ids, origin_by_id, _full in _generated_graphs():
+def test_I4_incremental_preserves_semantic_owned_edges():
+    """Incremental AST extraction cannot replace semantic-owned records."""
+    for edges, evict, _new_ast_ids in _generated_graphs():
         for e in edges:
             sf = e.get("source_file")
-            if sf and sf in evict:
-                assert _edge_evicted_ref(
+            if sf and sf in evict and e.get("_origin") not in (None, "ast"):
+                assert not _edge_evicted_ref(
                     e,
-                    full_rebuild=False,
                     edge_evict_sources=evict,
-                    new_ast_ids=new_ast_ids,
-                    origin_by_id=origin_by_id,
-                ), f"I4: source_file-evicted edge survived incremental rebuild: {e}"
+                ), f"I4: semantic-owned edge was evicted by AST-only rebuild: {e}"
 
 
 def test_I6_membership_filter():
     """preserved_edges keeps an edge only if BOTH endpoints are in all_ids,
     independent of eviction."""
-    for edges, evict, new_ast_ids, origin_by_id, full in _generated_graphs():
+    for edges, evict, new_ast_ids in _generated_graphs():
         all_ids = set(new_ast_ids)  # any subset; endpoints outside must be dropped
         kept = _preserved(
             edges,
             all_ids=all_ids,
-            full_rebuild=full,
             edge_evict_sources=evict,
-            new_ast_ids=new_ast_ids,
-            origin_by_id=origin_by_id,
         )
         for e in kept:
             assert e["source"] in all_ids and e["target"] in all_ids, (
@@ -278,48 +221,19 @@ def test_I6_membership_filter():
             )
 
 
-def test_full_vs_incremental_difference_is_exactly_the_guarded_set():
-    """The only edges full preserves that incremental evicts are exactly the
-    source_file-evicted, NON-re-suppliable ones (the semantic layer the guard saves)."""
-    for edges, evict, new_ast_ids, origin_by_id, _full in _generated_graphs():
+def test_explicit_source_deletion_evicts_semantic_owned_edge():
+    semantic = {
+        "source": "a",
+        "target": "b",
+        "source_file": "gone.py",
+        "_origin": "semantic",
+    }
 
-        def is_ast(nid):
-            return nid in new_ast_ids or origin_by_id.get(nid) == "ast"
-
-        full_evicts = {
-            id(e)
-            for e in edges
-            if _edge_evicted_ref(
-                e,
-                full_rebuild=True,
-                edge_evict_sources=evict,
-                new_ast_ids=new_ast_ids,
-                origin_by_id=origin_by_id,
-            )
-        }
-        inc_evicts = {
-            id(e)
-            for e in edges
-            if _edge_evicted_ref(
-                e,
-                full_rebuild=False,
-                edge_evict_sources=evict,
-                new_ast_ids=new_ast_ids,
-                origin_by_id=origin_by_id,
-            )
-        }
-        saved_by_guard = inc_evicts - full_evicts
-        for e in edges:
-            if id(e) in saved_by_guard:
-                sf = e.get("source_file")
-                resup = (
-                    e.get("_origin") in (None, "ast")
-                    and is_ast(e.get("source"))
-                    and is_ast(e.get("target"))
-                )
-                assert sf and sf in evict and not resup, (
-                    f"guard saved an edge it should not have: {e}"
-                )
+    assert _edge_evicted_ref(
+        semantic,
+        edge_evict_sources={"gone.py"},
+        explicit_evict_sources={"gone.py"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -409,9 +323,14 @@ def test_generated_corpus_semantic_survives_real_full_rebuild(tmp_path, seed):
             injected.append(e)
         links = data.get("links", data.get("edges", []))
         links.extend(injected)
+        for index, edge in enumerate(links):
+            edge.setdefault("key", f"fixture-{index}")
         data["links"] = links
         data["multigraph"] = True
         data["directed"] = True
+        data.setdefault("graph", {}).setdefault("graphify_profile", {})["graph_type"] = (
+            "multidigraph"
+        )
         gpath.write_text(json.dumps(data), encoding="utf-8")
 
         assert _rebuild_code(corpus, no_cluster=True, acquire_lock=False) is True

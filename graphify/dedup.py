@@ -206,6 +206,7 @@ def deduplicate_entities(
     communities: dict[str, int],
     dedup_llm_backend: str | None = None,
     diagnostics: dict | None = None,
+    node_remap: dict[str, str] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Deduplicate near-identical entities in a knowledge graph.
 
@@ -218,6 +219,9 @@ def deduplicate_entities(
     Returns:
         (deduped_nodes, deduped_edges) with edges rewired to survivors
     """
+    if node_remap is not None:
+        node_remap.clear()
+
     # Guard: cross-project dedup is not supported — nodes from different repos
     # share label names by coincidence and must never be merged by string similarity.
     # If you need to dedup a global graph, run deduplicate_entities per-repo first.
@@ -428,6 +432,9 @@ def deduplicate_entities(
         for member in members:
             if member != winner_id:
                 remap[member] = winner_id
+
+    if node_remap is not None:
+        node_remap.update(remap)
 
     # ── apply remap ───────────────────────────────────────────────────────────
     if not remap:

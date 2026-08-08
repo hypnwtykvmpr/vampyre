@@ -150,12 +150,23 @@ def test_project_local_providers_loaded_with_optin(tmp_path, monkeypatch):
     assert "lab" in loaded
 
 
-def test_non_http_provider_base_url_rejected(tmp_path, monkeypatch):
-    """A provider whose base_url uses a non-http(s) scheme is skipped on load (F1)."""
+def test_unsafe_provider_base_urls_are_rejected_visibly(tmp_path, monkeypatch, capsys):
+    """Unsafe custom providers are omitted with actionable operator diagnostics."""
     providers_file = tmp_path / "providers.json"
     providers_file.write_text(
         json.dumps(
-            {"sneaky": {"base_url": "file:///etc/passwd", "default_model": "m", "env_key": "K"}}
+            {
+                "sneaky": {
+                    "base_url": "file:///etc/passwd",
+                    "default_model": "m",
+                    "env_key": "K",
+                },
+                "plaintext-remote": {
+                    "base_url": "http://gateway.internal/v1",
+                    "default_model": "m",
+                    "env_key": "K",
+                },
+            }
         ),
         encoding="utf-8",
     )
@@ -171,6 +182,11 @@ def test_non_http_provider_base_url_rejected(tmp_path, monkeypatch):
 
     loaded = llm._load_custom_providers()
     assert "sneaky" not in loaded
+    assert "plaintext-remote" not in loaded
+    errors = capsys.readouterr().err
+    assert "base_url scheme 'file' is not http/https" in errors
+    assert "refusing plaintext HTTP provider 'plaintext-remote'" in errors
+    assert "remote corpus and credential transport requires HTTPS" in errors
 
 
 def test_provider_base_url_ok_scheme_and_warnings(capsys):
@@ -182,9 +198,10 @@ def test_provider_base_url_ok_scheme_and_warnings(capsys):
     assert llm.provider_base_url_ok("file:///etc/passwd", "bad") is False
     assert llm.provider_base_url_ok("gopher://x/", "bad2") is False
     capsys.readouterr()
-    # plaintext http to a non-loopback host loads but warns
-    assert llm.provider_base_url_ok("http://example.com/v1", "plain") is True
-    assert "plaintext" in capsys.readouterr().err
+    # Plaintext HTTP is allowed only for loopback endpoints. A remote provider
+    # receives corpus bytes and an API key, so warning-and-continuing is unsafe.
+    assert llm.provider_base_url_ok("http://example.com/v1", "plain") is False
+    assert "refusing plaintext" in capsys.readouterr().err
 
 
 def test_detect_backend_custom_provider_after_builtins(monkeypatch):

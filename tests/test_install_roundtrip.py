@@ -192,6 +192,90 @@ def test_install_entrypoint_roundtrip_for_progressive_and_monolith(tmp_path):
         assert not (skill_dir / "SKILL.md").exists()
 
 
+def test_install_stamps_only_the_destination_it_updates(tmp_path, monkeypatch):
+    """Installing one platform must not certify stale content for another."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with patch("graphify.__main__.Path.home", return_value=home):
+        stale = mainmod._platform_skill_destination("codex")
+        stale.parent.mkdir(parents=True)
+        stale.write_text("stale codex skill\n", encoding="utf-8")
+        stale_stamp = stale.parent / ".graphify_version"
+        stale_stamp.write_text("0.0.1", encoding="utf-8")
+
+        mainmod.install(platform="claude")
+
+    assert stale.read_text(encoding="utf-8") == "stale codex skill\n"
+    assert stale_stamp.read_text(encoding="utf-8") == "0.0.1"
+
+
+@pytest.mark.parametrize("corrupt", ["body", "reference"])
+def test_install_verifies_content_before_stamping(
+    tmp_path, fake_progressive_bundle, monkeypatch, corrupt
+):
+    """A destination is fresh only after its body and references match the package."""
+    platform, _, _ = fake_progressive_bundle
+    home = tmp_path / "home"
+    home.mkdir()
+    destination = home / ".claude" / "skills" / "graphify" / "SKILL.md"
+    original_replace = mainmod.os.replace
+
+    def corrupt_after_replace(source, target):
+        original_replace(source, target)
+        target_path = Path(target)
+        if corrupt == "body" and target_path == destination:
+            target_path.write_text("corrupt body\n", encoding="utf-8")
+        if corrupt == "reference" and target_path.name == "references":
+            (target_path / "query.md").write_text("corrupt reference\n", encoding="utf-8")
+
+    monkeypatch.setattr(mainmod.os, "replace", corrupt_after_replace)
+    monkeypatch.chdir(tmp_path)
+    with (
+        patch("graphify.__main__.Path.home", return_value=home),
+        pytest.raises(OSError, match="verification failed"),
+    ):
+        mainmod._copy_skill_file(platform)
+
+    assert not (destination.parent / ".graphify_version").exists()
+
+
+@pytest.mark.parametrize("failure", ["sidecar", "verification"])
+def test_failed_reinstall_restores_previous_owned_bundle(
+    tmp_path, fake_progressive_bundle, monkeypatch, failure
+):
+    """A failed upgrade must leave the previously certified install intact."""
+    platform, _, _ = fake_progressive_bundle
+    skill_dir = tmp_path / ".claude" / "skills" / "graphify"
+    skill_dir.mkdir(parents=True)
+    skill = skill_dir / "SKILL.md"
+    stamp = skill_dir / ".graphify_version"
+    references = skill_dir / "references"
+    references.mkdir()
+    skill.write_text("previous skill\n", encoding="utf-8")
+    stamp.write_text("previous-version", encoding="utf-8")
+    (references / "keep.md").write_text("previous reference\n", encoding="utf-8")
+
+    if failure == "sidecar":
+        monkeypatch.setattr(
+            mainmod,
+            "_install_skill_references",
+            lambda *_args: (_ for _ in ()).throw(OSError("sidecar failed")),
+        )
+    else:
+        monkeypatch.setattr(mainmod, "_installed_skill_matches_package", lambda *_args: False)
+
+    with pytest.raises(OSError):
+        _copy_in_tmp(tmp_path, platform)
+
+    assert skill.read_text(encoding="utf-8") == "previous skill\n"
+    assert stamp.read_text(encoding="utf-8") == "previous-version"
+    assert sorted(path.name for path in references.iterdir()) == ["keep.md"]
+    assert (references / "keep.md").read_text(encoding="utf-8") == "previous reference\n"
+    assert not (skill_dir / "references.tmp").exists()
+
+
 # --- monolith -> progressive upgrade path --------------------------------------
 
 

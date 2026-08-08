@@ -482,6 +482,69 @@ def test_graph_diff_empty_diff():
     assert diff["summary"] == "no changes"
 
 
+def test_graph_diff_reports_keyed_parallel_record_addition():
+    old = nx.MultiDiGraph()
+    new = nx.MultiDiGraph()
+    for graph in (old, new):
+        graph.add_nodes_from([("a", {"label": "A"}), ("b", {"label": "B"})])
+        graph.add_edge(
+            "a",
+            "b",
+            key="call-L5",
+            relation="calls",
+            source_file="a.py",
+            source_location="L5",
+            confidence="EXTRACTED",
+            context="call",
+            _origin="ast",
+        )
+    new.add_edge(
+        "a",
+        "b",
+        key="call-L9",
+        relation="calls",
+        source_file="a.py",
+        source_location="L9",
+        confidence="INFERRED",
+        context="callback",
+        provenance={"provider": "semantic"},
+    )
+
+    diff = graph_diff(old, new)
+
+    assert diff["removed_edges"] == []
+    assert diff["new_edges"] == [
+        {
+            "source": "a",
+            "target": "b",
+            "key": "call-L9",
+            "relation": "calls",
+            "source_file": "a.py",
+            "source_location": "L9",
+            "confidence": "INFERRED",
+            "context": "callback",
+            "provenance": {"provider": "semantic"},
+        }
+    ]
+    assert diff["summary"] == "1 new edge"
+
+
+def test_ranked_analysis_ties_use_stable_mixed_id_order():
+    def make_graph(order):
+        graph = nx.Graph()
+        for node_id in order:
+            graph.add_node(node_id, label=f"node-{node_id}", source_file=f"{node_id}.py")
+            leaf = f"leaf-{node_id}"
+            graph.add_node(leaf, label=leaf, source_file="leaf.py")
+            graph.add_edge(node_id, leaf, relation="calls")
+        return graph
+
+    first = god_nodes(make_graph(["z", 1, "a"]), top_n=3)
+    second = god_nodes(make_graph(["a", 1, "z"]), top_n=3)
+
+    assert first == second
+
+
 # --- code↔doc INFERRED suppression tests ---
 
 
@@ -757,6 +820,21 @@ def test_god_nodes_excludes_npm_dep_block_keys(dep_key: str) -> None:
         source_file="src/auth.py",
         weight=1.0,
     )
+    G.add_node(
+        "real_peer",
+        label="PolicyService",
+        source_file="src/policy.py",
+        file_type="code",
+        source_location="L1",
+    )
+    G.add_edge(
+        "real_node",
+        "real_peer",
+        relation="calls",
+        confidence="EXTRACTED",
+        source_file="src/auth.py",
+        weight=1.0,
+    )
 
     result = god_nodes(G, top_n=10)
     result_ids = [r["id"] for r in result]
@@ -934,6 +1012,27 @@ def test_find_import_cycles_no_cycles():
     G.add_node(y_id, **y)
     G.add_edge(x_id, y_id, relation="imports_from", source_file="x.ts", confidence="EXTRACTED")
     assert find_import_cycles(G) == []
+
+
+def test_find_import_cycles_is_independent_of_edge_insertion_order():
+    edges = [(source, target) for source in range(6) for target in range(6) if source != target]
+
+    def build(edge_order):
+        graph = nx.DiGraph()
+        for index in range(6):
+            graph.add_node(f"n{index}", source_file=f"f{index}.py")
+        for source, target in edge_order:
+            graph.add_edge(
+                f"n{source}",
+                f"n{target}",
+                relation="imports_from",
+                source_file=f"f{source}.py",
+            )
+        return graph
+
+    assert find_import_cycles(build(edges), top_n=3, max_cycle_length=4) == find_import_cycles(
+        build(list(reversed(edges))), top_n=3, max_cycle_length=4
+    )
 
 
 # --- MultiDiGraph safety tests (PR 4B) ---

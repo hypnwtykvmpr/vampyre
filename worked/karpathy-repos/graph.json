@@ -6,7 +6,7 @@
     {
       "label": "__init__.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/__init__.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/__init__.py",
       "source_location": "L1",
       "community": 10,
       "id": "init"
@@ -14,7 +14,7 @@
     {
       "label": "engine.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L1",
       "community": 5,
       "id": "engine"
@@ -22,7 +22,7 @@
     {
       "label": "Value",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L2",
       "community": 5,
       "id": "engine_value"
@@ -30,7 +30,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L5",
       "community": 5,
       "id": "engine_value_init"
@@ -38,7 +38,7 @@
     {
       "label": ".__add__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L13",
       "community": 5,
       "id": "engine_value_add"
@@ -46,7 +46,7 @@
     {
       "label": ".__mul__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L24",
       "community": 5,
       "id": "engine_value_mul"
@@ -54,7 +54,7 @@
     {
       "label": ".__pow__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L35",
       "community": 5,
       "id": "engine_value_pow"
@@ -62,7 +62,7 @@
     {
       "label": ".relu()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L45",
       "community": 5,
       "id": "engine_value_relu"
@@ -70,7 +70,7 @@
     {
       "label": ".backward()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L54",
       "community": 5,
       "id": "engine_value_backward"
@@ -78,7 +78,7 @@
     {
       "label": ".__neg__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L72",
       "community": 5,
       "id": "engine_value_neg"
@@ -86,7 +86,7 @@
     {
       "label": ".__radd__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L75",
       "community": 5,
       "id": "engine_value_radd"
@@ -94,7 +94,7 @@
     {
       "label": ".__sub__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L78",
       "community": 5,
       "id": "engine_value_sub"
@@ -102,7 +102,7 @@
     {
       "label": ".__rsub__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L81",
       "community": 5,
       "id": "engine_value_rsub"
@@ -110,7 +110,7 @@
     {
       "label": ".__rmul__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L84",
       "community": 5,
       "id": "engine_value_rmul"
@@ -118,7 +118,7 @@
     {
       "label": ".__truediv__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L87",
       "community": 5,
       "id": "engine_value_truediv"
@@ -126,7 +126,7 @@
     {
       "label": ".__rtruediv__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L90",
       "community": 5,
       "id": "engine_value_rtruediv"
@@ -134,7 +134,7 @@
     {
       "label": ".__repr__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L93",
       "community": 5,
       "id": "engine_value_repr"
@@ -142,7 +142,7 @@
     {
       "label": "nn.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L1",
       "community": 3,
       "id": "nn"
@@ -150,7 +150,7 @@
     {
       "label": "Module",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L4",
       "community": 3,
       "id": "nn_module"
@@ -158,7 +158,7 @@
     {
       "label": ".zero_grad()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L6",
       "community": 3,
       "id": "nn_module_zero_grad"
@@ -166,7 +166,7 @@
     {
       "label": ".parameters()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L10",
       "community": 3,
       "id": "nn_module_parameters"
@@ -174,7 +174,7 @@
     {
       "label": "Neuron",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L13",
       "community": 3,
       "id": "nn_neuron"
@@ -182,7 +182,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L15",
       "community": 3,
       "id": "nn_neuron_init"
@@ -190,7 +190,7 @@
     {
       "label": ".__call__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L20",
       "community": 3,
       "id": "nn_neuron_call"
@@ -198,7 +198,7 @@
     {
       "label": ".parameters()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L24",
       "community": 3,
       "id": "nn_neuron_parameters"
@@ -206,7 +206,7 @@
     {
       "label": ".__repr__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L27",
       "community": 3,
       "id": "nn_neuron_repr"
@@ -214,7 +214,7 @@
     {
       "label": "Layer",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L30",
       "community": 3,
       "id": "nn_layer"
@@ -222,7 +222,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L32",
       "community": 3,
       "id": "nn_layer_init"
@@ -230,7 +230,7 @@
     {
       "label": ".__call__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L35",
       "community": 3,
       "id": "nn_layer_call"
@@ -238,7 +238,7 @@
     {
       "label": ".parameters()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L39",
       "community": 3,
       "id": "nn_layer_parameters"
@@ -246,7 +246,7 @@
     {
       "label": ".__repr__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L42",
       "community": 3,
       "id": "nn_layer_repr"
@@ -254,7 +254,7 @@
     {
       "label": "MLP",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L45",
       "community": 3,
       "id": "nn_mlp"
@@ -262,7 +262,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L47",
       "community": 3,
       "id": "nn_mlp_init"
@@ -270,7 +270,7 @@
     {
       "label": ".__call__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L51",
       "community": 3,
       "id": "nn_mlp_call"
@@ -278,7 +278,7 @@
     {
       "label": ".parameters()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L56",
       "community": 3,
       "id": "nn_mlp_parameters"
@@ -286,7 +286,7 @@
     {
       "label": ".__repr__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L59",
       "community": 3,
       "id": "nn_mlp_repr"
@@ -302,7 +302,7 @@
     {
       "label": "setup.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/setup.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/setup.py",
       "source_location": "L1",
       "community": 9,
       "id": "setup"
@@ -314,7 +314,7 @@
     {
       "label": "test_engine.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/test/test_engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/test/test_engine.py",
       "source_location": "L1",
       "community": 1,
       "id": "test_engine"
@@ -322,7 +322,7 @@
     {
       "label": "test_sanity_check()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/test/test_engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/test/test_engine.py",
       "source_location": "L4",
       "community": 1,
       "id": "test_engine_test_sanity_check"
@@ -330,7 +330,7 @@
     {
       "label": "test_more_ops()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/test/test_engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/test/test_engine.py",
       "source_location": "L28",
       "community": 1,
       "id": "test_engine_test_more_ops"
@@ -342,7 +342,7 @@
     {
       "label": "bpe.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L1",
       "community": 4,
       "id": "bpe"
@@ -350,7 +350,7 @@
     {
       "label": "bytes_to_unicode()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L20",
       "community": 4,
       "id": "bpe_bytes_to_unicode"
@@ -358,7 +358,7 @@
     {
       "label": "get_pairs()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L51",
       "community": 4,
       "id": "bpe_get_pairs"
@@ -366,7 +366,7 @@
     {
       "label": "Encoder",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L62",
       "community": 4,
       "id": "bpe_encoder"
@@ -374,7 +374,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L64",
       "community": 4,
       "id": "bpe_encoder_init"
@@ -382,7 +382,7 @@
     {
       "label": ".bpe()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L95",
       "community": 4,
       "id": "bpe_encoder_bpe"
@@ -390,7 +390,7 @@
     {
       "label": ".encode()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L161",
       "community": 4,
       "id": "bpe_encoder_encode"
@@ -398,7 +398,7 @@
     {
       "label": ".encode_and_show_work()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L180",
       "community": 4,
       "id": "bpe_encoder_encode_and_show_work"
@@ -406,7 +406,7 @@
     {
       "label": ".decode()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L205",
       "community": 4,
       "id": "bpe_encoder_decode"
@@ -414,7 +414,7 @@
     {
       "label": "get_file()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L216",
       "community": 4,
       "id": "bpe_get_file"
@@ -422,7 +422,7 @@
     {
       "label": "get_encoder()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L223",
       "community": 4,
       "id": "bpe_get_encoder"
@@ -430,7 +430,7 @@
     {
       "label": "BPETokenizer",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L257",
       "community": 4,
       "id": "bpe_bpetokenizer"
@@ -438,7 +438,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L260",
       "community": 4,
       "id": "bpe_bpetokenizer_init"
@@ -446,7 +446,7 @@
     {
       "label": ".__call__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L263",
       "community": 4,
       "id": "bpe_bpetokenizer_call"
@@ -454,7 +454,7 @@
     {
       "label": ".decode()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L274",
       "community": 4,
       "id": "bpe_bpetokenizer_decode"
@@ -478,7 +478,7 @@
     {
       "label": "model.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L1",
       "community": 0,
       "id": "model"
@@ -486,7 +486,7 @@
     {
       "label": "NewGELU",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/model.py",
       "source_location": "L21",
       "community": 0,
       "id": "model_newgelu"
@@ -494,7 +494,7 @@
     {
       "label": ".forward()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/model.py",
       "source_location": "L26",
       "community": 0,
       "id": "model_newgelu_forward"
@@ -502,7 +502,7 @@
     {
       "label": "CausalSelfAttention",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L29",
       "community": 0,
       "id": "model_causalselfattention"
@@ -510,7 +510,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L31",
       "community": 0,
       "id": "model_causalselfattention_init"
@@ -518,7 +518,7 @@
     {
       "label": ".forward()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L52",
       "community": 0,
       "id": "model_causalselfattention_forward"
@@ -526,7 +526,7 @@
     {
       "label": "Block",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L94",
       "community": 0,
       "id": "model_block"
@@ -534,7 +534,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L96",
       "community": 0,
       "id": "model_block_init"
@@ -542,7 +542,7 @@
     {
       "label": ".forward()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L103",
       "community": 0,
       "id": "model_block_forward"
@@ -550,7 +550,7 @@
     {
       "label": "GPT",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L118",
       "community": 0,
       "id": "model_gpt"
@@ -558,7 +558,7 @@
     {
       "label": "get_default_config()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/model.py",
       "source_location": "L99",
       "community": 0,
       "id": "model_get_default_config"
@@ -566,7 +566,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L120",
       "community": 0,
       "id": "model_gpt_init"
@@ -574,7 +574,7 @@
     {
       "label": "._init_weights()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L162",
       "community": 0,
       "id": "model_gpt_init_weights"
@@ -582,7 +582,7 @@
     {
       "label": "from_pretrained()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L207",
       "community": 0,
       "id": "model_from_pretrained"
@@ -590,7 +590,7 @@
     {
       "label": ".configure_optimizers()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L263",
       "community": 0,
       "id": "model_gpt_configure_optimizers"
@@ -598,7 +598,7 @@
     {
       "label": ".forward()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L170",
       "community": 0,
       "id": "model_gpt_forward"
@@ -606,7 +606,7 @@
     {
       "label": "generate()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L306",
       "community": 0,
       "id": "model_generate"
@@ -626,7 +626,7 @@
     {
       "label": "trainer.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L1",
       "community": 1,
       "id": "trainer"
@@ -634,7 +634,7 @@
     {
       "label": "Trainer",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L13",
       "community": 8,
       "id": "trainer_trainer"
@@ -642,7 +642,7 @@
     {
       "label": "get_default_config()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L16",
       "community": 1,
       "id": "trainer_get_default_config"
@@ -650,7 +650,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L31",
       "community": 8,
       "id": "trainer_trainer_init"
@@ -658,7 +658,7 @@
     {
       "label": ".add_callback()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L51",
       "community": 8,
       "id": "trainer_trainer_add_callback"
@@ -666,7 +666,7 @@
     {
       "label": ".set_callback()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L54",
       "community": 8,
       "id": "trainer_trainer_set_callback"
@@ -674,7 +674,7 @@
     {
       "label": ".trigger_callbacks()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L57",
       "community": 8,
       "id": "trainer_trainer_trigger_callbacks"
@@ -682,7 +682,7 @@
     {
       "label": ".run()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L61",
       "community": 8,
       "id": "trainer_trainer_run"
@@ -702,7 +702,7 @@
     {
       "label": "utils.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L1",
       "community": 6,
       "id": "utils"
@@ -710,7 +710,7 @@
     {
       "label": "set_seed()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L13",
       "community": 6,
       "id": "utils_set_seed"
@@ -718,7 +718,7 @@
     {
       "label": "setup_logging()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L19",
       "community": 6,
       "id": "utils_setup_logging"
@@ -726,7 +726,7 @@
     {
       "label": "CfgNode",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L31",
       "community": 6,
       "id": "utils_cfgnode"
@@ -734,7 +734,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L37",
       "community": 6,
       "id": "utils_cfgnode_init"
@@ -742,7 +742,7 @@
     {
       "label": ".__str__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L40",
       "community": 6,
       "id": "utils_cfgnode_str"
@@ -750,7 +750,7 @@
     {
       "label": "._str_helper()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L43",
       "community": 6,
       "id": "utils_cfgnode_str_helper"
@@ -758,7 +758,7 @@
     {
       "label": ".to_dict()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L55",
       "community": 6,
       "id": "utils_cfgnode_to_dict"
@@ -766,7 +766,7 @@
     {
       "label": ".merge_from_dict()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L59",
       "community": 6,
       "id": "utils_cfgnode_merge_from_dict"
@@ -774,7 +774,7 @@
     {
       "label": ".merge_from_args()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L62",
       "community": 6,
       "id": "utils_cfgnode_merge_from_args"
@@ -794,7 +794,7 @@
     {
       "label": "adder.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L1",
       "community": 1,
       "id": "adder"
@@ -802,7 +802,7 @@
     {
       "label": "get_config()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L19",
       "community": 1,
       "id": "adder_get_config"
@@ -810,7 +810,7 @@
     {
       "label": "AdditionDataset",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L43",
       "community": 7,
       "id": "adder_additiondataset"
@@ -826,7 +826,7 @@
     {
       "label": "get_default_config()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L69",
       "community": 1,
       "id": "adder_get_default_config"
@@ -834,7 +834,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L74",
       "community": 7,
       "id": "adder_additiondataset_init"
@@ -842,7 +842,7 @@
     {
       "label": ".get_vocab_size()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L88",
       "community": 7,
       "id": "adder_additiondataset_get_vocab_size"
@@ -850,7 +850,7 @@
     {
       "label": ".get_block_size()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L91",
       "community": 7,
       "id": "adder_additiondataset_get_block_size"
@@ -858,7 +858,7 @@
     {
       "label": ".__len__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L97",
       "community": 7,
       "id": "adder_additiondataset_len"
@@ -866,7 +866,7 @@
     {
       "label": ".__getitem__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L100",
       "community": 7,
       "id": "adder_additiondataset_getitem"
@@ -874,7 +874,7 @@
     {
       "label": "eval_split()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L145",
       "community": 1,
       "id": "adder_eval_split"
@@ -882,7 +882,7 @@
     {
       "label": "batch_end_callback()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L181",
       "community": 1,
       "id": "adder_batch_end_callback"
@@ -902,7 +902,7 @@
     {
       "label": "chargpt.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L1",
       "community": 1,
       "id": "chargpt"
@@ -910,7 +910,7 @@
     {
       "label": "get_config()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L18",
       "community": 1,
       "id": "chargpt_get_config"
@@ -918,7 +918,7 @@
     {
       "label": "CharDataset",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L42",
       "community": 7,
       "id": "chargpt_chardataset"
@@ -926,7 +926,7 @@
     {
       "label": "get_default_config()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L48",
       "community": 1,
       "id": "chargpt_get_default_config"
@@ -934,7 +934,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L53",
       "community": 7,
       "id": "chargpt_chardataset_init"
@@ -942,7 +942,7 @@
     {
       "label": ".get_vocab_size()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L65",
       "community": 7,
       "id": "chargpt_chardataset_get_vocab_size"
@@ -950,7 +950,7 @@
     {
       "label": ".get_block_size()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L68",
       "community": 7,
       "id": "chargpt_chardataset_get_block_size"
@@ -958,7 +958,7 @@
     {
       "label": ".__len__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L71",
       "community": 7,
       "id": "chargpt_chardataset_len"
@@ -966,7 +966,7 @@
     {
       "label": ".__getitem__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L74",
       "community": 7,
       "id": "chargpt_chardataset_getitem"
@@ -974,7 +974,7 @@
     {
       "label": "batch_end_callback()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L108",
       "community": 1,
       "id": "chargpt_batch_end_callback"
@@ -982,7 +982,7 @@
     {
       "label": "test_huggingface_import.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
       "source_location": "L1",
       "community": 1,
       "id": "test_huggingface_import"
@@ -990,7 +990,7 @@
     {
       "label": "TestHuggingFaceImport",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
       "source_location": "L12",
       "community": 1,
       "id": "test_huggingface_import_testhuggingfaceimport"
@@ -998,7 +998,7 @@
     {
       "label": ".test_gpt2()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
       "source_location": "L14",
       "community": 1,
       "id": "test_huggingface_import_testhuggingfaceimport_test_gpt2"
@@ -1018,7 +1018,7 @@
     {
       "label": "bench.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/bench.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/bench.py",
       "source_location": "L1",
       "community": 2,
       "id": "bench"
@@ -1026,7 +1026,7 @@
     {
       "label": "get_batch()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/bench.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/bench.py",
       "source_location": "L37",
       "community": 2,
       "id": "bench_get_batch"
@@ -1038,7 +1038,7 @@
     {
       "label": "eval_gpt2.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/config/eval_gpt2.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/config/eval_gpt2.py",
       "source_location": "L1",
       "community": 11,
       "id": "eval_gpt2"
@@ -1046,7 +1046,7 @@
     {
       "label": "eval_gpt2_large.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/config/eval_gpt2_large.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/config/eval_gpt2_large.py",
       "source_location": "L1",
       "community": 12,
       "id": "eval_gpt2_large"
@@ -1054,7 +1054,7 @@
     {
       "label": "eval_gpt2_medium.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/config/eval_gpt2_medium.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/config/eval_gpt2_medium.py",
       "source_location": "L1",
       "community": 13,
       "id": "eval_gpt2_medium"
@@ -1062,7 +1062,7 @@
     {
       "label": "eval_gpt2_xl.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/config/eval_gpt2_xl.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/config/eval_gpt2_xl.py",
       "source_location": "L1",
       "community": 14,
       "id": "eval_gpt2_xl"
@@ -1070,7 +1070,7 @@
     {
       "label": "finetune_shakespeare.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/config/finetune_shakespeare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/config/finetune_shakespeare.py",
       "source_location": "L1",
       "community": 2,
       "id": "finetune_shakespeare"
@@ -1078,7 +1078,7 @@
     {
       "label": "train_gpt2.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/config/train_gpt2.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/config/train_gpt2.py",
       "source_location": "L1",
       "community": 15,
       "id": "train_gpt2"
@@ -1086,7 +1086,7 @@
     {
       "label": "train_shakespeare_char.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/config/train_shakespeare_char.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/config/train_shakespeare_char.py",
       "source_location": "L1",
       "community": 16,
       "id": "train_shakespeare_char"
@@ -1094,7 +1094,7 @@
     {
       "label": "configurator.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/configurator.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/configurator.py",
       "source_location": "L1",
       "community": 6,
       "id": "configurator"
@@ -1102,7 +1102,7 @@
     {
       "label": "prepare.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
       "source_location": "L1",
       "community": 2,
       "id": "prepare"
@@ -1110,7 +1110,7 @@
     {
       "label": "process()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/openwebtext/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/openwebtext/prepare.py",
       "source_location": "L43",
       "community": 2,
       "id": "prepare_process"
@@ -1130,7 +1130,7 @@
     {
       "label": "encode()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
       "source_location": "L32",
       "community": 2,
       "id": "prepare_encode"
@@ -1138,7 +1138,7 @@
     {
       "label": "decode()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
       "source_location": "L34",
       "community": 2,
       "id": "prepare_decode"
@@ -1150,7 +1150,7 @@
     {
       "label": "LayerNorm",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L18",
       "community": 0,
       "id": "model_layernorm"
@@ -1158,7 +1158,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L21",
       "community": 0,
       "id": "model_layernorm_init"
@@ -1166,7 +1166,7 @@
     {
       "label": ".forward()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L26",
       "community": 0,
       "id": "model_layernorm_forward"
@@ -1174,7 +1174,7 @@
     {
       "label": "MLP",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L78",
       "community": 0,
       "id": "model_mlp"
@@ -1182,7 +1182,7 @@
     {
       "label": ".__init__()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L80",
       "community": 0,
       "id": "model_mlp_init"
@@ -1190,7 +1190,7 @@
     {
       "label": ".forward()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L87",
       "community": 0,
       "id": "model_mlp_forward"
@@ -1198,7 +1198,7 @@
     {
       "label": "GPTConfig",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L109",
       "community": 0,
       "id": "model_gptconfig"
@@ -1206,7 +1206,7 @@
     {
       "label": ".get_num_params()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L150",
       "community": 0,
       "id": "model_gpt_get_num_params"
@@ -1214,7 +1214,7 @@
     {
       "label": ".crop_block_size()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L195",
       "community": 0,
       "id": "model_gpt_crop_block_size"
@@ -1222,7 +1222,7 @@
     {
       "label": ".estimate_mfu()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L289",
       "community": 0,
       "id": "model_gpt_estimate_mfu"
@@ -1238,7 +1238,7 @@
     {
       "label": "sample.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/sample.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/sample.py",
       "source_location": "L1",
       "community": 2,
       "id": "sample"
@@ -1246,7 +1246,7 @@
     {
       "label": "train.py",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L1",
       "community": 2,
       "id": "train"
@@ -1254,7 +1254,7 @@
     {
       "label": "get_batch()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L116",
       "community": 2,
       "id": "train_get_batch"
@@ -1262,7 +1262,7 @@
     {
       "label": "estimate_loss()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L216",
       "community": 2,
       "id": "train_estimate_loss"
@@ -1270,7 +1270,7 @@
     {
       "label": "get_lr()",
       "file_type": "code",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L231",
       "community": 2,
       "id": "train_get_lr"
@@ -1292,7 +1292,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L2",
       "weight": 1.0,
       "_src": "engine",
@@ -1303,7 +1303,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L5",
       "weight": 1.0,
       "_src": "engine_value",
@@ -1314,7 +1314,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L14",
       "weight": 0.8,
       "_src": "engine_value_add",
@@ -1325,7 +1325,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L25",
       "weight": 0.8,
       "_src": "engine_value_mul",
@@ -1336,7 +1336,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L37",
       "weight": 0.8,
       "_src": "engine_value_pow",
@@ -1347,7 +1347,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L46",
       "weight": 0.8,
       "_src": "engine_value_relu",
@@ -1358,7 +1358,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L54",
       "weight": 1.0,
       "_src": "engine_value",
@@ -1369,7 +1369,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L72",
       "weight": 1.0,
       "_src": "engine_value",
@@ -1380,7 +1380,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L75",
       "weight": 1.0,
       "_src": "engine_value",
@@ -1391,7 +1391,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L78",
       "weight": 1.0,
       "_src": "engine_value",
@@ -1402,7 +1402,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L81",
       "weight": 1.0,
       "_src": "engine_value",
@@ -1413,7 +1413,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L84",
       "weight": 1.0,
       "_src": "engine_value",
@@ -1424,7 +1424,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L87",
       "weight": 1.0,
       "_src": "engine_value",
@@ -1435,7 +1435,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L90",
       "weight": 1.0,
       "_src": "engine_value",
@@ -1446,7 +1446,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/engine.py",
       "source_location": "L93",
       "weight": 1.0,
       "_src": "engine_value",
@@ -1457,7 +1457,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L1",
       "weight": 1.0,
       "_src": "nn",
@@ -1468,7 +1468,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L2",
       "weight": 1.0,
       "_src": "nn",
@@ -1479,7 +1479,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L4",
       "weight": 1.0,
       "_src": "nn",
@@ -1490,7 +1490,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L13",
       "weight": 1.0,
       "_src": "nn",
@@ -1501,7 +1501,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L30",
       "weight": 1.0,
       "_src": "nn",
@@ -1512,7 +1512,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L45",
       "weight": 1.0,
       "_src": "nn",
@@ -1523,7 +1523,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L6",
       "weight": 1.0,
       "_src": "nn_module",
@@ -1534,7 +1534,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L10",
       "weight": 1.0,
       "_src": "nn_module",
@@ -1545,7 +1545,7 @@
     {
       "relation": "inherits",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L13",
       "weight": 1.0,
       "_src": "nn_neuron",
@@ -1556,7 +1556,7 @@
     {
       "relation": "inherits",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L30",
       "weight": 1.0,
       "_src": "nn_layer",
@@ -1567,7 +1567,7 @@
     {
       "relation": "inherits",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L45",
       "weight": 1.0,
       "_src": "nn_mlp",
@@ -1578,7 +1578,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L7",
       "weight": 0.8,
       "_src": "nn_module_zero_grad",
@@ -1589,7 +1589,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L15",
       "weight": 1.0,
       "_src": "nn_neuron",
@@ -1600,7 +1600,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L20",
       "weight": 1.0,
       "_src": "nn_neuron",
@@ -1611,7 +1611,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L24",
       "weight": 1.0,
       "_src": "nn_neuron",
@@ -1622,7 +1622,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L27",
       "weight": 1.0,
       "_src": "nn_neuron",
@@ -1633,7 +1633,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L33",
       "weight": 0.8,
       "_src": "nn_layer_init",
@@ -1644,7 +1644,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L32",
       "weight": 1.0,
       "_src": "nn_layer",
@@ -1655,7 +1655,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L35",
       "weight": 1.0,
       "_src": "nn_layer",
@@ -1666,7 +1666,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L39",
       "weight": 1.0,
       "_src": "nn_layer",
@@ -1677,7 +1677,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L42",
       "weight": 1.0,
       "_src": "nn_layer",
@@ -1688,7 +1688,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L49",
       "weight": 0.8,
       "_src": "nn_mlp_init",
@@ -1699,7 +1699,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L53",
       "weight": 0.8,
       "_src": "nn_mlp_call",
@@ -1710,7 +1710,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L40",
       "weight": 0.8,
       "_src": "nn_layer_parameters",
@@ -1721,7 +1721,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L47",
       "weight": 1.0,
       "_src": "nn_mlp",
@@ -1732,7 +1732,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L51",
       "weight": 1.0,
       "_src": "nn_mlp",
@@ -1743,7 +1743,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L56",
       "weight": 1.0,
       "_src": "nn_mlp",
@@ -1754,7 +1754,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/micrograd/nn.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/micrograd/nn.py",
       "source_location": "L59",
       "weight": 1.0,
       "_src": "nn_mlp",
@@ -1765,7 +1765,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L5",
       "weight": 1.0,
       "_src": "utils",
@@ -1776,7 +1776,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/test/test_engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/test/test_engine.py",
       "source_location": "L2",
       "weight": 1.0,
       "_src": "test_engine",
@@ -1787,7 +1787,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/setup.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/setup.py",
       "source_location": "L1",
       "weight": 1.0,
       "_src": "setup",
@@ -1798,7 +1798,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/test/test_engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/test/test_engine.py",
       "source_location": "L1",
       "weight": 1.0,
       "_src": "test_engine",
@@ -1809,7 +1809,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/test/test_engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/test/test_engine.py",
       "source_location": "L4",
       "weight": 1.0,
       "_src": "test_engine",
@@ -1820,7 +1820,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/micrograd/test/test_engine.py",
+      "source_file": "/workspace/graphify-benchmark/repos/micrograd/test/test_engine.py",
       "source_location": "L28",
       "weight": 1.0,
       "_src": "test_engine",
@@ -1831,7 +1831,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L16",
       "weight": 1.0,
       "_src": "bpe",
@@ -1842,7 +1842,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L14",
       "weight": 1.0,
       "_src": "model",
@@ -1853,7 +1853,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L9",
       "weight": 1.0,
       "_src": "trainer",
@@ -1864,7 +1864,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L9",
       "weight": 1.0,
       "_src": "utils",
@@ -1875,7 +1875,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L9",
       "weight": 1.0,
       "_src": "adder",
@@ -1886,7 +1886,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L8",
       "weight": 1.0,
       "_src": "chargpt",
@@ -1897,7 +1897,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
       "source_location": "L6",
       "weight": 1.0,
       "_src": "test_huggingface_import",
@@ -1908,7 +1908,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/bench.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/bench.py",
       "source_location": "L8",
       "weight": 1.0,
       "_src": "bench",
@@ -1919,7 +1919,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/sample.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/sample.py",
       "source_location": "L7",
       "weight": 1.0,
       "_src": "sample",
@@ -1930,7 +1930,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L26",
       "weight": 1.0,
       "_src": "train",
@@ -1941,7 +1941,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L11",
       "weight": 1.0,
       "_src": "bpe",
@@ -1952,7 +1952,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L12",
       "weight": 1.0,
       "_src": "bpe",
@@ -1963,7 +1963,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L13",
       "weight": 1.0,
       "_src": "bpe",
@@ -1974,7 +1974,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L14",
       "weight": 1.0,
       "_src": "bpe",
@@ -1985,7 +1985,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L20",
       "weight": 1.0,
       "_src": "bpe",
@@ -1996,7 +1996,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L51",
       "weight": 1.0,
       "_src": "bpe",
@@ -2007,7 +2007,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L62",
       "weight": 1.0,
       "_src": "bpe",
@@ -2018,7 +2018,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L216",
       "weight": 1.0,
       "_src": "bpe",
@@ -2029,7 +2029,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L223",
       "weight": 1.0,
       "_src": "bpe",
@@ -2040,7 +2040,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L257",
       "weight": 1.0,
       "_src": "bpe",
@@ -2051,7 +2051,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L66",
       "weight": 0.8,
       "_src": "bpe_encoder_init",
@@ -2062,7 +2062,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L108",
       "weight": 0.8,
       "_src": "bpe_encoder_bpe",
@@ -2073,7 +2073,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L64",
       "weight": 1.0,
       "_src": "bpe_encoder",
@@ -2084,7 +2084,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L95",
       "weight": 1.0,
       "_src": "bpe_encoder",
@@ -2095,7 +2095,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L161",
       "weight": 1.0,
       "_src": "bpe_encoder",
@@ -2106,7 +2106,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L180",
       "weight": 1.0,
       "_src": "bpe_encoder",
@@ -2117,7 +2117,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L205",
       "weight": 1.0,
       "_src": "bpe_encoder",
@@ -2128,7 +2128,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L252",
       "weight": 0.8,
       "_src": "bpe_get_encoder",
@@ -2139,7 +2139,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L173",
       "weight": 0.8,
       "_src": "bpe_encoder_encode",
@@ -2150,7 +2150,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L188",
       "weight": 0.8,
       "_src": "bpe_encoder_encode_and_show_work",
@@ -2161,7 +2161,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L186",
       "weight": 0.8,
       "_src": "bpe_encoder_encode_and_show_work",
@@ -2172,7 +2172,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L269",
       "weight": 0.8,
       "_src": "bpe_bpetokenizer_call",
@@ -2183,7 +2183,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L213",
       "weight": 0.8,
       "_src": "bpe_encoder_decode",
@@ -2194,7 +2194,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L235",
       "weight": 0.8,
       "_src": "bpe_get_encoder",
@@ -2205,7 +2205,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L261",
       "weight": 0.8,
       "_src": "bpe_bpetokenizer_init",
@@ -2216,7 +2216,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L260",
       "weight": 1.0,
       "_src": "bpe_bpetokenizer",
@@ -2227,7 +2227,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L263",
       "weight": 1.0,
       "_src": "bpe_bpetokenizer",
@@ -2238,7 +2238,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/bpe.py",
       "source_location": "L274",
       "weight": 1.0,
       "_src": "bpe_bpetokenizer",
@@ -2249,7 +2249,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L2",
       "weight": 1.0,
       "_src": "utils",
@@ -2260,7 +2260,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L5",
       "weight": 1.0,
       "_src": "adder",
@@ -2271,7 +2271,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L5",
       "weight": 1.0,
       "_src": "chargpt",
@@ -2282,7 +2282,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/bench.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/bench.py",
       "source_location": "L4",
       "weight": 1.0,
       "_src": "bench",
@@ -2293,7 +2293,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
       "source_location": "L7",
       "weight": 1.0,
       "_src": "prepare",
@@ -2304,7 +2304,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/sample.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/sample.py",
       "source_location": "L4",
       "weight": 1.0,
       "_src": "sample",
@@ -2315,7 +2315,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L19",
       "weight": 1.0,
       "_src": "train",
@@ -2326,7 +2326,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L4",
       "weight": 1.0,
       "_src": "utils",
@@ -2337,7 +2337,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L7",
       "weight": 1.0,
       "_src": "adder",
@@ -2348,7 +2348,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
       "source_location": "L9",
       "weight": 1.0,
       "_src": "prepare",
@@ -2359,7 +2359,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L10",
       "weight": 1.0,
       "_src": "model",
@@ -2370,7 +2370,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L16",
       "weight": 1.0,
       "_src": "model",
@@ -2381,7 +2381,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/model.py",
       "source_location": "L17",
       "weight": 1.0,
       "_src": "model",
@@ -2392,7 +2392,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/model.py",
       "source_location": "L21",
       "weight": 1.0,
       "_src": "model",
@@ -2403,7 +2403,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L29",
       "weight": 1.0,
       "_src": "model",
@@ -2414,7 +2414,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L94",
       "weight": 1.0,
       "_src": "model",
@@ -2425,7 +2425,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L118",
       "weight": 1.0,
       "_src": "model",
@@ -2436,7 +2436,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/model.py",
       "source_location": "L99",
       "weight": 1.0,
       "_src": "model",
@@ -2447,7 +2447,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L207",
       "weight": 1.0,
       "_src": "model",
@@ -2458,7 +2458,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L306",
       "weight": 1.0,
       "_src": "model",
@@ -2469,7 +2469,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/bench.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/bench.py",
       "source_location": "L9",
       "weight": 1.0,
       "_src": "bench",
@@ -2480,7 +2480,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L11",
       "weight": 1.0,
       "_src": "model",
@@ -2491,7 +2491,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L12",
       "weight": 1.0,
       "_src": "model",
@@ -2502,7 +2502,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L18",
       "weight": 1.0,
       "_src": "model",
@@ -2513,7 +2513,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L78",
       "weight": 1.0,
       "_src": "model",
@@ -2524,7 +2524,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L109",
       "weight": 1.0,
       "_src": "model",
@@ -2535,7 +2535,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/sample.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/sample.py",
       "source_location": "L9",
       "weight": 1.0,
       "_src": "sample",
@@ -2546,7 +2546,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L30",
       "weight": 1.0,
       "_src": "train",
@@ -2557,7 +2557,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/model.py",
       "source_location": "L26",
       "weight": 1.0,
       "_src": "model_newgelu",
@@ -2568,7 +2568,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/model.py",
       "source_location": "L84",
       "weight": 0.8,
       "_src": "model_block_init",
@@ -2579,7 +2579,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L31",
       "weight": 1.0,
       "_src": "model_causalselfattention",
@@ -2590,7 +2590,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L52",
       "weight": 1.0,
       "_src": "model_causalselfattention",
@@ -2601,7 +2601,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L99",
       "weight": 0.8,
       "_src": "model_block_init",
@@ -2612,7 +2612,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L32",
       "weight": 0.8,
       "_src": "model_causalselfattention_init",
@@ -2623,7 +2623,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L96",
       "weight": 1.0,
       "_src": "model_block",
@@ -2634,7 +2634,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L103",
       "weight": 1.0,
       "_src": "model_block",
@@ -2645,7 +2645,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L130",
       "weight": 0.8,
       "_src": "model_gpt_init",
@@ -2656,7 +2656,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L181",
       "weight": 0.8,
       "_src": "model_gpt_forward",
@@ -2667,7 +2667,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L97",
       "weight": 0.8,
       "_src": "model_block_init",
@@ -2678,7 +2678,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L98",
       "weight": 0.8,
       "_src": "model_block_init",
@@ -2689,7 +2689,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L101",
       "weight": 0.8,
       "_src": "model_block_init",
@@ -2700,7 +2700,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L105",
       "weight": 0.8,
       "_src": "model_block_forward",
@@ -2711,7 +2711,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L120",
       "weight": 1.0,
       "_src": "model_gpt",
@@ -2722,7 +2722,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L162",
       "weight": 1.0,
       "_src": "model_gpt",
@@ -2733,7 +2733,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L263",
       "weight": 1.0,
       "_src": "model_gpt",
@@ -2744,7 +2744,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L170",
       "weight": 1.0,
       "_src": "model_gpt",
@@ -2755,7 +2755,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L232",
       "weight": 0.8,
       "_src": "model_from_pretrained",
@@ -2766,7 +2766,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L150",
       "weight": 1.0,
       "_src": "model_gpt",
@@ -2777,7 +2777,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L195",
       "weight": 1.0,
       "_src": "model_gpt",
@@ -2788,7 +2788,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L289",
       "weight": 1.0,
       "_src": "model_gpt",
@@ -2799,7 +2799,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/model.py",
       "source_location": "L184",
       "weight": 0.8,
       "_src": "model_from_pretrained",
@@ -2810,7 +2810,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L131",
       "weight": 0.8,
       "_src": "model_gpt_init",
@@ -2821,7 +2821,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L22",
       "weight": 0.8,
       "_src": "model_layernorm_init",
@@ -2832,7 +2832,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L81",
       "weight": 0.8,
       "_src": "model_mlp_init",
@@ -2843,7 +2843,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L148",
       "weight": 0.8,
       "_src": "model_gpt_init",
@@ -2854,7 +2854,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L231",
       "weight": 0.8,
       "_src": "model_from_pretrained",
@@ -2865,7 +2865,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L21",
       "weight": 1.0,
       "_src": "train",
@@ -2876,7 +2876,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L11",
       "weight": 1.0,
       "_src": "trainer",
@@ -2887,7 +2887,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L15",
       "weight": 1.0,
       "_src": "adder",
@@ -2898,7 +2898,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L14",
       "weight": 1.0,
       "_src": "chargpt",
@@ -2909,7 +2909,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L6",
       "weight": 1.0,
       "_src": "trainer",
@@ -2920,7 +2920,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L7",
       "weight": 1.0,
       "_src": "trainer",
@@ -2931,7 +2931,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L10",
       "weight": 1.0,
       "_src": "trainer",
@@ -2942,7 +2942,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L13",
       "weight": 1.0,
       "_src": "trainer",
@@ -2953,7 +2953,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L16",
       "weight": 1.0,
       "_src": "trainer",
@@ -2964,7 +2964,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L31",
       "weight": 1.0,
       "_src": "trainer_trainer",
@@ -2975,7 +2975,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L51",
       "weight": 1.0,
       "_src": "trainer_trainer",
@@ -2986,7 +2986,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L54",
       "weight": 1.0,
       "_src": "trainer_trainer",
@@ -2997,7 +2997,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L57",
       "weight": 1.0,
       "_src": "trainer_trainer",
@@ -3008,7 +3008,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L61",
       "weight": 1.0,
       "_src": "trainer_trainer",
@@ -3019,7 +3019,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/trainer.py",
       "source_location": "L101",
       "weight": 0.8,
       "_src": "trainer_trainer_run",
@@ -3030,7 +3030,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/bench.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/bench.py",
       "source_location": "L7",
       "weight": 1.0,
       "_src": "bench",
@@ -3041,7 +3041,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/config/finetune_shakespeare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/config/finetune_shakespeare.py",
       "source_location": "L1",
       "weight": 1.0,
       "_src": "finetune_shakespeare",
@@ -3052,7 +3052,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L20",
       "weight": 1.0,
       "_src": "train",
@@ -3063,7 +3063,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L11",
       "weight": 1.0,
       "_src": "adder",
@@ -3074,7 +3074,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L10",
       "weight": 1.0,
       "_src": "chargpt",
@@ -3085,7 +3085,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L3",
       "weight": 1.0,
       "_src": "utils",
@@ -3096,7 +3096,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L6",
       "weight": 1.0,
       "_src": "utils",
@@ -3107,7 +3107,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L8",
       "weight": 1.0,
       "_src": "utils",
@@ -3118,7 +3118,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L13",
       "weight": 1.0,
       "_src": "utils",
@@ -3129,7 +3129,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L19",
       "weight": 1.0,
       "_src": "utils",
@@ -3140,7 +3140,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L31",
       "weight": 1.0,
       "_src": "utils",
@@ -3151,7 +3151,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L29",
       "weight": 0.8,
       "_src": "utils_setup_logging",
@@ -3162,7 +3162,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L37",
       "weight": 1.0,
       "_src": "utils_cfgnode",
@@ -3173,7 +3173,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L40",
       "weight": 1.0,
       "_src": "utils_cfgnode",
@@ -3184,7 +3184,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L43",
       "weight": 1.0,
       "_src": "utils_cfgnode",
@@ -3195,7 +3195,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L55",
       "weight": 1.0,
       "_src": "utils_cfgnode",
@@ -3206,7 +3206,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L59",
       "weight": 1.0,
       "_src": "utils_cfgnode",
@@ -3217,7 +3217,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L62",
       "weight": 1.0,
       "_src": "utils_cfgnode",
@@ -3228,7 +3228,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/mingpt/utils.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/mingpt/utils.py",
       "source_location": "L41",
       "weight": 0.8,
       "_src": "utils_cfgnode_str",
@@ -3239,7 +3239,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L6",
       "weight": 1.0,
       "_src": "adder",
@@ -3250,7 +3250,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L6",
       "weight": 1.0,
       "_src": "chargpt",
@@ -3261,7 +3261,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/configurator.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/configurator.py",
       "source_location": "L17",
       "weight": 1.0,
       "_src": "configurator",
@@ -3272,7 +3272,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/configurator.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/configurator.py",
       "source_location": "L18",
       "weight": 1.0,
       "_src": "configurator",
@@ -3283,7 +3283,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/bench.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/bench.py",
       "source_location": "L6",
       "weight": 1.0,
       "_src": "bench",
@@ -3294,7 +3294,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
       "source_location": "L10",
       "weight": 1.0,
       "_src": "prepare",
@@ -3305,7 +3305,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L25",
       "weight": 1.0,
       "_src": "train",
@@ -3316,7 +3316,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L10",
       "weight": 1.0,
       "_src": "adder",
@@ -3327,7 +3327,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L13",
       "weight": 1.0,
       "_src": "adder",
@@ -3338,7 +3338,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L14",
       "weight": 1.0,
       "_src": "adder",
@@ -3349,7 +3349,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L19",
       "weight": 1.0,
       "_src": "adder",
@@ -3360,7 +3360,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L43",
       "weight": 1.0,
       "_src": "adder",
@@ -3371,7 +3371,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L69",
       "weight": 1.0,
       "_src": "adder",
@@ -3382,7 +3382,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L145",
       "weight": 1.0,
       "_src": "adder",
@@ -3393,7 +3393,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L181",
       "weight": 1.0,
       "_src": "adder",
@@ -3404,7 +3404,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L29",
       "weight": 0.8,
       "_src": "adder_get_config",
@@ -3415,7 +3415,7 @@
     {
       "relation": "inherits",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L43",
       "weight": 1.0,
       "_src": "adder_additiondataset",
@@ -3426,7 +3426,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L74",
       "weight": 1.0,
       "_src": "adder_additiondataset",
@@ -3437,7 +3437,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L88",
       "weight": 1.0,
       "_src": "adder_additiondataset",
@@ -3448,7 +3448,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L91",
       "weight": 1.0,
       "_src": "adder_additiondataset",
@@ -3459,7 +3459,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L97",
       "weight": 1.0,
       "_src": "adder_additiondataset",
@@ -3470,7 +3470,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L100",
       "weight": 1.0,
       "_src": "adder_additiondataset",
@@ -3481,7 +3481,7 @@
     {
       "relation": "inherits",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L42",
       "weight": 1.0,
       "_src": "chargpt_chardataset",
@@ -3492,7 +3492,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/adder/adder.py",
       "source_location": "L192",
       "weight": 0.8,
       "_src": "adder_batch_end_callback",
@@ -3503,7 +3503,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L9",
       "weight": 1.0,
       "_src": "chargpt",
@@ -3514,7 +3514,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L12",
       "weight": 1.0,
       "_src": "chargpt",
@@ -3525,7 +3525,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
       "source_location": "L8",
       "weight": 1.0,
       "_src": "test_huggingface_import",
@@ -3536,7 +3536,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L13",
       "weight": 1.0,
       "_src": "chargpt",
@@ -3547,7 +3547,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L18",
       "weight": 1.0,
       "_src": "chargpt",
@@ -3558,7 +3558,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L42",
       "weight": 1.0,
       "_src": "chargpt",
@@ -3569,7 +3569,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L48",
       "weight": 1.0,
       "_src": "chargpt",
@@ -3580,7 +3580,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L108",
       "weight": 1.0,
       "_src": "chargpt",
@@ -3591,7 +3591,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L28",
       "weight": 0.8,
       "_src": "chargpt_get_config",
@@ -3602,7 +3602,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L53",
       "weight": 1.0,
       "_src": "chargpt_chardataset",
@@ -3613,7 +3613,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L65",
       "weight": 1.0,
       "_src": "chargpt_chardataset",
@@ -3624,7 +3624,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L68",
       "weight": 1.0,
       "_src": "chargpt_chardataset",
@@ -3635,7 +3635,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L71",
       "weight": 1.0,
       "_src": "chargpt_chardataset",
@@ -3646,7 +3646,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/projects/chargpt/chargpt.py",
       "source_location": "L74",
       "weight": 1.0,
       "_src": "chargpt_chardataset",
@@ -3657,7 +3657,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
       "source_location": "L5",
       "weight": 1.0,
       "_src": "test_huggingface_import",
@@ -3668,7 +3668,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
       "source_location": "L7",
       "weight": 1.0,
       "_src": "test_huggingface_import",
@@ -3679,7 +3679,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
       "source_location": "L9",
       "weight": 1.0,
       "_src": "test_huggingface_import",
@@ -3690,7 +3690,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
       "source_location": "L12",
       "weight": 1.0,
       "_src": "test_huggingface_import",
@@ -3701,7 +3701,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
+      "source_file": "/workspace/graphify-benchmark/repos/minGPT/tests/test_huggingface_import.py",
       "source_location": "L14",
       "weight": 1.0,
       "_src": "test_huggingface_import_testhuggingfaceimport",
@@ -3712,7 +3712,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/bench.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/bench.py",
       "source_location": "L5",
       "weight": 1.0,
       "_src": "bench",
@@ -3723,7 +3723,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/bench.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/bench.py",
       "source_location": "L37",
       "weight": 1.0,
       "_src": "bench",
@@ -3734,7 +3734,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/sample.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/sample.py",
       "source_location": "L6",
       "weight": 1.0,
       "_src": "sample",
@@ -3745,7 +3745,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L23",
       "weight": 1.0,
       "_src": "train",
@@ -3756,7 +3756,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/openwebtext/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/openwebtext/prepare.py",
       "source_location": "L5",
       "weight": 1.0,
       "_src": "prepare",
@@ -3767,7 +3767,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/shakespeare/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/shakespeare/prepare.py",
       "source_location": "L3",
       "weight": 1.0,
       "_src": "prepare",
@@ -3778,7 +3778,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/openwebtext/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/openwebtext/prepare.py",
       "source_location": "L8",
       "weight": 1.0,
       "_src": "prepare",
@@ -3789,7 +3789,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/openwebtext/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/openwebtext/prepare.py",
       "source_location": "L43",
       "weight": 1.0,
       "_src": "prepare",
@@ -3800,7 +3800,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
       "source_location": "L8",
       "weight": 1.0,
       "_src": "prepare",
@@ -3811,7 +3811,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
       "source_location": "L32",
       "weight": 1.0,
       "_src": "prepare",
@@ -3822,7 +3822,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/data/shakespeare_char/prepare.py",
       "source_location": "L34",
       "weight": 1.0,
       "_src": "prepare",
@@ -3833,7 +3833,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/sample.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/sample.py",
       "source_location": "L8",
       "weight": 1.0,
       "_src": "sample",
@@ -3844,7 +3844,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/sample.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/sample.py",
       "source_location": "L5",
       "weight": 1.0,
       "_src": "sample",
@@ -3855,7 +3855,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L22",
       "weight": 1.0,
       "_src": "train",
@@ -3866,7 +3866,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L21",
       "weight": 1.0,
       "_src": "model_layernorm",
@@ -3877,7 +3877,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L26",
       "weight": 1.0,
       "_src": "model_layernorm",
@@ -3888,7 +3888,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L80",
       "weight": 1.0,
       "_src": "model_mlp",
@@ -3899,7 +3899,7 @@
     {
       "relation": "method",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L87",
       "weight": 1.0,
       "_src": "model_mlp",
@@ -3910,7 +3910,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/model.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/model.py",
       "source_location": "L293",
       "weight": 0.8,
       "_src": "model_gpt_estimate_mfu",
@@ -3921,7 +3921,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L27",
       "weight": 1.0,
       "_src": "train",
@@ -3932,7 +3932,7 @@
     {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L28",
       "weight": 1.0,
       "_src": "train",
@@ -3943,7 +3943,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L116",
       "weight": 1.0,
       "_src": "train",
@@ -3954,7 +3954,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L216",
       "weight": 1.0,
       "_src": "train",
@@ -3965,7 +3965,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L231",
       "weight": 1.0,
       "_src": "train",
@@ -3976,7 +3976,7 @@
     {
       "relation": "imports",
       "confidence": "EXTRACTED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L246",
       "weight": 1.0,
       "_src": "train",
@@ -3987,7 +3987,7 @@
     {
       "relation": "calls",
       "confidence": "INFERRED",
-      "source_file": "/home/safi/graphify-benchmark/repos/nanoGPT/train.py",
+      "source_file": "/workspace/graphify-benchmark/repos/nanoGPT/train.py",
       "source_location": "L222",
       "weight": 0.8,
       "_src": "train_estimate_loss",

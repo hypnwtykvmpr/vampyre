@@ -189,7 +189,7 @@ def test_update_rejects_unmarked_graph_without_mutation(tmp_path):
     result = _run(["update", str(project), "--no-cluster"], tmp_path)
 
     assert result.returncode != 0
-    assert "missing an explicit graph profile" in result.stderr.lower()
+    assert "missing a valid explicit graphify profile" in result.stderr.lower()
     assert {path.name: path.read_bytes() for path in output.iterdir()} == before
 
 
@@ -444,6 +444,7 @@ def test_update_remap_preserves_directed_graph_class(tmp_path, no_cluster):
     assert links
     for edge in links:
         edge.pop("_origin", None)
+    seeded.pop("schema_version", None)
     graph_path.write_text(json.dumps(seeded, indent=2), encoding="utf-8")
 
     args = ["update", str(source_root), "--remap"]

@@ -1,12 +1,13 @@
 """Graph analysis: god nodes (most connected), surprising connections (cross-community), suggested questions."""
 
 from __future__ import annotations
+from collections.abc import Hashable
 from pathlib import Path
 import networkx as nx
 
 from graphify.build import edge_data
 from graphify.detect import CODE_EXTENSIONS, IMAGE_EXTENSIONS, PAPER_EXTENSIONS
-from graphify.projections import distinct_neighbor_degree, project_for_community
+from graphify.projections import distinct_neighbor_degree, project_for_community, stable_value_key
 
 # Builtin/mock names that can appear as annotation-derived nodes in pre-existing
 # graphs. Excluded from god-node ranking so they don't displace real abstractions
@@ -96,7 +97,7 @@ def _node_community_map(communities: dict[int, list[str]]) -> dict[str, int]:
     return {n: cid for cid, nodes in communities.items() for n in nodes}
 
 
-def _is_file_node(G: nx.Graph, node_id: str) -> bool:
+def _is_file_node(G: nx.Graph, node_id: Hashable) -> bool:
     """
     Return True if this node is a file-level hub node (e.g. 'client', 'models')
     or an AST method stub (e.g. '.auth_flow()', '.__init__()').
@@ -166,7 +167,7 @@ def god_nodes(G: nx.Graph, top_n: int = 10) -> list[dict]:
     mechanically and don't represent meaningful architectural abstractions.
     """
     degree = {n: distinct_neighbor_degree(G, n) for n in G.nodes()}
-    sorted_nodes = sorted(degree.items(), key=lambda x: x[1], reverse=True)
+    sorted_nodes = sorted(degree.items(), key=lambda item: (-item[1], stable_value_key(item[0])))
     result = []
     for node_id, deg in sorted_nodes:
         if (
@@ -371,6 +372,15 @@ def _cross_file_surprises(G: nx.Graph, communities: dict[int, list[str]], top_n:
         candidates.append(
             {
                 "_score": score,
+                "_identity": (
+                    stable_value_key(src_id),
+                    stable_value_key(tgt_id),
+                    stable_value_key(relation),
+                    stable_value_key(data.get("source_file")),
+                    stable_value_key(data.get("source_location")),
+                    stable_value_key(data.get("context")),
+                    stable_value_key(data.get("confidence")),
+                ),
                 "source": G.nodes[src_id].get("label", src_id),
                 "target": G.nodes[tgt_id].get("label", tgt_id),
                 "source_files": [
@@ -383,9 +393,10 @@ def _cross_file_surprises(G: nx.Graph, communities: dict[int, list[str]], top_n:
             }
         )
 
-    candidates.sort(key=lambda x: x["_score"], reverse=True)
+    candidates.sort(key=lambda item: (-item["_score"], item["_identity"]))
     for c in candidates:
         c.pop("_score")
+        c.pop("_identity")
 
     if candidates:
         return candidates[:top_n]
@@ -415,7 +426,14 @@ def _cross_community_surprises(
         # and parallel edges don't inflate centrality scores.
         simple = project_for_community(G) if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)) else G
         betweenness = nx.edge_betweenness_centrality(simple)
-        top_edges = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)[:top_n]
+        top_edges = sorted(
+            betweenness.items(),
+            key=lambda item: (
+                -item[1],
+                stable_value_key(item[0][0]),
+                stable_value_key(item[0][1]),
+            ),
+        )[:top_n]
         result = []
         for (u, v), score in top_edges:
             data = edge_data(G, u, v)
@@ -469,12 +487,21 @@ def _cross_community_surprises(
                 "relation": relation,
                 "note": f"Bridges community {cid_u} → community {cid_v}",
                 "_pair": tuple(sorted([cid_u, cid_v])),
+                "_identity": (
+                    stable_value_key(src_id),
+                    stable_value_key(tgt_id),
+                    stable_value_key(relation),
+                    stable_value_key(data.get("source_file")),
+                    stable_value_key(data.get("source_location")),
+                    stable_value_key(data.get("context")),
+                    stable_value_key(confidence),
+                ),
             }
         )
 
     # Sort: AMBIGUOUS first, then INFERRED, then EXTRACTED
     order = {"AMBIGUOUS": 0, "INFERRED": 1, "EXTRACTED": 2}
-    surprises.sort(key=lambda x: order.get(x["confidence"], 3))
+    surprises.sort(key=lambda item: (order.get(item["confidence"], 3), item["_identity"]))
 
     # Deduplicate by community pair - one representative edge per (A→B) boundary.
     # Without this, a single high-betweenness god node dominates all results.
@@ -482,6 +509,7 @@ def _cross_community_surprises(
     deduped = []
     for s in surprises:
         pair = s.pop("_pair")
+        s.pop("_identity")
         if pair not in seen_pairs:
             seen_pairs.add(pair)
             deduped.append(s)
@@ -508,7 +536,17 @@ def suggest_questions(
     node_community = _node_community_map(communities)
 
     # 1. AMBIGUOUS edges → unresolved relationship questions
-    for u, v, data in G.edges(data=True):
+    ambiguous_edges = sorted(
+        G.edges(data=True),
+        key=lambda edge: (
+            stable_value_key(edge[0]),
+            stable_value_key(edge[1]),
+            stable_value_key(edge[2].get("relation")),
+            stable_value_key(edge[2].get("source_location")),
+            stable_value_key(edge[2].get("context")),
+        ),
+    )
+    for u, v, data in ambiguous_edges:
         if data.get("confidence") == "AMBIGUOUS":
             ul = G.nodes[u].get("label", u)
             vl = G.nodes[v].get("label", v)
@@ -532,8 +570,7 @@ def suggest_questions(
                 for n, s in betweenness.items()
                 if not _is_file_node(G, n) and not _is_concept_node(G, n) and s > 0
             ],
-            key=lambda x: x[1],
-            reverse=True,
+            key=lambda item: (-item[1], stable_value_key(item[0])),
         )[:3]
         for node_id, score in bridges:
             label = G.nodes[node_id].get("label", node_id)
@@ -548,7 +585,9 @@ def suggest_questions(
                 if neighbor_community is not None and neighbor_community != cid:
                     neighbor_comms.add(neighbor_community)
             if neighbor_comms:
-                other_labels = [community_labels.get(c, f"Community {c}") for c in neighbor_comms]
+                other_labels = [
+                    community_labels.get(c, f"Community {c}") for c in sorted(neighbor_comms)
+                ]
                 questions.append(
                     {
                         "type": "bridge_node",
@@ -561,15 +600,23 @@ def suggest_questions(
     degree = {n: distinct_neighbor_degree(G, n) for n in G.nodes()}
     top_nodes = sorted(
         [(n, d) for n, d in degree.items() if not _is_file_node(G, n)],
-        key=lambda x: x[1],
-        reverse=True,
+        key=lambda item: (-item[1], stable_value_key(item[0])),
     )[:5]
     for node_id, _ in top_nodes:
-        inferred = [
-            (u, v, d)
-            for u, v, d in G.edges(node_id, data=True)
-            if d.get("confidence") == "INFERRED"
-        ]
+        inferred = sorted(
+            [
+                (u, v, d)
+                for u, v, d in G.edges(node_id, data=True)
+                if d.get("confidence") == "INFERRED"
+            ],
+            key=lambda edge: (
+                stable_value_key(edge[0]),
+                stable_value_key(edge[1]),
+                stable_value_key(edge[2].get("relation")),
+                stable_value_key(edge[2].get("source_location")),
+                stable_value_key(edge[2].get("context")),
+            ),
+        )
         if len(inferred) >= 2:
             label = G.nodes[node_id].get("label", node_id)
             # Use _src/_tgt to get the correct direction; fall back to v (the other node)
@@ -599,6 +646,7 @@ def suggest_questions(
         and not _is_file_node(G, n)
         and not _is_concept_node(G, n)
     ]
+    isolated.sort(key=stable_value_key)
     if isolated:
         labels = [G.nodes[n].get("label", n) for n in isolated[:3]]
         questions.append(
@@ -612,7 +660,7 @@ def suggest_questions(
     # 5. Low-cohesion communities → structural questions
     from .cluster import cohesion_score
 
-    for cid, nodes in communities.items():
+    for cid, nodes in sorted(communities.items(), key=lambda item: stable_value_key(item[0])):
         score = cohesion_score(G, nodes)
         if score < 0.15 and len(nodes) >= 5:
             label = community_labels.get(cid, f"Community {cid}")
@@ -659,45 +707,62 @@ def graph_diff(G_old: nx.Graph, G_new: nx.Graph) -> dict:
     added_node_ids = new_nodes - old_nodes
     removed_node_ids = old_nodes - new_nodes
 
-    new_nodes_list = [{"id": n, "label": G_new.nodes[n].get("label", n)} for n in added_node_ids]
+    new_nodes_list = [
+        {"id": node, "label": G_new.nodes[node].get("label", node)}
+        for node in sorted(added_node_ids, key=stable_value_key)
+    ]
     removed_nodes_list = [
-        {"id": n, "label": G_old.nodes[n].get("label", n)} for n in removed_node_ids
+        {"id": node, "label": G_old.nodes[node].get("label", node)}
+        for node in sorted(removed_node_ids, key=stable_value_key)
     ]
 
-    def edge_key(G: nx.Graph, u: str, v: str, data: dict) -> tuple:
-        if G.is_directed():
-            return (u, v, data.get("relation", ""))
-        return (min(u, v), max(u, v), data.get("relation", ""))
+    provenance_fields = (
+        "relation",
+        "source_file",
+        "source_location",
+        "confidence",
+        "confidence_score",
+        "context",
+        "provenance",
+        "_origin",
+        "_src",
+        "_tgt",
+    )
 
-    old_edge_keys = {edge_key(G_old, u, v, d) for u, v, d in G_old.edges(data=True)}
-    new_edge_keys = {edge_key(G_new, u, v, d) for u, v, d in G_new.edges(data=True)}
-
-    added_edge_keys = new_edge_keys - old_edge_keys
-    removed_edge_keys = old_edge_keys - new_edge_keys
-
-    new_edges_list = []
-    for u, v, d in G_new.edges(data=True):
-        if edge_key(G_new, u, v, d) in added_edge_keys:
-            new_edges_list.append(
-                {
-                    "source": u,
-                    "target": v,
-                    "relation": d.get("relation", ""),
-                    "confidence": d.get("confidence", ""),
-                }
+    def edge_records(graph: nx.Graph) -> dict[tuple, dict]:
+        if isinstance(graph, nx.MultiGraph | nx.MultiDiGraph):
+            rows = graph.edges(keys=True, data=True)
+        else:
+            rows = ((u, v, None, data) for u, v, data in graph.edges(data=True))
+        records: dict[tuple, dict] = {}
+        for u, v, edge_key, data in rows:
+            if not graph.is_directed() and stable_value_key(v) < stable_value_key(u):
+                u, v = v, u
+            identity = (
+                stable_value_key(u),
+                stable_value_key(v),
+                stable_value_key(edge_key),
+                tuple(
+                    (field, stable_value_key(data[field]))
+                    for field in provenance_fields
+                    if field in data
+                ),
             )
+            record = {"source": u, "target": v}
+            if edge_key is not None:
+                record["key"] = edge_key
+            for field in provenance_fields:
+                if field in data:
+                    record[field] = data[field]
+            record.setdefault("relation", "")
+            record.setdefault("confidence", "")
+            records[identity] = record
+        return records
 
-    removed_edges_list = []
-    for u, v, d in G_old.edges(data=True):
-        if edge_key(G_old, u, v, d) in removed_edge_keys:
-            removed_edges_list.append(
-                {
-                    "source": u,
-                    "target": v,
-                    "relation": d.get("relation", ""),
-                    "confidence": d.get("confidence", ""),
-                }
-            )
+    old_edges = edge_records(G_old)
+    new_edges = edge_records(G_new)
+    new_edges_list = [new_edges[key] for key in sorted(new_edges.keys() - old_edges.keys())]
+    removed_edges_list = [old_edges[key] for key in sorted(old_edges.keys() - new_edges.keys())]
 
     parts = []
     if new_nodes_list:
@@ -755,7 +820,7 @@ def find_import_cycles(
 
     # Step 1: Build a directed file-level graph from import/re-export edges.
     # IMPORTANT: resolve endpoints using source_file only; never infer from label/id.
-    file_graph = nx.DiGraph()
+    dependency_edges: set[tuple[str, str]] = set()
 
     for u, v, data in G.edges(data=True):
         rel = data.get("relation", "")
@@ -784,7 +849,20 @@ def find_import_cycles(
         if not tgt_file:
             continue
 
-        file_graph.add_edge(src_file_attr, tgt_file)
+        dependency_edges.add((src_file_attr, tgt_file))
+
+    # NetworkX cycle enumeration follows adjacency insertion order. Build the
+    # projection canonically before applying the bounded enumeration below.
+    file_graph = nx.DiGraph()
+    file_graph.add_nodes_from(
+        sorted({node for edge in dependency_edges for node in edge}, key=stable_value_key)
+    )
+    file_graph.add_edges_from(
+        sorted(
+            dependency_edges,
+            key=lambda edge: (stable_value_key(edge[0]), stable_value_key(edge[1])),
+        )
+    )
 
     if not file_graph.edges():
         return []
@@ -802,7 +880,7 @@ def find_import_cycles(
             break
 
     # Step 3: Sort by length (shortest = tightest coupling), then deduplicate.
-    cycles.sort(key=len)
+    cycles.sort(key=lambda cycle: (len(cycle), tuple(stable_value_key(node) for node in cycle)))
 
     # Deduplicate rotations: normalize each cycle by starting from the
     # lexicographically smallest element.

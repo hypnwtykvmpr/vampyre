@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from graphify.build import _semantic_id_remap, build_from_json
+from graphify.build import _semantic_id_remap, build_from_json, canonicalize_semantic_fragment
 from graphify.extractors.base import _file_stem
 
 
@@ -60,3 +60,84 @@ def test_normal_semantic_remap_still_works():
         [{"id": "foo", "source_file": "src/foo.py", "_origin": "semantic"}], "/proj"
     )
     assert isinstance(remap, dict)
+
+
+def test_labeled_semantic_node_does_not_collide_with_its_ast_file_node():
+    source_file = "tools/skillgen/expected/graphify__skills__amp__references__update.md"
+    file_id = "tools_skillgen_expected_graphify_skills_amp_references_update"
+    label = "graphify reference: incremental update and cluster-only (amp)"
+    semantic_id = "tools_skillgen_expected_graphify__skills__amp__references__update"
+
+    remap = _semantic_id_remap(
+        [
+            {
+                "id": file_id,
+                "label": Path(source_file).name,
+                "source_file": source_file,
+                "source_location": "L1",
+                "_origin": "ast",
+            },
+            {
+                "id": semantic_id,
+                "label": label,
+                "source_file": source_file,
+                "file_type": "concept",
+                "_origin": "semantic",
+            },
+        ],
+        "/repo",
+    )
+
+    assert remap[semantic_id] != file_id
+    assert remap[semantic_id].startswith(file_id + "_")
+
+
+def test_semantic_path_collisions_use_the_ast_disambiguation_contract():
+    fragment = {
+        "nodes": [
+            {
+                "id": "foo_bar_baz",
+                "label": "bar_baz.md",
+                "source_file": "foo/bar_baz.md",
+                "file_type": "document",
+                "source_location": "L1",
+            },
+            {
+                "id": "foo_bar_baz",
+                "label": "baz.md",
+                "source_file": "foo_bar/baz.md",
+                "file_type": "document",
+                "source_location": "L1",
+            },
+            {
+                "id": "sink",
+                "label": "sink",
+                "source_file": "sink.md",
+                "file_type": "document",
+            },
+        ],
+        "edges": [
+            {
+                "source": "foo_bar_baz",
+                "target": "sink",
+                "relation": "references",
+                "source_file": "foo/bar_baz.md",
+            },
+            {
+                "source": "foo_bar_baz",
+                "target": "sink",
+                "relation": "references",
+                "source_file": "foo_bar/baz.md",
+            },
+        ],
+        "hyperedges": [],
+    }
+
+    canonical = canonicalize_semantic_fragment(fragment, "/repo")
+    file_ids = {node["id"] for node in canonical["nodes"] if node["id"] != "sink"}
+
+    assert len(file_ids) == 2
+    assert {edge["source"] for edge in canonical["edges"]} == file_ids
+    assert canonical["graphify_identity_diagnostics"]["semantic_contested_aliases"] == [
+        "foo_bar_baz"
+    ]

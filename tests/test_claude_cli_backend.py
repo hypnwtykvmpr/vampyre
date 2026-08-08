@@ -1,322 +1,307 @@
-"""Tests for the `claude-cli` backend (#855/#856).
-
-Mocks subprocess.run + shutil.which so the suite runs on CI without
-the `claude` binary or a live network call.
-"""
+"""Security contract for the shared Claude Code CLI launcher."""
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import json
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
-from graphify import llm
 
-_ENVELOPE = {
-    "type": "result",
-    "subtype": "success",
-    "is_error": False,
-    "result": json.dumps(
-        {
-            "nodes": [
-                {
-                    "id": "foo_module",
-                    "label": "Foo",
-                    "file_type": "document",
-                    "source_file": "foo.md",
-                },
-                {"id": "foo_greet", "label": "greet", "file_type": "code", "source_file": "foo.md"},
-            ],
-            "edges": [
-                {
-                    "source": "foo_module",
-                    "target": "foo_greet",
-                    "relation": "references",
-                    "confidence": "EXTRACTED",
-                    "confidence_score": 1.0,
-                },
-            ],
-            "hyperedges": [],
-            "input_tokens": 0,
-            "output_tokens": 0,
-        }
-    ),
-    "stop_reason": "end_turn",
-    "usage": {
-        "input_tokens": 6,
-        "output_tokens": 11,
-        "cache_read_input_tokens": 17837,
-        "cache_creation_input_tokens": 30800,
-    },
-    "modelUsage": {"claude-opus-4-7[1m]": {"inputTokens": 6, "outputTokens": 11}},
-}
+def _subject():
+    return importlib.import_module("graphify.claude_cli")
 
 
-@pytest.fixture
-def fake_claude(monkeypatch):
-    completed = MagicMock(returncode=0, stdout=json.dumps(_ENVELOPE), stderr="")
-    monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
-    with (
-        patch("shutil.which", return_value="/fake/bin/claude"),
-        patch("subprocess.run", return_value=completed) as run,
-    ):
-        yield run
-
-
-def test_returns_parsed_nodes_and_edges(fake_claude):
-    result = llm._call_claude_cli("dummy", max_tokens=8192)
-    assert len(result["nodes"]) == 2
-    assert len(result["edges"]) == 1
-
-
-def test_token_accounting_includes_cache(fake_claude):
-    result = llm._call_claude_cli("dummy", max_tokens=8192)
-    assert result["input_tokens"] == 6 + 17837 + 30800
-    assert result["output_tokens"] == 11
-    assert result["model"] == "claude-opus-4-7[1m]"
-    assert result["finish_reason"] == "stop"
-
-
-def test_finish_reason_length_on_max_tokens(monkeypatch):
-    envelope = dict(_ENVELOPE, stop_reason="max_tokens")
-    completed = MagicMock(returncode=0, stdout=json.dumps(envelope), stderr="")
-    monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
-    with (
-        patch("shutil.which", return_value="/fake/bin/claude"),
-        patch("subprocess.run", return_value=completed),
-    ):
-        result = llm._call_claude_cli("dummy", max_tokens=8192)
-    assert result["finish_reason"] == "length"
-
-
-def test_raises_when_cli_missing():
-    with patch("shutil.which", return_value=None):
-        with pytest.raises(RuntimeError, match="Claude Code CLI not found"):
-            llm._call_claude_cli("dummy", max_tokens=8192)
-
-
-def test_raises_on_nonzero_exit():
-    completed = MagicMock(returncode=2, stdout="", stderr="auth failed")
-    with (
-        patch("shutil.which", return_value="/fake/bin/claude"),
-        patch("subprocess.run", return_value=completed),
-    ):
-        with pytest.raises(RuntimeError, match="exited 2"):
-            llm._call_claude_cli("dummy", max_tokens=8192)
-
-
-def test_raises_on_garbage_envelope():
-    completed = MagicMock(returncode=0, stdout="not json", stderr="")
-    with (
-        patch("shutil.which", return_value="/fake/bin/claude"),
-        patch("subprocess.run", return_value=completed),
-    ):
-        with pytest.raises(RuntimeError, match="unparseable JSON envelope"):
-            llm._call_claude_cli("dummy", max_tokens=8192)
-
-
-def test_extract_files_direct_dispatches_to_claude_cli(tmp_path, fake_claude):
-    f = tmp_path / "foo.md"
-    f.write_text("# Foo\n\nThe greet() helper formats a name.\n", encoding="utf-8")
-    result = llm.extract_files_direct(files=[f], backend="claude-cli", root=tmp_path)
-    assert fake_claude.called
-    assert len(result["nodes"]) == 2
-
-
-def test_backend_registered_with_zero_cost():
-    assert "claude-cli" in llm.BACKENDS
-    pricing = llm.BACKENDS["claude-cli"]["pricing"]
-    assert pricing["input"] == 0.0
-    assert pricing["output"] == 0.0
-    assert llm.estimate_cost("claude-cli", 1_000_000, 1_000_000) == 0.0
-
-
-def test_no_session_persistence_flag_in_subprocess(fake_claude):
-    llm._call_claude_cli("dummy", max_tokens=8192)
-    call_args = fake_claude.call_args[0][0]
-    assert "--no-session-persistence" in call_args
-
-
-# ---------- extraction instructions delivered in the user turn ----------
-# Newer Claude Code CLIs (>= ~2.1) do not honour a --system-prompt that asks
-# for raw JSON: they keep their coding-agent context and reply conversationally
-# to a bare file dump, which parses to zero nodes and gets bisected forever.
-# The instructions must ride in the user turn instead. See the fix for the
-# "hollow response" / infinite-bisection failure on Claude Code 2.1.x.
-
-
-def test_no_system_prompt_flag_in_subprocess(fake_claude):
-    """--system-prompt must NOT be used: the CLI ignores its 'raw JSON only'
-    directive and replies with prose, breaking extraction."""
-    llm._call_claude_cli("dummy source", max_tokens=8192)
-    argv = fake_claude.call_args.args[0]
-    assert "--system-prompt" not in argv
-
-
-def test_extraction_instructions_ride_in_user_turn(fake_claude):
-    """The full extraction schema, an explicit imperative, and the source must
-    all be delivered via stdin (the user turn)."""
-    llm._call_claude_cli("UNIQUE_SOURCE_MARKER", max_tokens=8192)
-    sent = fake_claude.call_args.kwargs["input"]
-    # schema text from _extraction_system
-    assert "graphify semantic extraction agent" in sent
-    # explicit imperative appended before the source
-    assert "output ONLY the JSON object" in sent
-    # the caller's source payload is preserved
-    assert "UNIQUE_SOURCE_MARKER" in sent
-
-
-def test_user_turn_preserves_untrusted_source_guardrails(fake_claude):
-    """The <untrusted_source> guardrails from _extraction_system must survive
-    the move into the user turn (prompt-injection defence is unchanged)."""
-    llm._call_claude_cli("dummy", max_tokens=8192)
-    sent = fake_claude.call_args.kwargs["input"]
-    assert "untrusted_source" in sent
-
-
-# ---------- Windows path resolution (#1072) ----------
-
-
-def test_windows_prefers_claude_cmd_over_bare_claude(monkeypatch):
-    """On Windows, npm installs `claude.ps1` alongside `claude.cmd`.
-    `CreateProcess` cannot execute `.ps1` directly (raises WinError 2),
-    so we must explicitly resolve `claude.cmd` and pass its full path
-    to subprocess.run. See issue #1072."""
-    completed = MagicMock(returncode=0, stdout=json.dumps(_ENVELOPE), stderr="")
-    monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
-
-    def fake_which(name):
-        # Simulate Windows PATHEXT=.PS1;.CMD ordering: bare "claude"
-        # resolves to the .ps1 (unexecutable by CreateProcess), while
-        # "claude.cmd" resolves to the .cmd shim.
-        return {
-            "claude": r"C:\Users\u\AppData\Roaming\npm\claude.ps1",
-            "claude.cmd": r"C:\Users\u\AppData\Roaming\npm\claude.cmd",
-        }.get(name)
-
-    with (
-        patch("platform.system", return_value="Windows"),
-        patch("shutil.which", side_effect=fake_which),
-        patch("subprocess.run", return_value=completed) as run,
-    ):
-        llm._call_claude_cli("dummy", max_tokens=8192)
-
-    argv = run.call_args.args[0]
-    assert argv[0] == r"C:\Users\u\AppData\Roaming\npm\claude.cmd", (
-        f"Expected full path to claude.cmd on Windows, got {argv[0]!r}"
+def _valid_help() -> str:
+    return " ".join(
+        (
+            "--safe-mode",
+            "--tools",
+            "--strict-mcp-config",
+            "--mcp-config",
+            "--setting-sources",
+            "--settings",
+            "--disable-slash-commands",
+            "--no-session-persistence",
+            "--output-format",
+            "--permission-mode",
+            "--no-chrome",
+        )
     )
 
 
-def test_windows_falls_back_to_bare_claude_when_cmd_missing(monkeypatch):
-    """If `claude.cmd` is somehow unavailable but `claude` resolves
-    (e.g. WSL-style install), fall back to the bare name so the
-    existing behaviour is preserved."""
-    completed = MagicMock(returncode=0, stdout=json.dumps(_ENVELOPE), stderr="")
-    monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
-
-    def fake_which(name):
-        if name == "claude.cmd":
-            return None
-        if name == "claude":
-            return "/usr/local/bin/claude"
-        return None
-
-    with (
-        patch("platform.system", return_value="Windows"),
-        patch("shutil.which", side_effect=fake_which),
-        patch("subprocess.run", return_value=completed) as run,
-    ):
-        llm._call_claude_cli("dummy", max_tokens=8192)
-
-    argv = run.call_args.args[0]
-    assert argv[0] == "claude"
+def _result_envelope(result: str = "ok") -> str:
+    return json.dumps(
+        {
+            "type": "result",
+            "result": result,
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+            "modelUsage": {"test-model": {}},
+            "stop_reason": "end_turn",
+        }
+    )
 
 
-def test_windows_raises_when_neither_cmd_nor_bare_claude_present():
-    """If neither `claude.cmd` nor `claude` are on PATH on Windows,
-    raise the standard not-found error."""
-    with patch("platform.system", return_value="Windows"), patch("shutil.which", return_value=None):
-        with pytest.raises(RuntimeError, match="Claude Code CLI not found"):
-            llm._call_claude_cli("dummy", max_tokens=8192)
+def test_shared_launcher_module_exists():
+    assert importlib.util.find_spec("graphify.claude_cli") is not None
 
 
-def test_non_windows_uses_bare_claude(monkeypatch):
-    """On non-Windows platforms, behaviour is unchanged: bare `claude`
-    is passed to subprocess.run (shell resolves it via PATH)."""
-    completed = MagicMock(returncode=0, stdout=json.dumps(_ENVELOPE), stderr="")
-    monkeypatch.setattr(llm, "_response_is_hollow", lambda raw, parsed: False)
-
-    with (
-        patch("platform.system", return_value="Linux"),
-        patch("shutil.which", return_value="/usr/local/bin/claude"),
-        patch("subprocess.run", return_value=completed) as run,
-    ):
-        llm._call_claude_cli("dummy", max_tokens=8192)
-
-    argv = run.call_args.args[0]
-    assert argv[0] == "claude"
-
-
-# ---------- GRAPHIFY_API_TIMEOUT honoured by all backends ----------
-
-
-def test_resolve_api_timeout_default(monkeypatch):
-    monkeypatch.delenv("GRAPHIFY_API_TIMEOUT", raising=False)
-    assert llm._resolve_api_timeout() == 600.0
-
-
-def test_resolve_api_timeout_env_override(monkeypatch):
-    monkeypatch.setenv("GRAPHIFY_API_TIMEOUT", "45")
-    assert llm._resolve_api_timeout() == 45.0
-
-
-def test_resolve_api_timeout_ignores_invalid(monkeypatch):
-    monkeypatch.setenv("GRAPHIFY_API_TIMEOUT", "not-a-number")
-    assert llm._resolve_api_timeout() == 600.0
-
-
-def test_resolve_api_timeout_ignores_nonpositive(monkeypatch):
-    monkeypatch.setenv("GRAPHIFY_API_TIMEOUT", "0")
-    assert llm._resolve_api_timeout() == 600.0
-
-
-def test_claude_cli_extraction_honours_timeout(monkeypatch, fake_claude):
-    monkeypatch.setenv("GRAPHIFY_API_TIMEOUT", "30")
-    llm._call_claude_cli("dummy", max_tokens=8192)
-    assert fake_claude.call_args.kwargs["timeout"] == 30.0
-
-
-def test_call_llm_claude_cli_branch_honours_timeout(monkeypatch, fake_claude):
-    monkeypatch.setenv("GRAPHIFY_API_TIMEOUT", "30")
-    llm._call_llm(prompt="x", backend="claude-cli", max_tokens=10)
-    assert fake_claude.call_args.kwargs["timeout"] == 30.0
-
-
-def test_simple_completion_resolves_cmd_shim_on_windows(monkeypatch):
-    """The label/_simple_completion path must spawn the resolved claude.cmd on
-    Windows; a bare "claude" fails CreateProcess (WinError 2) under npm installs."""
-    import json as _json
-    from unittest.mock import patch, MagicMock
-
-    captured = {}
+def test_text_launcher_removes_ambient_authority(monkeypatch):
+    subject = _subject()
+    subject._validated_executable.cache_clear()
+    monkeypatch.setattr(subject.shutil, "which", lambda _name: "/tools/claude")
+    monkeypatch.setenv("PATH", "/tools")
+    monkeypatch.setenv("HOME", "/home/tester")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-leak")
+    monkeypatch.setenv("MCP_TOKEN", "must-not-leak")
+    calls: list[tuple[list[str], dict]] = []
 
     def fake_run(args, **kwargs):
-        captured["argv0"] = args[0]
-        proc = MagicMock()
-        proc.returncode = 0
-        proc.stdout = _json.dumps({"result": "ok"})
-        return proc
+        calls.append((list(args), kwargs))
+        if "--help" in args:
+            return SimpleNamespace(returncode=0, stdout=_valid_help(), stderr="")
+        cwd = Path(kwargs["cwd"])
+        assert cwd.is_dir()
+        assert list(cwd.iterdir()) == []
+        return SimpleNamespace(returncode=0, stdout=_result_envelope(), stderr="")
 
-    def fake_which(name):
-        return r"C:\npm\claude.cmd" if name == "claude.cmd" else r"C:\npm\claude"
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+    envelope = subject.run_claude_cli("untrusted prompt", timeout=7.0)
 
-    with (
-        patch("platform.system", return_value="Windows"),
-        patch("shutil.which", side_effect=fake_which),
-        patch("subprocess.run", side_effect=fake_run),
+    assert envelope["result"] == "ok"
+    assert len(calls) == 2
+    command, kwargs = calls[-1]
+    for flag in (
+        "--safe-mode",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+        "--no-session-persistence",
+        "--no-chrome",
     ):
-        out = llm._call_llm("hi", backend="claude-cli")
+        assert flag in command
+    assert command[command.index("--tools") + 1] == ""
+    assert command[command.index("--setting-sources") + 1] == ""
+    assert command[command.index("--permission-mode") + 1] == "dontAsk"
+    assert json.loads(command[command.index("--mcp-config") + 1]) == {"mcpServers": {}}
+    assert "--add-dir" not in command
+    assert kwargs["input"] == "untrusted prompt"
+    assert kwargs["timeout"] == 7.0
+    assert kwargs["encoding"] == "utf-8"
+    assert kwargs["errors"] == "replace"
+    assert kwargs["env"]["PATH"] == "/tools"
+    assert kwargs["env"]["HOME"] == "/home/tester"
+    assert "CLAUDECODE" not in kwargs["env"]
+    assert "ANTHROPIC_API_KEY" not in kwargs["env"]
+    assert "MCP_TOKEN" not in kwargs["env"]
 
-    assert out == "ok"
-    assert captured["argv0"] == r"C:\npm\claude.cmd"
+
+def test_launcher_fails_closed_when_required_flag_is_missing(monkeypatch):
+    subject = _subject()
+    subject._validated_executable.cache_clear()
+    monkeypatch.setattr(subject.shutil, "which", lambda _name: "/tools/claude")
+    calls = 0
+
+    def fake_run(args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(
+            returncode=0,
+            stdout=_valid_help().replace("--strict-mcp-config", ""),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+    with pytest.raises(subject.ClaudeCLIError, match="required isolation controls"):
+        subject.run_claude_cli("prompt", timeout=1.0)
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    ("stdout", "returncode", "stderr"),
+    [
+        ("not json: TOP-SECRET /home/alice/project", 0, ""),
+        ("", 17, "TOP-SECRET /home/alice/project/source.py"),
+    ],
+)
+def test_launcher_errors_do_not_disclose_output_or_paths(monkeypatch, stdout, returncode, stderr):
+    subject = _subject()
+    subject._validated_executable.cache_clear()
+    monkeypatch.setattr(subject.shutil, "which", lambda _name: "/tools/claude")
+
+    def fake_run(args, **_kwargs):
+        if "--help" in args:
+            return SimpleNamespace(returncode=0, stdout=_valid_help(), stderr="")
+        return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+    with pytest.raises(subject.ClaudeCLIError) as exc_info:
+        subject.run_claude_cli("prompt", timeout=1.0)
+    message = str(exc_info.value)
+    assert "TOP-SECRET" not in message
+    assert "/home/alice" not in message
+    assert "source.py" not in message
+
+
+def test_launcher_accepts_stream_event_array(monkeypatch):
+    subject = _subject()
+    subject._validated_executable.cache_clear()
+    monkeypatch.setattr(subject.shutil, "which", lambda _name: "/tools/claude")
+    stream = json.dumps([{"type": "system"}, json.loads(_result_envelope("done"))])
+
+    def fake_run(args, **_kwargs):
+        if "--help" in args:
+            return SimpleNamespace(returncode=0, stdout=_valid_help(), stderr="")
+        return SimpleNamespace(returncode=0, stdout=stream, stderr="")
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+    assert subject.run_claude_cli("prompt", timeout=1.0)["result"] == "done"
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        {"type": "result", "subtype": "error_max_turns", "is_error": True, "result": "partial"},
+        {
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": False,
+            "result": "partial",
+        },
+        {"type": "result", "subtype": "success", "is_error": "false", "result": "partial"},
+    ],
+)
+def test_launcher_rejects_error_or_malformed_result_envelopes(monkeypatch, envelope):
+    subject = _subject()
+    subject._validated_executable.cache_clear()
+    monkeypatch.setattr(subject.shutil, "which", lambda _name: "/tools/claude")
+
+    def fake_run(args, **_kwargs):
+        if "--help" in args:
+            return SimpleNamespace(returncode=0, stdout=_valid_help(), stderr="")
+        return SimpleNamespace(returncode=0, stdout=json.dumps(envelope), stderr="")
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+    with pytest.raises(subject.ClaudeCLIError, match="result envelope"):
+        subject.run_claude_cli("prompt", timeout=1.0)
+
+
+def test_launcher_rejects_image_mode_before_starting_a_process(monkeypatch, tmp_path):
+    subject = _subject()
+    subject._validated_executable.cache_clear()
+    image = tmp_path / "private.png"
+    image.write_bytes(b"image")
+    monkeypatch.setattr(
+        subject.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("image mode must fail before process launch"),
+    )
+    with pytest.raises(subject.ClaudeCLIError, match="inline-vision API backend"):
+        subject.run_claude_cli("prompt", timeout=1.0, image_paths=[image])
+
+
+def test_windows_resolver_prefers_executable_shim(monkeypatch):
+    subject = _subject()
+    monkeypatch.setattr(subject.platform, "system", lambda: "Windows")
+    candidates = {
+        "claude.exe": None,
+        "claude.cmd": "C:/tools/claude.cmd",
+        "claude": "C:/tools/claude.ps1",
+    }
+    monkeypatch.setattr(subject.shutil, "which", candidates.get)
+    assert subject._resolve_executable() == "C:/tools/claude.cmd"
+
+
+def test_extraction_backend_delegates_to_shared_launcher(monkeypatch):
+    from graphify import claude_cli, llm
+
+    calls: list[dict] = []
+
+    def fake_launcher(prompt, **kwargs):
+        calls.append({"prompt": prompt, **kwargs})
+        return {
+            "type": "result",
+            "result": '{"nodes":[],"edges":[],"hyperedges":[]}',
+            "usage": {},
+            "modelUsage": {},
+            "stop_reason": "end_turn",
+        }
+
+    monkeypatch.setattr(claude_cli, "run_claude_cli", fake_launcher)
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *_args, **_kwargs: pytest.fail("llm.py must not launch Claude directly"),
+    )
+    result = llm._call_claude_cli("CORPUS")
+    assert result["nodes"] == []
+    assert len(calls) == 1
+    assert "CORPUS" in calls[0]["prompt"]
+
+
+def test_secondary_llm_dispatch_delegates_to_shared_launcher(monkeypatch):
+    from graphify import claude_cli, llm
+
+    calls: list[dict] = []
+
+    def fake_launcher(prompt, **kwargs):
+        calls.append({"prompt": prompt, **kwargs})
+        return {"type": "result", "result": "answer"}
+
+    monkeypatch.setattr(claude_cli, "run_claude_cli", fake_launcher)
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *_args, **_kwargs: pytest.fail("llm.py must not launch Claude directly"),
+    )
+    assert llm._call_llm("question", backend="claude-cli") == "answer"
+    assert calls[0]["prompt"] == "question"
+
+
+def test_pr_triage_delegates_to_shared_launcher(monkeypatch, capsys):
+    from graphify import claude_cli, prs
+
+    candidate = cast(
+        prs.PRInfo,
+        SimpleNamespace(
+            base_branch="main",
+            status="READY",
+            blast_radius="",
+            number=1,
+            ci_status="SUCCESS",
+            review_decision="",
+            days_old=1,
+            author="alice",
+            title="Safe change",
+        ),
+    )
+    calls: list[str] = []
+
+    def fake_launcher(prompt, **_kwargs):
+        calls.append(prompt)
+        return {"type": "result", "result": "#1 - review now"}
+
+    monkeypatch.setattr(prs, "_resolve_triage_backend", lambda: ("claude-cli", "claude-code-plan"))
+    monkeypatch.setattr(claude_cli, "run_claude_cli", fake_launcher)
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *_args, **_kwargs: pytest.fail("prs.py must not launch Claude directly"),
+    )
+    prs.triage_with_opus([candidate], "main")
+    captured = capsys.readouterr()
+    assert "review now" in captured.out
+    assert "Triage failed" not in captured.err
+    assert len(calls) == 1
+
+
+def test_invalid_model_json_log_does_not_echo_model_or_source_content(capsys):
+    from graphify import llm
+
+    secret = "TOP-SECRET from /home/alice/project/source.py"
+    assert llm._parse_llm_json(secret) == {"nodes": [], "edges": [], "hyperedges": []}
+    error = capsys.readouterr().err
+    assert "invalid JSON" in error
+    assert "TOP-SECRET" not in error
+    assert "/home/alice" not in error

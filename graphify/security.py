@@ -9,7 +9,8 @@ import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from email.message import Message
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,79 @@ _CGN_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 # RFC 6052 NAT64 Well-Known Prefix -- is_reserved=True in Python but these embed
 # public IPv4 addresses and are legitimate public internet traffic, not SSRF vectors.
 _NAT64_WKP = ipaddress.ip_network("64:ff9b::/96")
+
+
+IPV4_WILDCARD = str(ipaddress.IPv4Address(0))
+IPV6_WILDCARD = str(ipaddress.IPv6Address(0))
+
+
+def is_wildcard_host(value: str) -> bool:
+    """Return whether a bind/Host token denotes every local interface."""
+    candidate = value.strip().strip("[]")
+    return candidate == "*" or candidate in {IPV4_WILDCARD, IPV6_WILDCARD}
+
+
+@dataclass(frozen=True)
+class BindHostClassification:
+    """Canonical address-set classification for an HTTP bind host."""
+
+    kind: str
+    addresses: tuple[str, ...]
+
+
+def classify_bind_host(
+    host: str,
+    port: int,
+    *,
+    resolver: Callable[..., list[tuple[Any, ...]]] | None = None,
+) -> BindHostClassification:
+    """Resolve and classify every address an HTTP server may bind.
+
+    Unresolved or malformed hosts are refused. A mixed result is never treated
+    as loopback merely because one answer is local.
+    """
+    candidate = (host or IPV4_WILDCARD).strip().strip("[]")
+    try:
+        literal = ipaddress.ip_address(candidate.split("%", 1)[0])
+    except ValueError:
+        literal = None
+
+    addresses: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
+    if literal is not None:
+        addresses.add(literal)
+    else:
+        active_resolver = resolver or socket.getaddrinfo
+        try:
+            rows = active_resolver(
+                candidate,
+                port,
+                socket.AF_UNSPEC,
+                socket.SOCK_STREAM,
+            )
+        except OSError as exc:
+            raise ValueError("HTTP bind host could not be resolved") from exc
+        for row in rows:
+            try:
+                addresses.add(ipaddress.ip_address(str(row[4][0]).split("%", 1)[0]))
+            except (IndexError, TypeError, ValueError):
+                continue
+
+    if not addresses:
+        raise ValueError("HTTP bind host could not be resolved")
+    ordered = tuple(sorted((str(address) for address in addresses)))
+    if any(address.is_unspecified for address in addresses):
+        kind = "wildcard"
+    elif all(address.is_loopback for address in addresses):
+        kind = "loopback"
+    elif any(address.is_loopback for address in addresses):
+        kind = "mixed"
+    elif all(address.is_private for address in addresses):
+        kind = "private"
+    elif all(address.is_global for address in addresses):
+        kind = "public"
+    else:
+        kind = "mixed"
+    return BindHostClassification(kind=kind, addresses=ordered)
 
 
 # ---------------------------------------------------------------------------

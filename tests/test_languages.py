@@ -1091,6 +1091,38 @@ def test_swift_extension_across_files_merges_into_canonical_type():
     )
 
 
+def test_swift_extension_survives_source_root_prefix_remap(tmp_path):
+    from graphify.extract import extract
+
+    source_dir = tmp_path / "Sources"
+    extension_dir = tmp_path / "Extensions"
+    source_dir.mkdir()
+    extension_dir.mkdir()
+    declaration = source_dir / "Foo.swift"
+    extension = extension_dir / "Foo+Feature.swift"
+    declaration.write_text("class Foo { func one() {} }\n", encoding="utf-8")
+    extension.write_text("extension Foo { func two() {} }\n", encoding="utf-8")
+
+    result = extract(
+        [declaration, extension],
+        cache_root=tmp_path / "cache",
+        source_root=tmp_path,
+        parallel=False,
+    )
+
+    foo_nodes = [node for node in result["nodes"] if node["label"] == "Foo"]
+    assert len(foo_nodes) == 1
+    foo_id = foo_nodes[0]["id"]
+    member_ids = {
+        edge["target"]
+        for edge in result["edges"]
+        if edge["source"] == foo_id and edge["relation"] == "method"
+    }
+    member_labels = {node["label"] for node in result["nodes"] if node["id"] in member_ids}
+    assert any("one" in label for label in member_labels)
+    assert any("two" in label for label in member_labels)
+
+
 # ── Elixir ────────────────────────────────────────────────────────────────────
 
 
@@ -1557,9 +1589,9 @@ def test_objc_selector_substring_method_exact_match(tmp_path):
     p = tmp_path / "Worker.m"
     p.write_text(
         "@implementation Worker\n"
-        "- (void)doThing { }\n"
-        "- (void)reallyDoThing { }\n"
         "- (void)run { [self performSelector:@selector(doThing)]; }\n"
+        "- (void)reallyDoThing { }\n"
+        "- (void)doThing { }\n"
         "@end\n",
         encoding="utf-8",
     )
@@ -1574,6 +1606,33 @@ def test_objc_selector_substring_method_exact_match(tmp_path):
         f"@selector(doThing) must resolve to -doThing: {sel_calls}"
     )
     assert ("-run", "-reallyDoThing") not in sel_calls
+
+
+def test_decldef_provenance_flattens_repeated_contributor_history():
+    from graphify.extract import _append_node_provenance
+
+    keeper = {
+        "id": "widget",
+        "source_file": "Widget.h",
+        "graphify_node_provenance": [{"id": "widget_old", "source_file": "WidgetLegacy.h"}],
+    }
+    contributor = {
+        "id": "widget_impl",
+        "source_file": "Widget.m",
+        "graphify_node_provenance": [{"id": "widget_category", "source_file": "Widget+Category.m"}],
+    }
+
+    _append_node_provenance(keeper, [contributor])
+    first = list(keeper["graphify_node_provenance"])
+    _append_node_provenance(keeper, [contributor])
+
+    assert keeper["graphify_node_provenance"] == first
+    assert {record["id"] for record in first} == {
+        "widget_old",
+        "widget_impl",
+        "widget_category",
+    }
+    assert all("graphify_node_provenance" not in record for record in first)
 
 
 # ---------------------------------------------------------------------------
@@ -3167,3 +3226,245 @@ def test_decldef_merge_does_not_merge_same_name_same_dir_distinct_files():
     assert len(dups) == 2, (
         f"same-dir distinct Dups must stay distinct, got {[n['id'] for n in dups]}"
     )
+
+
+def test_decldef_merge_only_collapses_duplicate_nodes_and_exact_edges():
+    from graphify.extract import _merge_decl_def_classes
+
+    nodes = [
+        {
+            "id": "widget",
+            "label": "Widget",
+            "file_type": "code",
+            "source_file": "src/Widget.h",
+        },
+        {
+            "id": "widget",
+            "label": "Widget",
+            "file_type": "code",
+            "source_file": "src/Widget.m",
+        },
+        {"id": "caller", "label": "caller", "file_type": "code", "source_file": "main.m"},
+        {"id": "target", "label": "target", "file_type": "code", "source_file": "main.m"},
+    ]
+    exact = {
+        "source": "widget",
+        "target": "target",
+        "relation": "contains",
+        "source_file": "src/Widget.h",
+        "source_location": "L1",
+    }
+    edges = [
+        exact,
+        dict(exact),
+        {
+            "source": "caller",
+            "target": "target",
+            "relation": "calls",
+            "context": "call",
+            "source_file": "main.m",
+            "source_location": "L10",
+            "key": "site-10",
+        },
+        {
+            "source": "caller",
+            "target": "target",
+            "relation": "calls",
+            "context": "call",
+            "source_file": "main.m",
+            "source_location": "L20",
+            "key": "site-20",
+        },
+        {
+            "source": "caller",
+            "target": "target",
+            "relation": "calls",
+            "context": "call",
+            "source_file": "src/Widget.h",
+            "source_location": "L30",
+        },
+        {
+            "source": "caller",
+            "target": "target",
+            "relation": "calls",
+            "context": "call",
+            "source_file": "src/Widget.m",
+            "source_location": "L30",
+        },
+        {
+            "source": "caller",
+            "target": "caller",
+            "relation": "calls",
+            "context": "call",
+            "source_file": "recursive.jl",
+            "source_location": "L2",
+        },
+    ]
+
+    _merge_decl_def_classes(nodes, edges)
+
+    assert [node["source_file"] for node in nodes if node["id"] == "widget"] == ["src/Widget.h"]
+    widget = next(node for node in nodes if node["id"] == "widget")
+    assert widget["graphify_node_provenance"] == [
+        {
+            "file_type": "code",
+            "id": "widget",
+            "label": "Widget",
+            "source_file": "src/Widget.m",
+        }
+    ]
+    assert edges.count(exact) == 1
+    assert {edge.get("key") for edge in edges if edge.get("source_file") == "main.m"} == {
+        "site-10",
+        "site-20",
+    }
+    assert {edge["source_file"] for edge in edges if edge.get("source_location") == "L30"} == {
+        "src/Widget.h",
+        "src/Widget.m",
+    }
+    assert any(edge["source"] == edge["target"] == "caller" for edge in edges)
+
+
+def test_decldef_merge_preserves_real_julia_recursion(tmp_path):
+    header = tmp_path / "Widget.h"
+    implementation = tmp_path / "Widget.m"
+    julia = tmp_path / "recursive.jl"
+    header.write_text("@interface Widget : NSObject\n@end\n", encoding="utf-8")
+    implementation.write_text("@implementation Widget\n@end\n", encoding="utf-8")
+    julia.write_text("function recurse()\n    recurse()\nend\n", encoding="utf-8")
+
+    result = _extract_corpus(
+        [header, implementation, julia],
+        cache_root=tmp_path / "cache",
+        source_root=tmp_path,
+    )
+
+    assert any(
+        edge["relation"] == "calls" and edge["source"] == edge["target"] for edge in result["edges"]
+    )
+
+
+def test_swift_extension_rewrite_is_scoped_and_exact():
+    from graphify.extract import _merge_swift_extensions
+
+    per_file = [
+        {
+            "swift_extensions": [
+                {"nid": "foo_extension", "label": "Foo"},
+                {"nid": "external_extension", "label": "External"},
+            ]
+        }
+    ]
+    nodes = [
+        {"id": "foo", "label": "Foo", "source_file": "Foo.swift"},
+        {"id": "foo_extension", "label": "Foo", "source_file": "Foo+Extras.swift"},
+        {"id": "foo_method", "label": "method", "source_file": "Foo+Extras.swift"},
+        {
+            "id": "external_extension",
+            "label": "External",
+            "source_file": "External.swift",
+        },
+        {"id": "julia_recurse", "label": "recurse"},
+        {"id": "unrelated", "label": "unrelated"},
+    ]
+    affected = {
+        "source": "foo_extension",
+        "target": "foo_method",
+        "relation": "method",
+        "source_file": "Foo+Extras.swift",
+        "source_location": "L2",
+        "key": "method",
+    }
+    edges = [
+        affected,
+        dict(affected),
+        {
+            "source": "foo_extension",
+            "target": "foo",
+            "relation": "references",
+            "context": "extension",
+        },
+        {
+            "source": "foo_extension",
+            "target": "foo_extension",
+            "relation": "calls",
+            "context": "recursion",
+        },
+        {
+            "source": "foo_method",
+            "target": "foo_extension",
+            "relation": "references",
+            "context": "parameter_type",
+            "source_file": "Foo+Extras.swift",
+            "source_location": "L8",
+        },
+        {
+            "source": "foo_method",
+            "target": "foo_extension",
+            "relation": "references",
+            "context": "return_type",
+            "source_file": "Foo+Extras.swift",
+            "source_location": "L8",
+        },
+        {
+            "source": "julia_recurse",
+            "target": "julia_recurse",
+            "relation": "calls",
+            "source_file": "recursive.jl",
+        },
+        {
+            "source": "external_extension",
+            "target": "unrelated",
+            "relation": "references",
+            "source_file": "External.swift",
+        },
+    ]
+
+    _merge_swift_extensions(per_file, nodes, edges)
+
+    assert "foo_extension" not in {node["id"] for node in nodes}
+    assert "external_extension" in {node["id"] for node in nodes}
+    foo = next(node for node in nodes if node["id"] == "foo")
+    assert foo["graphify_node_provenance"] == [
+        {"id": "foo_extension", "label": "Foo", "source_file": "Foo+Extras.swift"}
+    ]
+    assert sum(edge == {**affected, "source": "foo"} for edge in edges) == 1
+    assert not any(
+        edge.get("source") == edge.get("target") == "foo" and edge.get("context") == "extension"
+        for edge in edges
+    )
+    assert any(
+        edge.get("source") == edge.get("target") == "foo" and edge.get("context") == "recursion"
+        for edge in edges
+    )
+    assert {
+        edge.get("context")
+        for edge in edges
+        if edge.get("source") == "foo_method" and edge.get("target") == "foo"
+    } == {"parameter_type", "return_type"}
+    assert any(edge.get("source") == edge.get("target") == "julia_recurse" for edge in edges)
+    assert any(edge.get("source") == "external_extension" for edge in edges)
+
+
+def test_swift_extension_does_not_merge_into_cross_language_label_collision():
+    from graphify.extract import _merge_swift_extensions
+
+    per_file = [{"swift_extensions": [{"nid": "swift_extension", "label": "Foo"}]}]
+    nodes = [
+        {"id": "swift_extension", "label": "Foo", "source_file": "Foo+Extras.swift"},
+        {"id": "python_foo", "label": "Foo", "source_file": "foo.py"},
+        {"id": "java_foo", "label": "Foo", "source_file": "Foo.java"},
+    ]
+    edges = [
+        {
+            "source": "swift_extension",
+            "target": "python_foo",
+            "relation": "references",
+            "source_file": "Foo+Extras.swift",
+        }
+    ]
+
+    _merge_swift_extensions(per_file, nodes, edges)
+
+    assert {node["id"] for node in nodes} == {"swift_extension", "python_foo", "java_foo"}
+    assert edges[0]["source"] == "swift_extension"

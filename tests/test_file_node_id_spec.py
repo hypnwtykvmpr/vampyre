@@ -12,6 +12,7 @@ skill.md spec (line ~390):
 """
 
 from graphify.extract import extract
+from graphify.ids import make_id
 
 
 def _file_nodes(extraction: dict) -> list[dict]:
@@ -66,14 +67,15 @@ def test_top_level_file_SYMBOL_ids_use_bare_stem(tmp_path):
     extraction = extract([f.resolve()], cache_root=tmp_path)
     ids = {n["id"] for n in extraction["nodes"]}
 
-    assert "main_run" in ids, f"expected bare-stem symbol 'main_run', got {sorted(ids)}"
+    symbol_id = make_id("main", "run")
+    assert symbol_id in ids, f"expected canonical symbol {symbol_id!r}, got {sorted(ids)}"
     # The root directory name must NOT appear in any symbol id.
     rootname = tmp_path.name.lower().replace("-", "_")
     assert not any(rootname in i for i in ids), f"root dir name leaked into ids: {sorted(ids)}"
 
     # contains edge file -> symbol must connect with the canonical ids.
     contains = [
-        e for e in extraction["edges"] if e["relation"] == "contains" and e["target"] == "main_run"
+        e for e in extraction["edges"] if e["relation"] == "contains" and e["target"] == symbol_id
     ]
     assert contains and contains[0]["source"] == "main"
 
@@ -89,7 +91,7 @@ def test_nested_file_symbol_ids_unchanged(tmp_path):
     extraction = extract([f.resolve()], cache_root=tmp_path)
     ids = {n["id"] for n in extraction["nodes"]}
     assert "sub_mod" in ids
-    assert "sub_mod_work" in ids
+    assert make_id("sub_mod", "work") in ids
 
 
 def test_symbol_and_file_ids_share_the_same_stem(tmp_path):
@@ -104,13 +106,12 @@ def test_symbol_and_file_ids_share_the_same_stem(tmp_path):
     ids = {n["id"] for n in extraction["nodes"]}
 
     assert "match_script_pipeline_step" in ids  # file node
-    assert "match_script_pipeline_step_stage" in ids  # class symbol shares stem
+    stage_id = make_id("match_script_pipeline_step", "stage")
+    assert stage_id in ids  # class symbol shares stem
 
     # The file -> class 'contains' edge must reference the real file node id.
     contains = [
-        e
-        for e in extraction["edges"]
-        if e["relation"] == "contains" and e["target"] == "match_script_pipeline_step_stage"
+        e for e in extraction["edges"] if e["relation"] == "contains" and e["target"] == stage_id
     ]
     assert contains, "no 'contains' edge to the class symbol"
     assert contains[0]["source"] == "match_script_pipeline_step", (

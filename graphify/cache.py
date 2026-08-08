@@ -6,8 +6,9 @@ import hashlib
 import json
 import os
 import re
-import tempfile
+from collections.abc import Mapping
 from pathlib import Path
+from pathlib import PureWindowsPath
 
 # Output directory name — override with GRAPHIFY_OUT env var for worktrees or
 # shared-output setups. Accepts a relative name ("graphify-out-feature") or an
@@ -15,21 +16,33 @@ from pathlib import Path
 # (#1423); re-exported here as _GRAPHIFY_OUT for the existing call sites.
 from graphify.paths import GRAPHIFY_OUT as _GRAPHIFY_OUT
 from graphify.paths import is_absolute_path
+from graphify.persistence import atomic_write_bytes
+from graphify.ids import CURRENT_AST_NODE_ID_SCHEMA
+from graphify.semantic_schema import (
+    PROMPT_SCHEMA_VERSION,
+    SemanticSchemaError,
+    normalize_semantic_provenance,
+    semantic_provenance_digest,
+)
 
 # AST cache entries are the output of graphify's own extractor code, so they
-# are only valid for the version that wrote them: keying purely on file
-# content means extractor fixes shipped in a new release keep serving stale
-# pre-fix results. The AST cache is therefore namespaced by package version
-# (cache/ast/v{version}/), with entries from other versions removed on first
-# use. The semantic cache is deliberately NOT versioned — its entries are
-# produced by the LLM from file contents, and invalidating them on every
-# release would re-bill extraction for unchanged files.
+# are only valid for the package version and extractor schema that wrote them:
+# keying purely on file content means extractor fixes keep serving stale pre-fix
+# results, including when the package version is intentionally unchanged. The
+# AST cache therefore uses cache/ast/v{version}-{schema}/. The semantic cache is
+# deliberately package-version independent — its prompt schema provides the
+# compatibility boundary without re-billing extraction on every release.
 try:
     from importlib.metadata import version as _pkg_version
 
     _EXTRACTOR_VERSION = _pkg_version("graphifyy")
 except Exception:
     _EXTRACTOR_VERSION = "unknown"
+
+# Package versions are human-controlled in this fork, so a correctness change
+# cannot rely on a version bump to invalidate incompatible AST fragments. Keep
+# the extractor schema independent and include it in the on-disk namespace.
+_AST_CACHE_SCHEMA = CURRENT_AST_NODE_ID_SCHEMA
 
 # Version dirs already swept this process — cleanup runs once per (base, version).
 _cleaned_ast_dirs: set[str] = set()
@@ -84,12 +97,10 @@ def _body_content(content: bytes) -> bytes:
     return text[closer.start() + 3 :].encode()
 
 
-# Stat-based index: maps source root + absolute path → {size, mtime_ns, hash}.
-# Loaded once per process, flushed via atexit. Skips full file reads when
-# size+mtime_ns are unchanged — same trade-off as make(1).
-# Correctness risks: `touch` causes a harmless extra re-hash; same-size edits
-# within NFS second-resolution mtime have a 1-second window (same as make).
-# Use `graphify extract --force` to bypass when needed.
+# Stat index: maps source root + absolute path to the last observed content
+# identity. Size and mtime remain useful diagnostics, but never substitute for
+# reading bytes: supported filesystems do not provide a portable stat tuple
+# that proves content has not changed.
 _stat_index: dict[str, dict] = {}
 _stat_index_root: Path | None = None
 _stat_index_dirty: bool = False
@@ -113,7 +124,8 @@ def _ensure_stat_index(root: Path) -> None:
     p = _stat_index_file(_stat_index_root)
     if p.exists():
         try:
-            _stat_index = json.loads(p.read_text(encoding="utf-8"))
+            loaded = json.loads(p.read_text(encoding="utf-8"))
+            _stat_index = loaded if isinstance(loaded, dict) else {}
         except (json.JSONDecodeError, OSError):
             _stat_index = {}
     else:
@@ -122,29 +134,29 @@ def _ensure_stat_index(root: Path) -> None:
         atexit.register(_flush_stat_index)
 
 
+def _prune_stat_index() -> None:
+    global _stat_index_dirty
+    for key, entry in list(_stat_index.items()):
+        source = entry.get("path") if isinstance(entry, dict) else None
+        if not isinstance(source, str):
+            _, separator, source = key.partition("\x00")
+            if not separator:
+                source = ""
+        if not source or not Path(source).is_file():
+            del _stat_index[key]
+            _stat_index_dirty = True
+
+
 def _flush_stat_index() -> None:
     global _stat_index_dirty, _stat_index_root
+    _prune_stat_index()
     if not _stat_index_dirty or _stat_index_root is None:
         return
     p = _stat_index_file(_stat_index_root)
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=p.parent, prefix="stat-index.", suffix=".tmp")
-        try:
-            os.write(fd, json.dumps(_stat_index, separators=(",", ":")).encode())
-            os.close(fd)
-            os.replace(tmp, p)
-        except Exception:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
+        atomic_write_bytes(p, json.dumps(_stat_index, separators=(",", ":")).encode())
     except OSError:
-        pass
+        return
     _stat_index_dirty = False
 
 
@@ -160,6 +172,28 @@ def _normalize_path(path: Path) -> Path:
     return Path(os.path.normcase(s))
 
 
+def _path_has_case_collision(path: Path, root: Path) -> bool:
+    """Return whether lowercasing identity would merge two real source paths."""
+    try:
+        relative = path.resolve().relative_to(root.resolve())
+    except ValueError:
+        relative = path.resolve()
+    current = root.resolve() if not relative.is_absolute() else Path(relative.anchor)
+    for part in relative.parts:
+        try:
+            matches = [
+                entry.name
+                for entry in current.iterdir()
+                if entry.name.casefold() == part.casefold()
+            ]
+        except OSError:
+            return False
+        if len(matches) > 1:
+            return True
+        current = current / part
+    return False
+
+
 def file_hash(
     path: Path,
     root: Path = Path("."),
@@ -169,9 +203,8 @@ def file_hash(
 ) -> str:
     """SHA256 of file contents + path relative to root.
 
-    Uses a stat-based fastpath (size + mtime_ns) to skip full reads when the
-    file hasn't changed. Falls through to full SHA256 on first encounter or
-    when stat changes. Index is flushed atomically at process exit.
+    Reads the file bytes on every identity check. The stat index records the
+    observation for pruning and diagnostics but cannot prove byte equality.
 
     Using a relative path (not absolute) makes cache entries portable across
     machines and checkout directories, so shared caches and CI work correctly.
@@ -191,9 +224,6 @@ def file_hash(
     st: "os.stat_result | None" = None
     try:
         st = p.stat()
-        entry = _stat_index.get(abs_key)
-        if entry and entry.get("size") == st.st_size and entry.get("mtime_ns") == st.st_mtime_ns:
-            return entry["hash"]
     except OSError:
         pass
 
@@ -204,13 +234,21 @@ def file_hash(
     h.update(b"\x00")
     try:
         rel = p.resolve().relative_to(Path(root).resolve())
-        h.update(rel.as_posix().lower().encode())
+        identity_path = rel.as_posix()
     except ValueError:
-        h.update(p.resolve().as_posix().lower().encode())
+        identity_path = p.resolve().as_posix()
+    if not _path_has_case_collision(p, root):
+        identity_path = identity_path.casefold()
+    h.update(identity_path.encode())
     digest = h.hexdigest()
 
     if st is not None and record_stat:
-        _stat_index[abs_key] = {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "hash": digest}
+        _stat_index[abs_key] = {
+            "path": str(p.resolve()),
+            "size": st.st_size,
+            "mtime_ns": st.st_mtime_ns,
+            "hash": digest,
+        }
         _stat_index_dirty = True
 
     return digest
@@ -254,6 +292,47 @@ def _relativize_source_files_in(payload: dict, root: Path) -> None:
             item["source_file"] = rel.replace(os.sep, "/")
 
 
+def _portable_cache_payload(payload: dict, root: Path) -> tuple[dict, bool] | None:
+    """Return a portable payload copy, or refuse ambiguous foreign provenance."""
+    import copy
+
+    portable = copy.deepcopy(payload)
+    changed = False
+    root_resolved = Path(root).resolve()
+    for bucket in ("nodes", "edges", "hyperedges"):
+        for item in portable.get(bucket, []):
+            if not isinstance(item, dict):
+                continue
+            source = item.get("source_file")
+            if not isinstance(source, str) or not source:
+                continue
+            if not is_absolute_path(source):
+                normalized_parts = source.replace("\\", "/").split("/")
+                if ".." in normalized_parts or PureWindowsPath(source).drive:
+                    return None
+                continue
+            source_path = Path(source)
+            if not source_path.is_absolute():
+                return None
+            try:
+                relative = os.path.relpath(source_path, root_resolved)
+            except (OSError, ValueError):
+                return None
+            if relative == ".." or relative.startswith((".." + os.sep, "../")):
+                return None
+            item["source_file"] = relative.replace(os.sep, "/")
+            changed = True
+    return portable, changed
+
+
+def _source_is_within_root(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(Path(root).resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def _absolutize_source_files_in(payload: dict, root: Path) -> None:
     """Inverse of :func:`_relativize_source_files_in`.
 
@@ -287,7 +366,9 @@ def _cache_dir_path(root: Path, kind: str) -> Path:
     base = _out if _out.is_absolute() else Path(root).resolve() / _out
     directory = base / "cache" / kind
     if kind == "ast":
-        directory = directory / f"v{_EXTRACTOR_VERSION}"
+        directory = directory / f"v{_EXTRACTOR_VERSION}-{_AST_CACHE_SCHEMA}"
+    elif kind == "semantic":
+        directory = directory / PROMPT_SCHEMA_VERSION
     return directory
 
 
@@ -297,10 +378,11 @@ def cache_dir(root: Path = Path("."), kind: str = "ast") -> Path:
     kind is "ast" or "semantic". Separate subdirectories prevent semantic cache
     entries from overwriting AST cache entries for the same source_file (#582).
 
-    AST entries live in graphify-out/cache/ast/v{version}/ — namespaced by
-    graphify version because they depend on extractor code, not just file
-    contents. Semantic entries live unversioned in graphify-out/cache/semantic/
-    (re-extraction costs LLM calls).
+    AST entries live in graphify-out/cache/ast/v{version}-{schema}/ — namespaced
+    by both package version and extractor schema because package versions are
+    human-controlled independently of correctness changes. Semantic entries are
+    package-version independent but namespaced by prompt schema under
+    graphify-out/cache/semantic/semantic-v*/.
     """
     d = _cache_dir_path(root, kind)
     if kind == "ast":
@@ -315,6 +397,8 @@ def load_cached(
     kind: str = "ast",
     *,
     source_root: Path | None = None,
+    semantic_provenance: Mapping[str, object] | None = None,
+    semantic_requirements: Mapping[str, object] | None = None,
 ) -> dict | None:
     """Return cached extraction for this file if hash matches, else None.
 
@@ -322,28 +406,89 @@ def load_cached(
     Cache value: stored as graphify-out/cache/{kind}/{hash}.json (AST entries
     under the per-version subdirectory, see :func:`cache_dir`).
 
-    AST entries written by other graphify versions — including the legacy
-    flat cache/ layout (pre-0.5.3) and the unversioned cache/ast/ layout —
-    are deliberately not consulted: they were produced by a different
-    extractor and may be stale.
+    AST entries written by other graphify versions or extractor schemas —
+    including the legacy flat cache/ layout (pre-0.5.3) and the unversioned
+    cache/ast/ layout — are deliberately not consulted: they were produced by
+    a different extractor and may be stale.
     Returns None if no cache entry or file has changed.
     """
     identity_root = source_root or root
+    if not _source_is_within_root(Path(path), identity_root):
+        return None
     try:
         h = file_hash(path, identity_root, cache_root=root, record_stat=False)
     except OSError:
         return None
-    entry = _cache_dir_path(root, kind) / f"{h}.json"
+    directory = _cache_dir_path(root, kind)
+    if kind == "semantic":
+        if semantic_provenance is None:
+            candidates = sorted(directory.glob(f"{h}--*.json"))
+            if semantic_requirements:
+                matching: list[Path] = []
+                for candidate in candidates:
+                    try:
+                        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+                        candidate_identity = normalize_semantic_provenance(
+                            candidate_payload.get("identity")
+                        )
+                    except (OSError, json.JSONDecodeError, SemanticSchemaError, AttributeError):
+                        continue
+                    if all(
+                        candidate_identity.get(str(key)) == str(value)
+                        for key, value in semantic_requirements.items()
+                    ):
+                        matching.append(candidate)
+                candidates = matching
+            if len(candidates) != 1:
+                return None
+            entry = candidates[0]
+        else:
+            try:
+                identity_digest = semantic_provenance_digest(semantic_provenance)
+            except SemanticSchemaError:
+                return None
+            entry = directory / f"{h}--{identity_digest}.json"
+    else:
+        entry = directory / f"{h}.json"
     if entry.exists():
         try:
-            result = json.loads(entry.read_text(encoding="utf-8"))
+            stored = json.loads(entry.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
+        if kind == "semantic":
+            if not isinstance(stored, dict):
+                return None
+            try:
+                identity = normalize_semantic_provenance(stored.get("identity"))
+            except SemanticSchemaError:
+                return None
+            if semantic_provenance is not None:
+                try:
+                    expected = normalize_semantic_provenance(semantic_provenance)
+                except SemanticSchemaError:
+                    return None
+                if identity != expected:
+                    return None
+            if entry.stem.rsplit("--", 1)[-1] != semantic_provenance_digest(identity):
+                return None
+            result = stored.get("fragment")
+        else:
+            result = stored
+        if not isinstance(result, dict) or "error" in result:
+            return None
+        portable_result = _portable_cache_payload(result, identity_root)
+        if portable_result is None:
+            return None
+        result, migrated = portable_result
+        if migrated:
+            try:
+                atomic_write_bytes(entry, json.dumps(result).encode())
+            except OSError:
+                return None
         # Re-anchor relative source_file fields so callers see the same
         # absolute-path shape that a fresh in-process extraction produces
         # (#777). Legacy entries with absolute source_file pass through.
-        if isinstance(result, dict):
-            _absolutize_source_files_in(result, identity_root)
+        _absolutize_source_files_in(result, identity_root)
         return result
     return None
 
@@ -355,7 +500,8 @@ def save_cached(
     kind: str = "ast",
     *,
     source_root: Path | None = None,
-) -> None:
+    semantic_provenance: Mapping[str, object] | None = None,
+) -> bool:
     """Save extraction result for this file.
 
     Stores as graphify-out/cache/{kind}/{hash}.json where hash = SHA256 of current file contents.
@@ -368,7 +514,11 @@ def save_cached(
     p = Path(path)
     identity_root = source_root or root
     if not p.is_file():
-        return
+        return False
+    if not _source_is_within_root(p, identity_root):
+        return False
+    if "error" in result:
+        return False
     # Relativize source_file fields against ``root`` before write so the
     # cache file on disk is portable across machines and checkout
     # directories (#777). The cache key is content-hashed so lookup is
@@ -379,38 +529,22 @@ def save_cached(
     # looks up Path(source_file).resolve() in a prefix table) depend on the
     # source_file field's original absolute form. Mutating the input here would
     # silently break those remaps on the first extraction pass.
-    on_disk = result
-    if isinstance(result, dict) and any(result.get(k) for k in ("nodes", "edges", "hyperedges")):
-        import copy as _copy
-
-        on_disk = _copy.deepcopy(result)
-        _relativize_source_files_in(on_disk, identity_root)
+    portable_result = _portable_cache_payload(result, identity_root)
+    if portable_result is None:
+        return False
+    on_disk, _ = portable_result
     h = file_hash(p, identity_root, cache_root=root)
     target_dir = cache_dir(root, kind)
-    entry = target_dir / f"{h}.json"
-    fd, tmp_path = tempfile.mkstemp(dir=target_dir, prefix=f"{h}.", suffix=".tmp")
-    try:
-        os.write(fd, json.dumps(on_disk).encode())
-        os.close(fd)
-        try:
-            os.replace(tmp_path, entry)
-        except PermissionError:
-            # Windows: os.replace can fail with WinError 5 if the target is
-            # briefly locked. Fall back to copy-then-delete.
-            import shutil
-
-            shutil.copy2(tmp_path, entry)
-            os.unlink(tmp_path)
-    except Exception:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    if kind == "semantic":
+        identity = normalize_semantic_provenance(semantic_provenance)
+        identity_digest = semantic_provenance_digest(identity)
+        entry = target_dir / f"{h}--{identity_digest}.json"
+        payload = {"identity": identity, "fragment": on_disk}
+    else:
+        entry = target_dir / f"{h}.json"
+        payload = on_disk
+    atomic_write_bytes(entry, json.dumps(payload, sort_keys=True).encode())
+    return True
 
 
 def cached_files(root: Path = Path(".")) -> set[str]:
@@ -421,10 +555,10 @@ def cached_files(root: Path = Path(".")) -> set[str]:
     if base.is_dir():
         hashes.update(p.stem for p in base.glob("*.json"))
     # Namespaced entries (ast/ recursively, covering per-version subdirs)
-    for kind, pattern in (("ast", "**/*.json"), ("semantic", "*.json")):
+    for kind, pattern in (("ast", "**/*.json"), ("semantic", "**/*.json")):
         d = base / kind
         if d.is_dir():
-            hashes.update(p.stem for p in d.glob(pattern))
+            hashes.update(p.stem.split("--", 1)[0] for p in d.glob(pattern))
     return hashes
 
 
@@ -436,7 +570,7 @@ def clear_cache(root: Path = Path(".")) -> None:
         for f in base.glob("*.json"):
             f.unlink()
     # Namespaced entries (ast/ recursively, covering per-version subdirs)
-    for kind, pattern in (("ast", "**/*.json"), ("semantic", "*.json")):
+    for kind, pattern in (("ast", "**/*.json"), ("semantic", "**/*.json")):
         d = base / kind
         if d.is_dir():
             for f in d.glob(pattern):
@@ -446,18 +580,14 @@ def clear_cache(root: Path = Path(".")) -> None:
 def prune_semantic_cache(root: Path, live_hashes: set[str]) -> int:
     """Remove orphaned semantic cache entries, returning the count pruned.
 
-    The semantic cache is content-hash-keyed (``{file_hash}.json`` under
-    ``cache/semantic/``) and deliberately UNVERSIONED — entries are produced by
-    the LLM from file contents, so invalidating them on every release would
-    re-bill extraction. Because it is unversioned it is also never swept by the
-    AST version-cleanup, so every content change or file deletion leaves a
-    permanent orphan entry that accumulates unbounded.
+    The semantic cache is keyed by content hash and semantic provenance under a
+    prompt-schema namespace. Package releases do not invalidate it; contract
+    changes do. Content changes and deletions can still leave orphan entries.
 
-    This sweeps ``cache/semantic/*.json`` and deletes any entry whose stem (the
-    content hash) is not in ``live_hashes`` — the hashes of the current live
-    document set. ``*.tmp`` atomic-write temporaries are skipped, and only this
-    directory is touched (never ``cache/ast/**`` or anything else). The
-    unversioned design is preserved: we prune by liveness, not by version.
+    This sweeps ``cache/semantic/**/*.json`` and deletes entries outside the
+    current schema or whose content-hash prefix is not in ``live_hashes``.
+    ``*.tmp`` atomic-write temporaries are skipped, and AST cache state is never
+    touched.
 
     Best-effort, mirroring :func:`_cleanup_stale_ast_entries`: each unlink is
     wrapped in ``try/except OSError`` and a failure is ignored. The worst-case
@@ -470,8 +600,10 @@ def prune_semantic_cache(root: Path, live_hashes: set[str]) -> int:
     if not semantic_dir.is_dir():
         return 0
     pruned = 0
-    for entry in semantic_dir.glob("*.json"):
-        if entry.stem in live_hashes:
+    current_dir = _cache_dir_path(root, "semantic")
+    for entry in semantic_dir.glob("**/*.json"):
+        content_hash = entry.stem.split("--", 1)[0]
+        if entry.parent == current_dir and content_hash in live_hashes:
             continue
         try:
             entry.unlink()
@@ -486,6 +618,8 @@ def check_semantic_cache(
     root: Path = Path("."),
     *,
     source_root: Path | None = None,
+    semantic_provenance: Mapping[str, object] | None = None,
+    semantic_requirements: Mapping[str, object] | None = None,
 ) -> tuple[list[dict], list[dict], list[dict], list[str]]:
     """Check semantic extraction cache for a list of absolute file paths.
 
@@ -502,7 +636,14 @@ def check_semantic_cache(
         p = Path(fpath)
         if not is_absolute_path(fpath):
             p = Path(identity_root) / p
-        result = load_cached(p, root, kind="semantic", source_root=identity_root)
+        result = load_cached(
+            p,
+            root,
+            kind="semantic",
+            source_root=identity_root,
+            semantic_provenance=semantic_provenance,
+            semantic_requirements=semantic_requirements,
+        )
         if result is not None:
             cached_nodes.extend(result.get("nodes", []))
             cached_edges.extend(result.get("edges", []))
@@ -520,12 +661,13 @@ def save_semantic_cache(
     root: Path = Path("."),
     *,
     source_root: Path | None = None,
+    semantic_provenance: Mapping[str, object] | None = None,
 ) -> int:
     """Save semantic extraction results to cache, keyed by source_file.
 
     Groups nodes and edges by source_file, then saves one cache entry per file
-    under cache/semantic/ (separate from AST entries in cache/ast/) to prevent
-    hash-key collisions (#582).
+    under the current cache/semantic schema namespace (separate from AST entries
+    in cache/ast/) to prevent hash-key collisions (#582).
     Returns the number of files cached.
     """
     from collections import defaultdict
@@ -551,6 +693,13 @@ def save_semantic_cache(
         if not is_absolute_path(fpath):
             p = Path(identity_root) / p
         if p.is_file():
-            save_cached(p, result, root, kind="semantic", source_root=identity_root)
-            saved += 1
+            if save_cached(
+                p,
+                result,
+                root,
+                kind="semantic",
+                source_root=identity_root,
+                semantic_provenance=semantic_provenance,
+            ):
+                saved += 1
     return saved

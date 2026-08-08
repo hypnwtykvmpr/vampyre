@@ -1,8 +1,10 @@
 # generate GRAPH_REPORT.md - the human-readable audit trail
 from __future__ import annotations
 import re
-from datetime import date
+from collections.abc import Hashable, Mapping, Sequence
+
 import networkx as nx
+from graphify.projections import distinct_neighbor_degree, stable_value_key
 
 
 def _safe_community_name(label: str) -> str:
@@ -76,7 +78,7 @@ def _learning_section(lines: list, learning: dict | None, top_n: int = 10) -> No
 
 def generate(
     G: nx.Graph,
-    communities: dict[int, list[str]],
+    communities: Mapping[int, Sequence[Hashable]],
     cohesion_scores: dict[int, float],
     community_labels: dict[int, str],
     god_node_list: list[dict],
@@ -89,8 +91,6 @@ def generate(
     built_at_commit: str | None = None,
     learning: dict | None = None,
 ) -> str:
-    today = date.today().isoformat()
-
     # JSON deserialization produces string keys; normalize to int so .get(cid) works.
     if community_labels:
         community_labels = {
@@ -107,8 +107,16 @@ def generate(
     inf_scores = [d.get("confidence_score", 0.5) for _, _, d in inf_edges]
     inf_avg = round(sum(inf_scores) / len(inf_scores), 2) if inf_scores else None
 
+    file_groups = detection_result.get("files")
+    if isinstance(file_groups, dict) and all(
+        isinstance(paths, list) for paths in file_groups.values()
+    ):
+        corpus_file_count = sum(len(paths) for paths in file_groups.values())
+    else:
+        corpus_file_count = detection_result.get("total_files", 0)
+
     lines = [
-        f"# Graph Report - {root}  ({today})",
+        f"# Graph Report - {root}",
         "",
         "## Corpus Check",
     ]
@@ -116,31 +124,30 @@ def generate(
         lines.append(f"- {detection_result['warning']}")
     else:
         lines += [
-            f"- {detection_result['total_files']} files · ~{detection_result['total_words']:,} words",
+            f"- {corpus_file_count} files · ~{detection_result.get('total_words', 0):,} words",
             "- Verdict: corpus is large enough that graph structure adds value.",
         ]
 
     from .analyze import _is_file_node as _ifn
 
-    non_empty = {
-        cid: nodes for cid, nodes in communities.items() if any(not _ifn(G, n) for n in nodes)
+    real_communities = {
+        cid: sorted(
+            [node for node in nodes if node in G and not _ifn(G, node)],
+            key=stable_value_key,
+        )
+        for cid, nodes in communities.items()
     }
-    thin_count_summary = sum(
-        1
-        for nodes in communities.values()
-        if 0 < sum(1 for n in nodes if not _ifn(G, n)) < min_community_size
-    )
-    shown_count = len(communities) - thin_count_summary
+    rendered_communities = {
+        cid: nodes for cid, nodes in real_communities.items() if len(nodes) >= min_community_size
+    }
+    shown_count = len(rendered_communities)
+    omitted_count = len(communities) - shown_count
 
     lines += [
         "",
         "## Summary",
         f"- {G.number_of_nodes()} nodes · {G.number_of_edges()} edges · {len(communities)} communities"
-        + (
-            f" ({shown_count} shown, {thin_count_summary} thin omitted)"
-            if thin_count_summary
-            else ""
-        ),
+        + (f" ({shown_count} shown, {omitted_count} omitted)" if omitted_count else ""),
         f"- Extraction: {ext_pct}% EXTRACTED · {inf_pct}% INFERRED · {amb_pct}% AMBIGUOUS"
         + (
             f" · INFERRED: {len(inf_edges)} edges (avg confidence: {inf_avg})"
@@ -161,9 +168,9 @@ def generate(
 
     # Community hub navigation - links to _COMMUNITY_*.md files in the Obsidian vault.
     # Without these, GRAPH_REPORT.md is a dead-end and the vault splits into disconnected components.
-    if non_empty:
+    if rendered_communities:
         lines += ["", "## Community Hubs (Navigation)"]
-        for cid in non_empty:
+        for cid in sorted(rendered_communities, key=stable_value_key):
             label = community_labels.get(cid, f"Community {cid}")
             safe = _safe_community_name(label)
             lines.append(f"- [[_COMMUNITY_{safe}|{label}]]")
@@ -173,7 +180,7 @@ def generate(
         "## God Nodes (most connected - your core abstractions)",
     ]
     for i, node in enumerate(god_node_list, 1):
-        lines.append(f"{i}. `{node['label']}` - {node['degree']} edges")
+        lines.append(f"{i}. `{node['label']}` - {node['degree']} distinct neighbors")
 
     lines += ["", "## Surprising Connections (you probably didn't know these)"]
     if surprise_list:
@@ -206,7 +213,7 @@ def generate(
             length = c.get("length", len(cycle))
             if not cycle:
                 continue
-            cycle_path = " -> ".join(cycle + [cycle[0]])
+            cycle_path = " -> ".join(str(node) for node in cycle + [cycle[0]])
             lines.append(f"- {length}-file cycle: `{cycle_path}`")
     else:
         lines.append("- None detected.")
@@ -215,23 +222,19 @@ def generate(
     if hyperedges:
         lines += ["", "## Hyperedges (group relationships)"]
         for h in hyperedges:
-            node_labels = ", ".join(h.get("nodes", []))
+            node_labels = ", ".join(str(node) for node in h.get("nodes", []))
             conf = h.get("confidence", "INFERRED")
             cscore = h.get("confidence_score")
             conf_tag = f"{conf} {cscore:.2f}" if cscore is not None else conf
             lines.append(f"- **{h.get('label', h.get('id', ''))}** — {node_labels} [{conf_tag}]")
 
-    lines += ["", f"## Communities ({len(communities)} total, {thin_count_summary} thin omitted)"]
-    for cid, nodes in communities.items():
+    lines += ["", f"## Communities ({len(communities)} total, {omitted_count} omitted)"]
+    for cid, real_nodes in sorted(
+        rendered_communities.items(), key=lambda item: stable_value_key(item[0])
+    ):
         label = community_labels.get(cid, f"Community {cid}")
         score = cohesion_scores.get(cid, 0.0)
-        # Filter method/function stubs from display - they're structural noise
-        real_nodes = [n for n in nodes if not _ifn(G, n)]
-        if not real_nodes:
-            continue
-        if len(real_nodes) < min_community_size:
-            continue
-        display = [G.nodes[n].get("label", n) for n in real_nodes[:8]]
+        display = [str(G.nodes[n].get("label", n)) for n in real_nodes[:8]]
         suffix = f" (+{len(real_nodes) - 8} more)" if len(real_nodes) > 8 else ""
         lines += [
             "",
@@ -240,7 +243,15 @@ def generate(
             f"Nodes ({len(real_nodes)}): {', '.join(display)}{suffix}",
         ]
 
-    ambiguous = [(u, v, d) for u, v, d in G.edges(data=True) if d.get("confidence") == "AMBIGUOUS"]
+    ambiguous = sorted(
+        [(u, v, d) for u, v, d in G.edges(data=True) if d.get("confidence") == "AMBIGUOUS"],
+        key=lambda edge: (
+            stable_value_key(edge[0]),
+            stable_value_key(edge[1]),
+            stable_value_key(edge[2].get("relation")),
+            stable_value_key(edge[2].get("source_location")),
+        ),
+    )
     if ambiguous:
         lines += ["", "## Ambiguous Edges - Review These"]
         for u, v, d in ambiguous:
@@ -252,22 +263,21 @@ def generate(
             ]
 
     # --- Gaps section ---
-    from .analyze import _is_file_node, _is_concept_node
+    from .analyze import _is_concept_node, _is_file_node
 
     isolated = [
         n
         for n in G.nodes()
-        if G.degree(n) <= 1
+        if distinct_neighbor_degree(G, n) <= 1
         and not _is_file_node(G, n)
         and not _is_concept_node(G, n)
         and G.nodes[n].get("file_type") != "rationale"
     ]
     thin_communities = {
-        cid: nodes
-        for cid, nodes in communities.items()
-        if 0 < sum(1 for n in nodes if not _is_file_node(G, n)) < 3
+        cid: nodes for cid, nodes in real_communities.items() if 0 < len(nodes) < min_community_size
     }
     gap_count = len(isolated) + len(thin_communities)
+    isolated.sort(key=stable_value_key)
 
     if gap_count > 0 or amb_pct > 20:
         lines += ["", "## Knowledge Gaps"]

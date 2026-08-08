@@ -14,12 +14,10 @@ from datetime import date
 from pathlib import Path
 from typing import Any, cast
 import networkx as nx
-from networkx.readwrite import json_graph
 from graphify.security import sanitize_label
 from graphify.analyze import _node_community_map
-from graphify.build import edge_data, edge_datas
+from graphify.build import edge_datas
 from graphify.edge_identity import make_stable_key
-from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
 from graphify.installation import uv_tool_install_command
 from graphify.persistence import FileStateTransaction, atomic_write_text
 from graphify.paths import portable_filename_stem
@@ -27,6 +25,7 @@ from graphify.projections import (
     DEFAULT_RELATIONSHIP_CAP,
     format_relationship_envelope,
     relationship_envelope,
+    stable_value_key,
 )
 
 
@@ -498,73 +497,13 @@ _CONFIDENCE_SCORE_DEFAULTS = {"EXTRACTED": 1.0, "INFERRED": 0.5, "AMBIGUOUS": 0.
 
 
 def attach_hyperedges(G: nx.Graph, hyperedges: list) -> None:
-    """Store hyperedges in the graph's metadata dict."""
-    existing = G.graph.get("hyperedges", [])
-    seen_ids = {h["id"] for h in existing}
-    for h in hyperedges:
-        if h.get("id") and h["id"] not in seen_ids:
-            existing.append(h)
-            seen_ids.add(h["id"])
-    G.graph["hyperedges"] = existing
+    """Store canonical live hyperedges in the graph's metadata dict."""
+    from graphify.graph_state import reconcile_hyperedges
 
-
-def _git_head() -> str | None:
-    """Return the current git HEAD commit hash, or None if not in a git repo."""
-    import subprocess as _sp
-
-    try:
-        r = _sp.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-            encoding="utf-8",
-        )
-        return r.stdout.strip() if r.returncode == 0 else None
-    except Exception:
-        return None
-
-
-def _graph_type_for_instance(G: nx.Graph) -> str:
-    """Return the graphify ``graph_type`` token for a live NetworkX instance.
-
-    The instance is authoritative: we classify from ``is_multigraph()`` /
-    ``is_directed()`` rather than from any stored profile, mirroring the
-    ``multigraph``/``directed`` flag logic in :func:`graphify.graph_loader.load_graph`.
-    The vocabulary is kept byte-identical to the loader's
-    :func:`~graphify.graph_loader._set_graph_profile` (``"simple"`` /
-    ``"digraph"`` / ``"multidigraph"``) so a save/load round-trip is stable.
-
-    graphify only ever produces directed multigraphs (``MultiDiGraph``), and the
-    loader normalizes any ``multigraph: true`` payload to ``MultiDiGraph``, so an
-    undirected ``MultiGraph`` instance is still labelled ``"multidigraph"`` for
-    consistency with what a reload would reconstruct.
-    """
-    if G.is_multigraph():
-        return "multidigraph"
-    if G.is_directed():
-        return "digraph"
-    return "simple"
-
-
-def _ensure_graph_profile(G: nx.Graph) -> None:
-    """Stamp ``G.graph[GRAPHIFY_PROFILE_KEY]`` so the profile persists in graph.json.
-
-    A freshly *built* graph (from :func:`graphify.build.build_from_json`) has no
-    ``graphify_profile`` — that key is only set on *load*. Without it the saved
-    JSON would not carry the simple-vs-multidigraph profile that downstream PR 7
-    cache-invalidation / watch profile-mismatch detection relies on.
-
-    Existing profile fields (e.g. from a loaded graph) are preserved, but
-    ``graph_type`` is always overwritten to match the actual instance — the
-    instance is authoritative, so a stale serialized ``graph_type`` can never
-    mislabel the graph we are about to write. This mirrors the overwrite in
-    :func:`graphify.graph_loader._set_graph_profile`.
-    """
-    existing = G.graph.get(GRAPHIFY_PROFILE_KEY)
-    profile = dict(existing) if isinstance(existing, dict) else {}
-    profile["graph_type"] = _graph_type_for_instance(G)
-    G.graph[GRAPHIFY_PROFILE_KEY] = profile
+    existing = list(G.graph.get("hyperedges", []))
+    G.graph["hyperedges"] = list(
+        reconcile_hyperedges(existing + list(hyperedges), live_node_ids=set(G.nodes))
+    )
 
 
 def to_json(
@@ -576,23 +515,109 @@ def to_json(
     built_at_commit: str | None = None,
     community_labels: dict[int, str] | None = None,
 ) -> bool:
-    # Safety check: refuse to silently shrink an existing graph (#479)
+    from graphify.persistence import output_state_lock
+
+    output = Path(output_path)
+    with output_state_lock(output.parent) as lease:
+        if lease is None:  # blocking acquisition cannot normally return None
+            raise RuntimeError("could not acquire graph publication lock")
+        return _to_json_locked(
+            G,
+            communities,
+            output_path,
+            force=force,
+            built_at_commit=built_at_commit,
+            community_labels=community_labels,
+        )
+
+
+def _to_json_locked(
+    G: nx.Graph,
+    communities: dict[int, list[str]],
+    output_path: str,
+    *,
+    force: bool = False,
+    built_at_commit: str | None = None,
+    community_labels: dict[int, str] | None = None,
+) -> bool:
+    if not graph_replacement_allowed(
+        Path(output_path),
+        G.number_of_nodes(),
+        force=force,
+    ):
+        return False
+
     existing_path = Path(output_path)
+
+    node_community = _node_community_map(communities)
+    _labels: dict[int, str] = {int(k): v for k, v in (community_labels or {}).items()}
+    top_level_metadata = {"built_at_commit": built_at_commit} if built_at_commit else {}
+    from graphify.graph_state import encode_graph_state, graph_state_from_graph
+
+    data = encode_graph_state(graph_state_from_graph(G, top_level_metadata=top_level_metadata))
+    nodes = cast(list[dict[str, Any]], data["nodes"])
+    links = cast(list[dict[str, Any]], data["links"])
+    for node in nodes:
+        cid = node_community.get(node["id"])
+        node["community"] = cid
+        if cid is not None and _labels:
+            node["community_name"] = _labels.get(cid, f"Community {cid}")
+        node["norm_label"] = _strip_diacritics(node.get("label", "")).lower()
+    for link in links:
+        if "confidence_score" not in link:
+            conf = link.get("confidence", "EXTRACTED")
+            link["confidence_score"] = _CONFIDENCE_SCORE_DEFAULTS.get(conf, 1.0)
+        # Restore original edge direction. Undirected NetworkX storage may
+        # canonicalize endpoint order, flipping `calls` and other directional
+        # edges in graph.json. The build path stashes the true endpoints in
+        # _src/_tgt for exactly this purpose (#563).
+        true_src = link.get("_src")
+        true_tgt = link.get("_tgt")
+        if true_src is not None and true_tgt is not None:
+            link["source"] = true_src
+            link["target"] = true_tgt
+    from graphify.graph_state import DecodeMode, decode_graph_state
+    from graphify.persistence import publish_graph_state
+
+    state = decode_graph_state(data, mode=DecodeMode.STRICT_CURRENT)
+    publish_graph_state(existing_path, state)
+    return True
+
+
+def graph_replacement_allowed(
+    existing_path: Path,
+    new_node_count: int,
+    *,
+    force: bool = False,
+) -> bool:
+    """Return whether a graph publication satisfies the shrink safety contract."""
+    # Safety check: refuse to silently shrink an existing graph (#479).
+    existing_n = 0
+    if existing_path.exists():
+        try:
+            from graphify.security import check_graph_file_size_cap
+
+            check_graph_file_size_cap(existing_path)
+            existing_data = json.loads(existing_path.read_text(encoding="utf-8"))
+            existing_nodes = existing_data.get("nodes") if isinstance(existing_data, dict) else None
+            if not isinstance(existing_nodes, list):
+                raise ValueError("graph state has no node list")
+            existing_n = len(existing_nodes)
+        except Exception as exc:
+            print(
+                f"[graphify] ERROR: refusing to overwrite unreadable existing graph state: {exc}",
+                file=sys.stderr,
+            )
+            return False
+
     # Empty-merge floor (RISK 4): refuse to overwrite a populated graph.json
     # (>0 nodes) with an EMPTY (0-node) graph. A 0-node write over a populated
     # graph is a failed/aborted extraction, never a real result, so this floor
     # engages REGARDLESS of force — no legitimate caller writes 0 nodes over a
     # populated graph, and force=True is exactly the bug enabler. Read the
-    # existing node count defensively: any error (missing/corrupt file) is
-    # treated as 0 nodes so a corrupt existing file cannot crash the write
-    # (the floor then stays inert, which is acceptable — there is no verified
-    # populated graph to protect).
-    if existing_path.exists() and G.number_of_nodes() == 0:
-        try:
-            existing_data = json.loads(existing_path.read_text(encoding="utf-8"))
-            existing_n = len(existing_data.get("nodes", []))
-        except Exception:
-            existing_n = 0
+    # existing node count defensively. Unreadable state is refused above rather
+    # than treated as empty: corruption is not permission to overwrite.
+    if existing_path.exists() and new_node_count == 0:
         if existing_n > 0:
             print(
                 f"[graphify] ERROR: refusing to overwrite a populated graph.json "
@@ -603,76 +628,21 @@ def to_json(
             )
             return False
     if not force and existing_path.exists():
-        try:
-            from graphify.security import check_graph_file_size_cap
-
-            check_graph_file_size_cap(existing_path)
-            existing_data = json.loads(existing_path.read_text(encoding="utf-8"))
-            existing_n = len(existing_data.get("nodes", []))
-            new_n = G.number_of_nodes()
-            if new_n < existing_n:
-                print(
-                    f"[graphify] WARNING: new graph has {new_n} nodes but existing "
-                    f"graph.json has {existing_n} (net -{existing_n - new_n}). "
-                    f"Refusing to overwrite. Possible causes: missing chunk files from "
-                    f"a previous session, or fuzzy dedup collapsed same-named symbols "
-                    f"across files during an --update on an already-current graph. "
-                    f"Run a full rebuild (/graphify .) to be safe, or pass force=True "
-                    f"only if you have verified the reduction is legitimate.",
-                    file=sys.stderr,
-                )
-                return False
-        except Exception as exc:
+        new_n = new_node_count
+        if new_n < existing_n:
             print(
-                f"[graphify] warning: could not inspect existing graph before write: {exc}",
+                f"[graphify] WARNING: new graph has {new_n} nodes but existing "
+                f"graph.json has {existing_n} (net -{existing_n - new_n}). "
+                f"Refusing to overwrite. Possible causes: missing chunk files from "
+                f"a previous session, or fuzzy dedup collapsed same-named symbols "
+                f"across files during an incremental rebuild of an already-current graph. "
+                f"Run a full rebuild to verify the result, then pass --force "
+                f"(or set GRAPHIFY_FORCE=1) only when the non-empty reduction "
+                f"is legitimate.",
                 file=sys.stderr,
             )
+            return False
 
-    # Persist the graph profile so a later load can detect a simple-vs-
-    # multidigraph mismatch (PR 7 cache invalidation / watch). The profile is
-    # derived from the live instance and written onto G.graph, which
-    # node_link_data surfaces under the top-level "graph" key.
-    _ensure_graph_profile(G)
-
-    node_community = _node_community_map(communities)
-    _labels: dict[int, str] = {int(k): v for k, v in (community_labels or {}).items()}
-    try:
-        data = json_graph.node_link_data(G, edges="links")
-    except TypeError:
-        data = json_graph.node_link_data(G)
-    # Defensively guarantee the profile is present under data["graph"] even if a
-    # NetworkX build did not surface G.graph (it normally does). The NetworkX
-    # "multigraph"/"directed" boolean flags are emitted by node_link_data itself.
-    graph_meta = data.get("graph")
-    if not isinstance(graph_meta, dict):
-        graph_meta = {}
-        data["graph"] = graph_meta
-    if GRAPHIFY_PROFILE_KEY not in graph_meta:
-        graph_meta[GRAPHIFY_PROFILE_KEY] = dict(G.graph[GRAPHIFY_PROFILE_KEY])
-    for node in data["nodes"]:
-        cid = node_community.get(node["id"])
-        node["community"] = cid
-        if cid is not None and _labels:
-            node["community_name"] = _labels.get(cid, f"Community {cid}")
-        node["norm_label"] = _strip_diacritics(node.get("label", "")).lower()
-    for link in data["links"]:
-        if "confidence_score" not in link:
-            conf = link.get("confidence", "EXTRACTED")
-            link["confidence_score"] = _CONFIDENCE_SCORE_DEFAULTS.get(conf, 1.0)
-        # Restore original edge direction. Undirected NetworkX storage may
-        # canonicalize endpoint order, flipping `calls` and other directional
-        # edges in graph.json. The build path stashes the true endpoints in
-        # _src/_tgt for exactly this purpose (#563).
-        true_src = link.pop("_src", None)
-        true_tgt = link.pop("_tgt", None)
-        if true_src is not None and true_tgt is not None:
-            link["source"] = true_src
-            link["target"] = true_tgt
-    data["hyperedges"] = getattr(G, "graph", {}).get("hyperedges", [])
-    commit = built_at_commit if built_at_commit is not None else _git_head()
-    if commit:
-        data["built_at_commit"] = commit
-    atomic_write_text(Path(output_path), json.dumps(data, indent=2))
     return True
 
 
@@ -1302,28 +1272,53 @@ def to_obsidian(
             lines.append(f"  - {tag}")
         lines += ["---", "", f"# {label}", ""]
 
-        # Outgoing edges as wikilinks. Render the FULL bundled relation summary
-        # per neighbor (PR 6 gate + PR 5 read-surface consistency) instead of
-        # only the first parallel edge. Gate on unique-relation count exactly
-        # like PR 5: a single relation keeps the historical byte-stable
-        # `` `{relation}` [{confidence}] `` form (so simple-graph vaults are
-        # unchanged), while multiple relations render the capped envelope
-        # bundle (e.g. "calls, imports, contains" or "... (+K more, N total)").
-        neighbors = list(G.neighbors(node_id))
-        if neighbors:
-            lines.append("## Connections")
-            for neighbor in sorted(neighbors, key=lambda n: G.nodes[n].get("label", n)):
+        def _append_connections(heading: str, pairs: list[tuple[Any, Any]]) -> None:
+            if not pairs:
+                return
+            lines.append(f"## {heading}")
+            for source, target in pairs:
+                neighbor = target if source == node_id else source
                 neighbor_label = node_filename[neighbor]
-                envelope = relationship_envelope(G, node_id, neighbor, directed_only=True)
-                if len(envelope["relations"]) <= 1:
-                    edata = edge_data(G, node_id, neighbor)
+                envelope = relationship_envelope(G, source, target, directed_only=True)
+                if envelope["count"] == 1:
+                    edata = envelope["shown"][0] if envelope["shown"] else {}
                     relation = edata.get("relation", "")
                     confidence = edata.get("confidence", "EXTRACTED")
                     lines.append(f"- [[{neighbor_label}]] - `{relation}` [{confidence}]")
                 else:
-                    summary = format_relationship_envelope(G, node_id, neighbor, directed_only=True)
+                    summary = format_relationship_envelope(G, source, target, directed_only=True)
                     lines.append(f"- [[{neighbor_label}]] - {summary}")
             lines.append("")
+
+        def _neighbor_key(neighbor: Any) -> tuple:
+            return (
+                str(G.nodes[neighbor].get("label", neighbor)).casefold(),
+                stable_value_key(neighbor),
+            )
+
+        if isinstance(G, (nx.DiGraph, nx.MultiDiGraph)):
+            _append_connections(
+                "Outgoing Connections",
+                [
+                    (node_id, neighbor)
+                    for neighbor in sorted(set(G.successors(node_id)), key=_neighbor_key)
+                ],
+            )
+            _append_connections(
+                "Incoming Connections",
+                [
+                    (neighbor, node_id)
+                    for neighbor in sorted(set(G.predecessors(node_id)), key=_neighbor_key)
+                ],
+            )
+        else:
+            _append_connections(
+                "Connections",
+                [
+                    (node_id, neighbor)
+                    for neighbor in sorted(set(G.neighbors(node_id)), key=_neighbor_key)
+                ],
+            )
 
         # Inline tags at bottom of note body (for Obsidian tag panel)
         inline_tags = " ".join(f"#{t}" for t in node_tags)

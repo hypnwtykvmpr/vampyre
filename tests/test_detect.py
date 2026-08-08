@@ -1,4 +1,7 @@
 import json
+import os
+import re
+import subprocess
 import unicodedata
 from pathlib import Path
 
@@ -18,6 +21,19 @@ from graphify.detect import (
 from graphify import detect as detect_mod
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _git_ignored(root: Path, relative: str) -> bool:
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", "--", relative],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert result.returncode in (0, 1), result.stderr
+    return result.returncode == 0
 
 
 def test_classify_python():
@@ -146,7 +162,7 @@ def test_classify_md_doc_without_signals(tmp_path):
 
 def test_classify_attention_paper():
     """The real attention paper file should be classified as PAPER."""
-    paper_path = Path("/home/safi/graphify_eval/papers/attention_is_all_you_need.md")
+    paper_path = Path("/workspace/graphify_eval/papers/attention_is_all_you_need.md")
     if paper_path.exists():
         result = classify_file(paper_path)
         assert result == FileType.PAPER
@@ -174,6 +190,113 @@ def test_graphifyignore_missing_is_fine(tmp_path):
     (tmp_path / "main.py").write_text("x = 1", encoding="utf-8")
     result = detect(tmp_path)
     assert result["graphifyignore_patterns"] == 0
+
+
+@pytest.mark.parametrize(
+    ("pattern", "relative", "ignored"),
+    [
+        ("docs/**/*.md", "docs/top.md", True),
+        ("docs/**/*.md", "docs/sub/deep.md", True),
+        ("docs/**/*.md", "top.md", False),
+        ("/root.txt", "root.txt", True),
+        ("/root.txt", "nested/root.txt", False),
+        ("*.log", "nested/build.log", True),
+        ("file?.txt", "file1.txt", True),
+        ("file?.txt", "file10.txt", False),
+        ("[ab].txt", "a.txt", True),
+        (r"\#literal.txt", "#literal.txt", True),
+        (r"\!literal.txt", "!literal.txt", True),
+        ("cache.pyc  # compiled", "cache.pyc", False),
+        ("cache.pyc  # compiled", "cache.pyc  # compiled", True),
+        ("  *.log", "file.log", False),
+        ("  *.log", "  file.log", True),
+        (r"name\ ", "name ", True),
+        (r"name\\ ", "name\\", True),
+    ],
+)
+def test_internal_ignore_matcher_matches_git(tmp_path, pattern, relative, ignored):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("fixture\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text(pattern + "\n", encoding="utf-8")
+
+    patterns = _load_graphifyignore(tmp_path)
+    assert _is_ignored(target, tmp_path, patterns) is ignored
+    assert _is_ignored(target, tmp_path, patterns) is _git_ignored(tmp_path, relative)
+
+
+@pytest.mark.parametrize(
+    ("class_name", "sample"),
+    [
+        ("alnum", "A"),
+        ("alpha", "z"),
+        ("blank", " "),
+        ("cntrl", "\x01"),
+        ("digit", "7"),
+        ("graph", "!"),
+        ("lower", "a"),
+        ("print", " "),
+        ("punct", "_"),
+        ("space", "\t"),
+        ("upper", "Z"),
+        ("xdigit", "F"),
+    ],
+)
+def test_gitignore_posix_character_classes_compile_and_match(class_name, sample):
+    from graphify.detect import _gitignore_regex
+
+    regex = _gitignore_regex(f"[[:{class_name}:]]")
+    assert re.fullmatch(regex, sample) is not None
+
+
+def test_gitignore_posix_digit_class_matches_git(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    target = tmp_path / "1.txt"
+    target.write_text("fixture\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("[[:digit:]].txt\n", encoding="utf-8")
+
+    patterns = _load_graphifyignore(tmp_path)
+    assert _is_ignored(target, tmp_path, patterns)
+    assert _git_ignored(tmp_path, "1.txt")
+
+
+@pytest.mark.parametrize("ignore_name", [".gitignore", ".graphifyignore"])
+def test_cli_exclude_cannot_be_negated_by_descendant_ignore(tmp_path, ignore_name):
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "keep.py").write_text("value = 1\n", encoding="utf-8")
+    (nested / ignore_name).write_text("!keep.py\n", encoding="utf-8")
+
+    result = detect(tmp_path, extra_excludes=["*.py"])
+
+    assert result["files"]["code"] == []
+
+
+def test_nested_ignore_file_is_anchored_and_matches_git(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    docs = tmp_path / "docs"
+    other = tmp_path / "other"
+    docs.mkdir()
+    other.mkdir()
+    (tmp_path / ".gitignore").write_text("*.md\n", encoding="utf-8")
+    (docs / ".gitignore").write_text("!keep.md\n/private.md\n", encoding="utf-8")
+    for target in (docs / "keep.md", docs / "private.md", other / "keep.md"):
+        target.write_text("fixture\n", encoding="utf-8")
+
+    patterns = _load_graphifyignore(tmp_path)
+    for relative in ("docs/keep.md", "docs/private.md", "other/keep.md"):
+        target = tmp_path / relative
+        assert _is_ignored(target, tmp_path, patterns) is _git_ignored(tmp_path, relative)
+
+
+def test_gitignore_parser_preserves_inline_hash_and_escaped_trailing_space():
+    from graphify.detect import _parse_gitignore_line
+
+    assert _parse_gitignore_line("name # literal") == "name # literal"
+    assert _parse_gitignore_line(r"name\ ") == r"name\ "
+    assert _parse_gitignore_line(r"name\\ ") == r"name\\"
+    assert _parse_gitignore_line("name   ") == "name"
 
 
 def test_graphifyignore_comments_ignored(tmp_path):
@@ -432,6 +555,31 @@ def test_detect_incremental_survives_dict_valued_mtime(tmp_path, monkeypatch):
     # The drifted file is re-classified as new rather than silently skipped.
     assert any("mod.py" in f for f in result["new_files"]["code"])
     assert not any("mod.py" in f for f in result["unchanged_files"]["code"])
+
+
+@pytest.mark.parametrize("kind", ["ast", "semantic"])
+def test_detect_incremental_hashes_same_mtime_replacement(tmp_path, kind):
+    source = tmp_path / "module.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    manifest_path = tmp_path / "manifest.json"
+    detected = detect(tmp_path)
+    save_manifest(
+        detected["files"],
+        manifest_path=str(manifest_path),
+        kind="both",
+        root=tmp_path,
+    )
+    original = source.stat()
+    source.write_text("value = 2\n", encoding="utf-8")
+    os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+    incremental = detect_incremental(
+        tmp_path,
+        manifest_path=str(manifest_path),
+        kind=kind,
+    )
+
+    assert str(source) in incremental["new_files"]["code"]
 
 
 def test_classify_video_extensions():
@@ -884,9 +1032,8 @@ def test_sensitive_does_not_flag_tokenize_py():
     assert not _is_sensitive(Path("tokenize.py"))
 
 
-def test_sensitive_flags_passwords_py():
-    # passwords.py is just as likely a secret store as passwords.txt — code ext is no excuse
-    assert _is_sensitive(Path("passwords.py"))
+def test_sensitive_keeps_passwords_source_module():
+    assert not _is_sensitive(Path("passwords.py"))
 
 
 def test_sensitive_flags_ssh_dir():
@@ -918,10 +1065,8 @@ def test_sensitive_does_not_flag_root_file_named_credentials():
     assert _is_sensitive(p)
 
 
-def test_sensitive_secret_handler_txt():
-    # Both patterns now use (?![a-zA-Z]) so underscore after keyword is allowed.
-    # "secret_handler.txt": "secret" followed by "_" (not alpha) → flagged.
-    assert _is_sensitive(Path("secret_handler.txt"))
+def test_sensitive_keeps_security_topic_document():
+    assert not _is_sensitive(Path("secret_handler.txt"))
 
 
 def test_sensitive_token_config_yaml():
@@ -960,6 +1105,31 @@ def test_sensitive_flags_dotfile_token():
 
 def test_sensitive_flags_plural_tokens_txt():
     assert _is_sensitive(Path("tokens.txt"))
+
+
+def test_sensitive_flags_dotted_and_case_variant_paths():
+    assert _is_sensitive(Path("config.secrets.yaml"))
+    assert _is_sensitive(Path("SECRETS/prod.md"))
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["token.interceptor.ts", "password.validator.ts", "credentials.service.ts"],
+)
+def test_sensitive_keeps_security_named_code(path):
+    assert not _is_sensitive(Path(path))
+
+
+def test_detect_reports_credential_paths_separately_from_other_skips(tmp_path):
+    blocked = tmp_path / "config.secrets.yaml"
+    safe = tmp_path / "architecture.md"
+    blocked.write_text("password: h7Jx9Kp2Qw4Z", encoding="utf-8")
+    safe.write_text("# Architecture", encoding="utf-8")
+
+    result = detect(tmp_path)
+
+    assert result["blocked_egress"] == [str(blocked)]
+    assert str(safe) in result["files"]["document"]
 
 
 # ── Issue #933: failed-chunk files must not be frozen in manifest ─────────────

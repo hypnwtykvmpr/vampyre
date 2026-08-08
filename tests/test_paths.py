@@ -223,6 +223,18 @@ def test_resolve_scan_root_marker_rejects_foreign_absolute_path(tmp_path: Path) 
     assert resolve_scan_root_marker(marker) is None
 
 
+@pytest.mark.parametrize(
+    "payload",
+    ["C:escape", "marker-relative:C:escape", r"D:folder\escape"],
+)
+def test_resolve_scan_root_marker_rejects_drive_relative_payload(
+    tmp_path: Path, payload: str
+) -> None:
+    marker = tmp_path / ".graphify_root"
+    marker.write_text(payload, encoding="utf-8")
+    assert resolve_scan_root_marker(marker) is None
+
+
 def test_write_scan_root_marker_preserves_existing_marker_when_replace_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

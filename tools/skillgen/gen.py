@@ -32,6 +32,8 @@ except ModuleNotFoundError:  # Python 3.10 - graphify supports >=3.10
 from dataclasses import dataclass
 from pathlib import Path
 
+from graphify.semantic_schema import render_semantic_schema
+
 # tools/skillgen/gen.py -> repo root is two parents up.
 SKILLGEN_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SKILLGEN_DIR.parent.parent
@@ -336,6 +338,13 @@ def render(platform: Platform) -> list[RenderedArtifact]:
             body = _render_agents_md_hooks(platform)
         else:
             body = _read_fragment(references[name])
+        if name == "extraction-spec":
+            marker = "@@SEMANTIC_SCHEMA@@"
+            if body.count(marker) != 1:
+                raise ValueError(
+                    f"extraction schema template '{references[name]}' must contain one {marker}"
+                )
+            body = body.replace(marker, render_semantic_schema())
         rel = f"{platform.refs_dst}/{name}.md"
         artifacts.append(RenderedArtifact(rel, body))
     return artifacts

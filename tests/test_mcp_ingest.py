@@ -306,6 +306,73 @@ def test_non_dict_server_entry_skipped(tmp_path):
     assert "broken" not in server_labels
 
 
+def test_server_limit_accepts_boundary_and_refuses_incomplete_result(tmp_path):
+    at_limit = _write(
+        tmp_path,
+        "mcp.json",
+        {
+            "mcpServers": {
+                "one": {"command": "node"},
+                "two": {"command": "node"},
+            }
+        },
+    )
+    accepted = extract_mcp_config(at_limit, max_servers=2)
+    assert "error" not in accepted
+    assert set(_label_by_kind(accepted, "mcp_server")) == {"one", "two"}
+
+    over_limit = _write(
+        tmp_path,
+        ".mcp.json",
+        {
+            "mcpServers": {
+                "one": {"command": "node"},
+                "two": {"command": "node"},
+                "three": {"command": "node"},
+            }
+        },
+    )
+    refused = extract_mcp_config(over_limit, max_servers=2)
+    assert refused["nodes"] == []
+    assert refused["edges"] == []
+    assert refused["error"] == "mcp_ingest: 3 servers exceeds configured limit 2"
+
+
+def test_server_limit_can_be_configured_before_extraction(tmp_path, monkeypatch):
+    config = _write(
+        tmp_path,
+        ".mcp.json",
+        {
+            "mcpServers": {
+                "one": {"command": "node"},
+                "two": {"command": "node"},
+            }
+        },
+    )
+    monkeypatch.setenv("GRAPHIFY_MCP_MAX_SERVERS", "1")
+
+    result = extract_mcp_config(config)
+
+    assert result["nodes"] == []
+    assert result["edges"] == []
+    assert "configured limit 1" in result["error"]
+
+
+def test_invalid_server_limit_refuses_instead_of_guessing(tmp_path, monkeypatch):
+    config = _write(
+        tmp_path,
+        ".mcp.json",
+        {"mcpServers": {"one": {"command": "node"}}},
+    )
+    monkeypatch.setenv("GRAPHIFY_MCP_MAX_SERVERS", "unbounded")
+
+    result = extract_mcp_config(config)
+
+    assert result["nodes"] == []
+    assert result["edges"] == []
+    assert result["error"] == "mcp_ingest: GRAPHIFY_MCP_MAX_SERVERS must be a positive integer"
+
+
 # ── Edge case: package detection ─────────────────────────────────────────────
 
 

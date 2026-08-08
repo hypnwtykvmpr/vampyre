@@ -33,7 +33,10 @@ def _tracked_guidance_files() -> list[Path]:
 
 def test_tracked_guidance_uses_uv_and_installs_the_fork() -> None:
     forbidden_install = re.compile(
-        r"\b(?:p" + r"ip3?\s+(?:install|uninstall)|python[^\n]*-m\s+p" + r"ip\b|p" + r"ipx\b)",
+        r"\b(?:p"
+        + r"ip3?\s+(?:install|uninstall)|python[^\n]*-m\s+(?:p"
+        + r"ip|venv)\b|p"
+        + r"ipx\b|poetry\s+(?:install|add|remove|update)|conda\s+(?:install|create|env))",
         re.IGNORECASE,
     )
     ambiguous_uv = re.compile(
@@ -58,6 +61,34 @@ def test_project_metadata_points_to_the_fork() -> None:
     metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "https://github.com/hypnwtykvmpr/vampyre" in metadata
     assert "https://github.com/safishamsi/graphify" not in metadata
+
+
+def test_version_remains_human_controlled() -> None:
+    metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert 'version = "0.9.5"' in metadata
+
+
+def test_public_branch_guidance_uses_main_for_development() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    tracked_markdown = subprocess.run(
+        ["git", "ls-files", "*.md"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.splitlines()
+    retired_checkout = [
+        name
+        for name in tracked_markdown
+        if "git checkout v8" in (ROOT / name).read_text(encoding="utf-8", errors="replace")
+    ]
+
+    assert "git checkout main" in readme
+    assert "Active development happens on `main`" in readme
+    assert "`v9` is the accepted installation mirror" in readme
+    assert retired_checkout == []
 
 
 def test_ci_targets_active_branches_and_security_findings_block() -> None:
@@ -154,3 +185,84 @@ def test_removed_graph_backend_stays_absent() -> None:
         if forbidden in path.read_text(encoding="utf-8", errors="replace").lower()
     ]
     assert violations == []
+
+
+def test_tracked_home_paths_are_only_explicit_portability_examples() -> None:
+    home_pattern = re.compile(
+        r"[A-Za-z]:(?:\\Users\\|/Users/)[A-Za-z0-9._-]+"
+        r"|/home/[A-Za-z0-9._-]+|/Users/[A-Za-z0-9._-]+",
+        re.IGNORECASE,
+    )
+    allowed = {
+        "CHANGELOG.md": {"/Users/..."},
+        "graphify/extract.py": {"/home/victim"},
+        "tests/test_claude_cli_backend.py": {"/home/tester", "/home/alice"},
+        "tests/test_detect.py": {"/home/user"},
+        "tests/test_hooks.py": {r"C:\Users\u", r"c:/Users/u"},
+        "tests/test_paths.py": {r"C:\Users\dev"},
+        "tests/test_prs.py": {"/home/user"},
+    }
+    tracked = subprocess.run(
+        ["git", "ls-files"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.splitlines()
+    violations: list[str] = []
+    for name in tracked:
+        if name == "tests/test_fork_policy.py":
+            continue
+        path = ROOT / name
+        if not path.is_file():
+            continue
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+        ):
+            for match in home_pattern.findall(line):
+                if match not in allowed.get(name, set()):
+                    violations.append(f"{name}:{line_number}: {match}")
+
+    assert violations == []
+
+
+def test_force_guidance_matches_narrow_shrink_semantics() -> None:
+    surfaces = {
+        name: (ROOT / name).read_text(encoding="utf-8", errors="replace")
+        for name in ("README.md", "graphify/serve.py", "graphify/cache.py")
+    }
+    assert "graphify extract --full --force" in surfaces["graphify/serve.py"]
+    assert "clear ghost duplicates" not in surfaces["README.md"]
+    assert "bypass" not in "\n".join(
+        line.lower()
+        for line in surfaces["graphify/cache.py"].splitlines()
+        if "force" in line.lower()
+    )
+
+    contradictions: list[str] = []
+    unclassified_extract_force: list[str] = []
+    for path in _tracked_guidance_files():
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+        ):
+            lowered = line.lower()
+            if "full build with --force" in lowered:
+                contradictions.append(f"{path.relative_to(ROOT)}:{line_number}")
+            if "graphify extract" in lowered and "--force" in lowered:
+                is_full = "--full --force" in lowered
+                is_narrow = any(
+                    marker in lowered
+                    for marker in (
+                        "non-empty shrink",
+                        "verified non-empty",
+                        "непорожнє зменшення",
+                    )
+                )
+                if not (is_full or is_narrow):
+                    unclassified_extract_force.append(
+                        f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}"
+                    )
+
+    assert contradictions == []
+    assert unclassified_extract_force == []

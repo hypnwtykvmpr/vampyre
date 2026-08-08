@@ -1,11 +1,20 @@
 import json
+import os
 import subprocess
 import sys
+from typing import Any
 import networkx as nx
 import pytest
 from pathlib import Path
 from graphify.build import build_from_json
-from graphify.cluster import cluster, cohesion_score, remap_communities_to_previous, score_all
+from graphify.cluster import (
+    _partition,
+    cluster,
+    cohesion_score,
+    label_communities_by_hub,
+    remap_communities_to_previous,
+    score_all,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -54,6 +63,30 @@ def test_cohesion_score_range():
     for cid, nodes in communities.items():
         score = cohesion_score(G, nodes)
         assert 0.0 <= score <= 1.0
+
+
+def test_cohesion_directed_reciprocal_edges_use_undirected_topology():
+    graph = nx.DiGraph()
+    graph.add_edges_from(
+        (source, target) for source in "abc" for target in "abc" if source != target
+    )
+
+    assert cohesion_score(graph, list("abc")) == 1.0
+
+
+def test_hub_label_tie_break_is_type_aware_and_insertion_independent():
+    first = nx.Graph()
+    first.add_nodes_from([1, "1"])
+    first.nodes[1]["label"] = "integer"
+    first.nodes["1"]["label"] = "string"
+    second = nx.Graph()
+    second.add_nodes_from(["1", 1])
+    second.nodes[1]["label"] = "integer"
+    second.nodes["1"]["label"] = "string"
+
+    assert label_communities_by_hub(first, {0: [1, "1"]}) == label_communities_by_hub(
+        second, {0: ["1", 1]}
+    )
 
 
 def test_score_all_keys_match_communities():
@@ -107,6 +140,225 @@ def test_remap_communities_to_previous_assigns_deterministic_new_ids():
     assert list(remapped.keys()) == [0, 1]
     assert remapped[0] == ["x", "y", "z"]
     assert remapped[1] == ["m"]
+
+
+def test_remap_communities_uses_global_maximum_overlap():
+    """One locally largest overlap must not block a better total assignment."""
+    communities = {
+        10: ["a", "b", "c", "d", "h", "i", "j"],
+        11: ["e", "f", "g"],
+    }
+    previous = {
+        "a": 0,
+        "b": 0,
+        "c": 0,
+        "d": 0,
+        "e": 0,
+        "f": 0,
+        "g": 0,
+        "h": 1,
+        "i": 1,
+        "j": 1,
+    }
+
+    remapped = remap_communities_to_previous(communities, previous)
+
+    assert remapped[0] == ["e", "f", "g"]
+    assert remapped[1] == ["a", "b", "c", "d", "h", "i", "j"]
+
+
+def test_remap_communities_equal_overlap_tie_is_insertion_order_independent():
+    previous = {"a": 4, "b": 4, "c": 7, "d": 7}
+    forward = {20: ["a", "c"], 21: ["b", "d"]}
+    reversed_input = {21: ["d", "b"], 20: ["c", "a"]}
+
+    expected = remap_communities_to_previous(forward, previous)
+    assert (
+        remap_communities_to_previous(reversed_input, dict(reversed(list(previous.items()))))
+        == expected
+    )
+
+
+def _capture_native_edges(
+    monkeypatch: pytest.MonkeyPatch, graph: nx.Graph
+) -> list[tuple[str, str, float]]:
+    import graspologic_native
+
+    captured: list[tuple[str, str, float]] = []
+
+    def fake_leiden(*, edges: list[tuple[str, str, float]], **_kwargs: Any):
+        captured.extend(edges)
+        nodes = {node for edge in edges for node in edge[:2]}
+        return 0.0, {node: 0 for node in nodes}
+
+    monkeypatch.setattr(graspologic_native, "leiden", fake_leiden)
+    _partition(graph)
+    assert captured, "fixture must exercise native Leiden with at least one edge"
+    return captured
+
+
+def test_partition_canonicalizes_undirected_orientation_before_sort(monkeypatch):
+    first = nx.Graph()
+    first.add_nodes_from(["b", "a", "z"])
+    first.add_edge("a", "z", weight=1.0)
+    first.add_edge("b", "a", weight=1.0)
+
+    second = nx.Graph()
+    second.add_nodes_from(["z", "a", "b"])
+    second.add_edge("z", "a", weight=1.0)
+    second.add_edge("a", "b", weight=1.0)
+
+    first_edges = _capture_native_edges(monkeypatch, first)
+    second_edges = _capture_native_edges(monkeypatch, second)
+
+    assert first_edges == second_edges
+
+
+def test_partition_native_supports_mixed_node_id_types(monkeypatch):
+    graph = nx.Graph()
+    graph.add_edges_from([(1, "1"), ("1", 2)])
+
+    partition = _partition(graph)
+
+    assert set(partition) == {1, "1", 2}
+
+
+def test_partition_louvain_supports_mixed_node_id_types(monkeypatch):
+    monkeypatch.setitem(sys.modules, "graspologic_native", None)
+    graph = nx.Graph()
+    graph.add_edges_from([(1, "1"), ("1", 2)])
+
+    partition = _partition(graph)
+
+    assert set(partition) == {1, "1", 2}
+
+
+def test_cluster_edgeless_mixed_node_id_types():
+    graph = nx.Graph()
+    graph.add_nodes_from([1, "1", 2])
+
+    communities = cluster(graph)
+
+    assert {node for members in communities.values() for node in members} == {1, "1", 2}
+
+
+@pytest.mark.parametrize("backend", ["native", "louvain"])
+@pytest.mark.parametrize(
+    "case",
+    ["connected", "disconnected", "edgeless", "parallel", "malformed", "all_zero", "mixed"],
+)
+def test_cluster_is_stable_across_backend_and_graph_shape(monkeypatch, backend, case):
+    native_calls = 0
+    if backend == "native":
+        import graspologic_native
+
+        real_leiden = graspologic_native.leiden
+
+        def counted_leiden(*args, **kwargs):
+            nonlocal native_calls
+            native_calls += 1
+            return real_leiden(*args, **kwargs)
+
+        monkeypatch.setattr(graspologic_native, "leiden", counted_leiden)
+    if backend == "louvain":
+        monkeypatch.setitem(sys.modules, "graspologic_native", None)
+
+    graph: nx.Graph
+    if case == "connected":
+        graph = nx.Graph([("a", "b"), ("b", "c"), ("c", "a"), ("c", "d")])
+    elif case == "disconnected":
+        graph = nx.Graph([("a", "b"), ("c", "d")])
+        graph.add_node("isolated")
+    elif case == "edgeless":
+        graph = nx.Graph()
+        graph.add_nodes_from(["a", 1, "1"])
+    elif case == "parallel":
+        graph = nx.MultiDiGraph()
+        graph.add_nodes_from(["a", "b", "c"])
+        for index in range(8):
+            graph.add_edge("a", "b", key=f"ab-{index}", confidence="EXTRACTED")
+        for index in range(5):
+            graph.add_edge("b", "c", key=f"bc-{index}", confidence="INFERRED")
+    elif case == "malformed":
+        graph = nx.Graph()
+        graph.add_edge("a", "b", weight=None)
+        graph.add_edge("b", "c", weight=float("nan"))
+        graph.add_edge("c", "d", weight=float("inf"))
+        graph.add_edge("d", "a", weight=-1.0)
+    elif case == "all_zero":
+        graph = nx.Graph()
+        graph.add_weighted_edges_from([("a", "b", 0.0), ("b", "c", 0.0)])
+    else:
+        graph = nx.Graph([(1, "1"), ("1", 2), (2, "2")])
+
+    expected = cluster(graph)
+    for _ in range(3):
+        assert cluster(graph) == expected
+    assert {node for members in expected.values() for node in members} == set(graph.nodes)
+    if backend == "native":
+        expected_calls = 0 if graph.number_of_edges() == 0 else 4
+        assert native_calls == expected_calls
+
+
+@pytest.mark.parametrize("backend", ["native", "louvain"])
+def test_cluster_is_stable_across_processes_and_hash_seeds(backend):
+    fallback = "sys.modules['graspologic_native'] = None" if backend == "louvain" else ""
+    code = f"""
+import json
+import networkx as nx
+import sys
+from graphify.cluster import cluster
+{fallback}
+graph = nx.Graph()
+for source, target in {{('alpha', 'beta'), ('alpha', 'gamma'), ('beta', 'delta'),
+                       ('gamma', 'delta'), ('delta', 'epsilon'), ('zeta', 'eta')}}:
+    graph.add_edge(source, target, weight=1.0)
+print(json.dumps(cluster(graph), sort_keys=True))
+"""
+    outputs = []
+    for seed in ("1", "17", "31337"):
+        env = dict(os.environ)
+        env["PYTHONHASHSEED"] = seed
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=300,
+        )
+        assert result.returncode == 0, result.stderr
+        outputs.append(result.stdout)
+    assert len(set(outputs)) == 1
+
+
+def test_remap_communities_split_keeps_only_best_overlap_on_old_id():
+    communities = {10: ["a", "b", "c"], 11: ["d", "e"]}
+    previous = {node: 4 for node in "abcde"}
+
+    remapped = remap_communities_to_previous(communities, previous)
+
+    assert remapped[4] == ["a", "b", "c"]
+    assert remapped[0] == ["d", "e"]
+
+
+def test_remap_communities_merge_uses_largest_prior_overlap():
+    communities = {10: ["a", "b", "c", "d", "e"]}
+    previous = {"a": 3, "b": 3, "c": 3, "d": 8, "e": 8}
+
+    assert remap_communities_to_previous(communities, previous) == {3: ["a", "b", "c", "d", "e"]}
+
+
+def test_remap_communities_empty_and_mixed_ids():
+    assert remap_communities_to_previous({}, {"old": 1}) == {}
+    communities = {9: [1, "1"], 10: [2, "2"]}
+    previous = {1: 6, "1": 6, 2: 7, "2": 7}
+
+    assert remap_communities_to_previous(communities, previous) == {
+        6: [1, "1"],
+        7: [2, "2"],
+    }
 
 
 # --- MultiDiGraph safety tests (PR 4B) ---
@@ -277,17 +529,11 @@ def test_cluster_survives_malformed_edge_weights(weight_expr):
     assert "OK" in r.stdout
 
 
-def test_existing_is_multigraph_agrees_with_loader_on_explicit_flag():
-    """The detector must not let a stale profile override an explicit flag.
-
-    load_graph treats the top-level `multigraph` boolean as authoritative, so a
-    helper that returned True for `multigraph: false` + a stale
-    graphify_profile=multidigraph would rebuild a MultiDiGraph for a payload
-    every reader loads as a DiGraph. The profile is a fallback for an ABSENT
-    flag only.
-    """
+def test_stateful_class_detection_is_stricter_than_read_only_legacy_loading():
+    """Stateful writes require complete declarations; read-only legacy loads may rescue."""
+    from graphify.graph_state import GraphStateError
     from graphify.graph_loader import load_graph
-    from graphify.watch import _existing_is_multigraph
+    from graphify.watch import _existing_graph_type
 
     stale_profile = {"graphify_profile": {"graph_type": "multidigraph"}}
     base_nodes = [{"id": "a", "label": "a"}, {"id": "b", "label": "b"}]
@@ -300,12 +546,18 @@ def test_existing_is_multigraph_agrees_with_loader_on_explicit_flag():
         "nodes": base_nodes,
         "links": base_links,
     }
-    assert _existing_is_multigraph(contradictory) is False
-    assert not isinstance(load_graph(contradictory), nx.MultiDiGraph)
+    with pytest.raises(GraphStateError, match="profile conflicts with class flags"):
+        _existing_graph_type(contradictory)
+    with pytest.raises(GraphStateError, match="profile conflicts with class flags"):
+        load_graph(contradictory)
 
-    # Flag absent: the profile marker still rescues it (original defensive intent).
+    # A read-only inspection can rescue an unambiguous legacy class declaration.
+    # A stateful rebuild must refuse it rather than overwrite the payload with a
+    # class inferred from incomplete fields.
     rescued = {"directed": True, "graph": stale_profile, "nodes": base_nodes, "links": base_links}
-    assert _existing_is_multigraph(rescued) is True
+    with pytest.raises(GraphStateError, match="directed and multigraph flags are required"):
+        _existing_graph_type(rescued)
+    assert isinstance(load_graph(rescued), nx.MultiDiGraph)
 
     explicit_multi = {
         "directed": True,
@@ -314,7 +566,7 @@ def test_existing_is_multigraph_agrees_with_loader_on_explicit_flag():
         "nodes": base_nodes,
         "links": base_links,
     }
-    assert _existing_is_multigraph(explicit_multi) is True
+    assert _existing_graph_type(explicit_multi) == "multidigraph"
     assert isinstance(load_graph(explicit_multi), nx.MultiDiGraph)
 
 

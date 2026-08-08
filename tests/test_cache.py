@@ -1,6 +1,7 @@
 """Tests for graphify/cache.py."""
 
 import json
+import os
 import pytest
 from graphify.cache import (
     file_hash,
@@ -42,6 +43,43 @@ def test_file_hash_changes(tmp_path):
     f1.write_text("content one", encoding="utf-8")
     f2.write_text("content two", encoding="utf-8")
     assert file_hash(f1) != file_hash(f2)
+
+
+def test_file_hash_detects_same_size_same_mtime_replacement(tmp_path):
+    source = tmp_path / "module.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    original_stat = source.stat()
+    original_hash = file_hash(source, tmp_path, cache_root=tmp_path)
+
+    source.write_text("value = 2\n", encoding="utf-8")
+    os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+    assert source.stat().st_size == original_stat.st_size
+    assert source.stat().st_mtime_ns == original_stat.st_mtime_ns
+    assert file_hash(source, tmp_path, cache_root=tmp_path) != original_hash
+
+
+def test_file_hash_preserves_case_on_case_sensitive_filesystems(tmp_path):
+    upper = tmp_path / "Case.py"
+    lower = tmp_path / "case.py"
+    upper.write_text("same bytes\n", encoding="utf-8")
+    lower.write_text("same bytes\n", encoding="utf-8")
+
+    if upper.samefile(lower):
+        assert file_hash(upper, tmp_path) == file_hash(lower, tmp_path)
+    else:
+        assert file_hash(upper, tmp_path) != file_hash(lower, tmp_path)
+
+
+def test_file_hash_casefolds_unambiguous_mixed_case_identity(tmp_path):
+    import hashlib
+
+    source = tmp_path / "MixedCase.py"
+    content = b"same bytes\n"
+    source.write_bytes(content)
+    expected = hashlib.sha256(content + b"\x00" + b"mixedcase.py").hexdigest()
+
+    assert file_hash(source, tmp_path) == expected
 
 
 def test_cache_roundtrip(tmp_file, cache_root):
@@ -147,11 +185,167 @@ def test_semantic_cache_separates_storage_and_source_roots(tmp_path):
     assert cached_edges == []
     assert cached_hyperedges == []
     assert uncached == []
-    entries = list((storage_root / "graphify-out" / "cache" / "semantic").glob("*.json"))
+    entries = list(cache_dir(storage_root, "semantic").glob("*.json"))
     assert len(entries) == 1
     on_disk = json.loads(entries[0].read_text(encoding="utf-8"))
-    assert on_disk["nodes"][0]["source_file"] == "notes.md"
+    assert on_disk["fragment"]["nodes"][0]["source_file"] == "notes.md"
+    assert on_disk["identity"]["prompt_schema_version"]
     assert not (source_root / "graphify-out").exists()
+
+
+def test_semantic_cache_identity_separates_backend_model_and_endpoint(tmp_path):
+    source = tmp_path / "notes.md"
+    source.write_text("# Notes\n", encoding="utf-8")
+    result = {"nodes": [{"id": "notes", "source_file": str(source)}], "edges": []}
+    first = {
+        "backend": "openai",
+        "model": "model-a",
+        "endpoint_digest": "a" * 64,
+    }
+    second = {
+        "backend": "openai",
+        "model": "model-b",
+        "endpoint_digest": "b" * 64,
+    }
+
+    assert save_cached(
+        source,
+        result,
+        root=tmp_path,
+        kind="semantic",
+        semantic_provenance=first,
+    )
+    assert save_cached(
+        source,
+        result,
+        root=tmp_path,
+        kind="semantic",
+        semantic_provenance=second,
+    )
+    assert load_cached(source, root=tmp_path, kind="semantic") is None
+    assert (
+        load_cached(
+            source,
+            root=tmp_path,
+            kind="semantic",
+            semantic_provenance=first,
+        )
+        == result
+    )
+
+
+def test_semantic_cache_identity_separates_mode_and_chunk_contract(tmp_path):
+    from graphify.semantic_schema import semantic_provenance
+
+    source = tmp_path / "notes.md"
+    source.write_text("# Notes\n", encoding="utf-8")
+    result = {"nodes": [{"id": "notes", "source_file": str(source)}], "edges": []}
+    standard = semantic_provenance(
+        backend="openai",
+        model="model-a",
+        endpoint="https://api.example/v1",
+    )
+    deep = semantic_provenance(
+        backend="openai",
+        model="model-a",
+        endpoint="https://api.example/v1",
+        deep_mode=True,
+    )
+    smaller_budget = semantic_provenance(
+        backend="openai",
+        model="model-a",
+        endpoint="https://api.example/v1",
+        token_budget=10_000,
+    )
+
+    assert save_cached(
+        source,
+        result,
+        root=tmp_path,
+        kind="semantic",
+        semantic_provenance=standard,
+    )
+    assert (
+        load_cached(
+            source,
+            root=tmp_path,
+            kind="semantic",
+            semantic_provenance=deep,
+        )
+        is None
+    )
+    assert (
+        load_cached(
+            source,
+            root=tmp_path,
+            kind="semantic",
+            semantic_provenance=smaller_budget,
+        )
+        is None
+    )
+    assert (
+        load_cached(
+            source,
+            root=tmp_path,
+            kind="semantic",
+            semantic_requirements={"model": "model-a", "extraction_mode": "standard"},
+        )
+        == result
+    )
+    assert (
+        load_cached(
+            source,
+            root=tmp_path,
+            kind="semantic",
+            semantic_requirements={"model": "model-b", "extraction_mode": "standard"},
+        )
+        is None
+    )
+
+
+def test_semantic_cache_rejects_previous_prompt_schema(tmp_path):
+    from graphify.cache import file_hash
+
+    source = tmp_path / "notes.md"
+    source.write_text("# Notes\n", encoding="utf-8")
+    semantic_dir = cache_dir(tmp_path, "semantic")
+    digest = file_hash(source, tmp_path)
+    stale = semantic_dir / f"{digest}--{'0' * 64}.json"
+    stale.write_text(
+        json.dumps(
+            {
+                "identity": {
+                    "prompt_schema_version": "semantic-v0",
+                    "backend": "openai",
+                    "model": "model-a",
+                    "endpoint_digest": "a" * 64,
+                },
+                "fragment": {"nodes": [], "edges": [], "hyperedges": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_cached(source, root=tmp_path, kind="semantic") is None
+
+
+def test_semantic_cache_rejects_and_prunes_legacy_provenance_less_entry(tmp_path):
+    from graphify.cache import file_hash, prune_semantic_cache
+
+    source = tmp_path / "notes.md"
+    source.write_text("# Notes\n", encoding="utf-8")
+    digest = file_hash(source, tmp_path)
+    legacy_dir = tmp_path / "graphify-out" / "cache" / "semantic"
+    legacy_dir.mkdir(parents=True)
+    legacy = legacy_dir / f"{digest}.json"
+    legacy.write_text(
+        json.dumps({"nodes": [{"id": "unsafe-legacy"}], "edges": [], "hyperedges": []}),
+        encoding="utf-8",
+    )
+
+    assert load_cached(source, root=tmp_path, kind="semantic") is None
+    assert prune_semantic_cache(tmp_path, {digest}) == 1
+    assert not legacy.exists()
 
 
 def test_cache_miss_on_change(tmp_file, cache_root):
@@ -372,7 +566,7 @@ def test_cache_path_normalizers_preserve_foreign_absolute_paths(tmp_path, foreig
     assert payload["nodes"][0]["source_file"] == foreign
 
 
-def test_load_cached_passes_through_legacy_absolute_source_file(tmp_path):
+def test_load_cached_migrates_legacy_in_root_absolute_source_file(tmp_path):
     """Cache entries written by an older graphify (with absolute source_file
     inside) must still load correctly: the absolutize step is a no-op for
     already-absolute values."""
@@ -400,6 +594,112 @@ def test_load_cached_passes_through_legacy_absolute_source_file(tmp_path):
     loaded = load_cached(src, root=tmp_path, kind="ast")
     assert loaded is not None
     assert loaded["nodes"][0]["source_file"] == abs_src
+    migrated = json.loads(entry.read_text(encoding="utf-8"))
+    assert migrated["nodes"][0]["source_file"] == "src/foo.py"
+
+
+@pytest.mark.parametrize(
+    "foreign",
+    [r"C:\foreign\src\foo.py", r"\\host\share\foo.py", "/foreign/src/foo.py"],
+)
+def test_load_cached_refuses_foreign_absolute_provenance(tmp_path, foreign):
+    src = tmp_path / "foo.py"
+    src.write_text("pass\n", encoding="utf-8")
+    h = file_hash(src, tmp_path)
+    entry = cache_dir(tmp_path, "ast") / f"{h}.json"
+    entry.write_text(
+        json.dumps({"nodes": [{"id": "n1", "source_file": foreign}], "edges": []}),
+        encoding="utf-8",
+    )
+
+    assert load_cached(src, root=tmp_path, kind="ast") is None
+
+
+def test_save_cached_refuses_error_and_out_of_root_provenance(tmp_path):
+    src = tmp_path / "foo.py"
+    src.write_text("pass\n", encoding="utf-8")
+
+    assert not save_cached(src, {"nodes": [], "edges": [], "error": "failed"}, root=tmp_path)
+    assert not save_cached(
+        src,
+        {"nodes": [{"id": "n1", "source_file": "/foreign/foo.py"}], "edges": []},
+        root=tmp_path,
+    )
+    assert list((tmp_path / "graphify-out" / "cache" / "ast").rglob("*.json")) == []
+
+
+def test_load_cached_refuses_legacy_error_entry(tmp_path):
+    src = tmp_path / "foo.py"
+    src.write_text("pass\n", encoding="utf-8")
+    h = file_hash(src, tmp_path)
+    entry = cache_dir(tmp_path, "ast") / f"{h}.json"
+    entry.write_text(
+        json.dumps({"nodes": [], "edges": [], "error": "old failure"}),
+        encoding="utf-8",
+    )
+
+    assert load_cached(src, root=tmp_path, kind="ast") is None
+
+
+@pytest.mark.parametrize("source_file", ["../outside.py", r"C:relative\outside.py"])
+def test_load_cached_refuses_relative_provenance_escape(tmp_path, source_file):
+    src = tmp_path / "foo.py"
+    src.write_text("pass\n", encoding="utf-8")
+    h = file_hash(src, tmp_path)
+    entry = cache_dir(tmp_path, "ast") / f"{h}.json"
+    entry.write_text(
+        json.dumps({"nodes": [{"id": "n1", "source_file": source_file}], "edges": []}),
+        encoding="utf-8",
+    )
+
+    assert load_cached(src, root=tmp_path, kind="ast") is None
+
+
+def test_cache_refuses_source_outside_declared_source_root(tmp_path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text("pass\n", encoding="utf-8")
+
+    assert not save_cached(outside, {"nodes": [], "edges": []}, root=source_root)
+    assert load_cached(outside, root=source_root) is None
+
+
+def test_save_cached_replace_failure_preserves_existing_entry(tmp_path, monkeypatch):
+    import graphify.cache as cache_mod
+    import graphify.persistence as persistence_mod
+
+    src = tmp_path / "foo.py"
+    src.write_text("pass\n", encoding="utf-8")
+    save_cached(src, {"nodes": [{"id": "old"}], "edges": []}, root=tmp_path)
+    entry = cache_dir(tmp_path, "ast") / f"{file_hash(src, tmp_path)}.json"
+    before = entry.read_bytes()
+
+    def fail_replace(source, target):
+        raise PermissionError("simulated replace failure")
+
+    monkeypatch.setattr(persistence_mod.os, "replace", fail_replace)
+    monkeypatch.setattr(cache_mod.os, "replace", fail_replace)
+    with pytest.raises(PermissionError, match="simulated replace failure"):
+        save_cached(src, {"nodes": [{"id": "new"}], "edges": []}, root=tmp_path)
+
+    assert entry.read_bytes() == before
+
+
+def test_stat_index_prunes_deleted_sources(tmp_path, monkeypatch):
+    import graphify.cache as cache_mod
+
+    source = tmp_path / "gone.py"
+    source.write_text("pass\n", encoding="utf-8")
+    monkeypatch.setattr(cache_mod, "_stat_index", {})
+    monkeypatch.setattr(cache_mod, "_stat_index_root", None)
+    monkeypatch.setattr(cache_mod, "_stat_index_dirty", False)
+    file_hash(source, tmp_path, cache_root=tmp_path)
+    source.unlink()
+    cache_mod._flush_stat_index()
+
+    index_path = tmp_path / "graphify-out" / "cache" / "stat-index.json"
+    assert json.loads(index_path.read_text(encoding="utf-8")) == {}
 
 
 def test_cache_portable_across_roots(tmp_path):
@@ -440,11 +740,10 @@ def test_cache_portable_across_roots(tmp_path):
 
 # --- AST cache versioning ----------------------------------------------------
 # AST cache entries are the output of graphify's own extractor code, so they
-# are only valid for the graphify version that wrote them. Keying purely on
-# file content meant extractor fixes shipped in a new release kept serving
-# stale pre-fix results. The AST cache is therefore namespaced by package
-# version; the semantic cache is NOT (invalidating it would re-bill LLM
-# extraction for unchanged files).
+# are valid only for both the package version and the extractor schema that
+# wrote them. The schema component matters when a correctness fix ships without
+# a human-authorized package-version change. The semantic cache has its own
+# prompt-schema namespace instead.
 
 
 def test_ast_cache_invalidated_on_version_bump(tmp_path, monkeypatch):
@@ -463,6 +762,34 @@ def test_ast_cache_invalidated_on_version_bump(tmp_path, monkeypatch):
     assert load_cached(f, root=tmp_path, kind="ast") is None, (
         "AST cache entry from a previous graphify version must not be served"
     )
+
+
+def test_ast_cache_invalidated_on_schema_change_without_version_bump(tmp_path, monkeypatch):
+    """An extractor-schema change must invalidate AST entries even when the
+    package version is intentionally unchanged."""
+    import graphify.cache as cache_mod
+
+    f = tmp_path / "pyproject.toml"
+    f.write_text('[project]\nname = "demo"\n', encoding="utf-8")
+
+    monkeypatch.setattr(cache_mod, "_EXTRACTOR_VERSION", "0.9.5", raising=False)
+    monkeypatch.setattr(cache_mod, "_AST_CACHE_SCHEMA", "node-id-v0", raising=False)
+    save_cached(
+        f,
+        {"nodes": [{"id": "pkg_demo"}], "edges": []},
+        root=tmp_path,
+        kind="ast",
+    )
+    legacy_dir = cache_dir(tmp_path, "ast")
+    assert load_cached(f, root=tmp_path, kind="ast") is not None
+
+    monkeypatch.setattr(cache_mod, "_AST_CACHE_SCHEMA", "node-id-v1", raising=False)
+    assert load_cached(f, root=tmp_path, kind="ast") is None
+
+    monkeypatch.setattr(cache_mod, "_cleaned_ast_dirs", set(), raising=False)
+    current_dir = cache_dir(tmp_path, "ast")
+    assert current_dir != legacy_dir
+    assert not legacy_dir.exists()
 
 
 def test_ast_cache_version_bump_cleans_stale_entries(tmp_path, monkeypatch):
@@ -577,13 +904,15 @@ def test_semantic_prune_removes_orphan_entries(tmp_path):
     save_cached(f, {"nodes": [{"id": "b"}], "edges": []}, root=tmp_path, kind="semantic")
 
     semantic_dir = cache_dir(tmp_path, "semantic")
-    assert (semantic_dir / f"{h_a}.json").exists()
-    assert (semantic_dir / f"{h_b}.json").exists()
+    entry_a = next(semantic_dir.glob(f"{h_a}--*.json"))
+    entry_b = next(semantic_dir.glob(f"{h_b}--*.json"))
+    assert entry_a.exists()
+    assert entry_b.exists()
 
     pruned = prune_semantic_cache(tmp_path, {h_b})
     assert pruned == 1
-    assert not (semantic_dir / f"{h_a}.json").exists()
-    assert (semantic_dir / f"{h_b}.json").exists()
+    assert not entry_a.exists()
+    assert entry_b.exists()
 
 
 def test_semantic_prune_keeps_live_unchanged_entries(tmp_path):
@@ -617,13 +946,14 @@ def test_semantic_prune_handles_deleted_file(tmp_path):
     h = file_hash(f, tmp_path)
     save_cached(f, {"nodes": [{"id": "g"}], "edges": []}, root=tmp_path, kind="semantic")
     semantic_dir = cache_dir(tmp_path, "semantic")
-    assert (semantic_dir / f"{h}.json").exists()
+    entry = next(semantic_dir.glob(f"{h}--*.json"))
+    assert entry.exists()
 
     f.unlink()
     # Live set is empty: the file is gone, so its entry must be pruned.
     pruned = prune_semantic_cache(tmp_path, set())
     assert pruned == 1
-    assert not (semantic_dir / f"{h}.json").exists()
+    assert not entry.exists()
 
 
 def test_semantic_prune_ignores_ast_and_tmp(tmp_path):

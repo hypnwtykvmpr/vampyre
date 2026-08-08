@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from graphify.paths import resolve_scan_root_marker, write_scan_root_marker
+from graphify.ids import CURRENT_AST_NODE_ID_SCHEMA
+from graphify.semantic_schema import LEGACY_SEMANTIC_NODE_ID_SCHEMA, PROMPT_SCHEMA_VERSION
 from graphify.update_state import UpdateStateError, repair_update_state, resolve_update_context
 
 
@@ -28,7 +30,13 @@ def _write_state(
             {
                 "directed": directed,
                 "multigraph": multigraph,
-                "graph": {"graphify_profile": {"graph_type": graph_type}},
+                "graph": {
+                    "graphify_profile": {
+                        "graph_type": graph_type,
+                        "ast_node_id_schema": CURRENT_AST_NODE_ID_SCHEMA,
+                        "semantic_node_id_schema": PROMPT_SCHEMA_VERSION,
+                    }
+                },
                 "nodes": [],
                 "links": [],
             }
@@ -87,6 +95,87 @@ def test_resolve_update_context_rejects_profile_conflict(tmp_path):
 
     with pytest.raises(UpdateStateError, match="profile conflicts"):
         resolve_update_context(output_root=output_root)
+
+
+def test_resolve_update_context_allows_unmarked_ast_identity_for_full_ast_migration(tmp_path):
+    source = tmp_path / "Sources"
+    output_root = tmp_path / "canonical"
+    output = _write_state(source, output_root)
+    graph_path = output / "graph.json"
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    graph["graph"]["graphify_profile"].pop("ast_node_id_schema")
+    graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+    with pytest.raises(UpdateStateError, match="ordinary `graphify update`"):
+        resolve_update_context(source, output_root=output_root)
+
+    context = resolve_update_context(
+        source,
+        output_root=output_root,
+        allow_unmarked_legacy_ast_ids=True,
+    )
+    assert context.scan_root == source.resolve()
+
+
+def test_resolve_update_context_refuses_unknown_ast_identity_schema_even_for_migration(tmp_path):
+    source = tmp_path / "Sources"
+    output_root = tmp_path / "canonical"
+    output = _write_state(source, output_root)
+    graph_path = output / "graph.json"
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    graph["graph"]["graphify_profile"]["ast_node_id_schema"] = "future-v99"
+    graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+    with pytest.raises(UpdateStateError, match="unsupported AST node-ID schema"):
+        resolve_update_context(
+            source,
+            output_root=output_root,
+            allow_unmarked_legacy_ast_ids=True,
+        )
+
+
+def test_resolve_update_context_refuses_conflicting_identity_schema_declarations(tmp_path):
+    source = tmp_path / "Sources"
+    output_root = tmp_path / "canonical"
+    output = _write_state(source, output_root)
+    graph_path = output / "graph.json"
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    graph["graphify_profile"] = {
+        "graph_type": "simple",
+        "ast_node_id_schema": "other-v1",
+        "semantic_node_id_schema": PROMPT_SCHEMA_VERSION,
+    }
+    graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+    with pytest.raises(UpdateStateError, match="AST node-ID schemas conflict"):
+        resolve_update_context(source, output_root=output_root)
+
+
+def test_resolve_update_context_accepts_explicit_legacy_semantic_identity(tmp_path):
+    source = tmp_path / "Sources"
+    output_root = tmp_path / "canonical"
+    output = _write_state(source, output_root)
+    graph_path = output / "graph.json"
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    graph["graph"]["graphify_profile"]["semantic_node_id_schema"] = LEGACY_SEMANTIC_NODE_ID_SCHEMA
+    graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+    context = resolve_update_context(source, output_root=output_root)
+
+    assert context.scan_root == source.resolve()
+
+
+def test_resolve_update_context_refuses_unknown_semantic_identity_schema(tmp_path):
+    source = tmp_path / "Sources"
+    output_root = tmp_path / "canonical"
+    output = _write_state(source, output_root)
+    graph_path = output / "graph.json"
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    graph["graph"]["graphify_profile"]["semantic_node_id_schema"] = "future-semantic-v99"
+    graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+    with pytest.raises(UpdateStateError, match="unsupported semantic node-ID schema"):
+        resolve_update_context(source, output_root=output_root)
 
 
 @pytest.mark.parametrize("profile", [None, {}, {"custom": "value"}])
@@ -159,6 +248,26 @@ def test_repair_update_state_writes_only_missing_marker(tmp_path):
         if path.is_file() and path.name != ".graphify_root"
     }
     assert after == before
+
+
+@pytest.mark.parametrize("operation", ["resolve", "repair"])
+def test_stateful_update_reads_enforce_graph_file_size_cap(tmp_path, monkeypatch, operation):
+    source = tmp_path / "Sources"
+    output_root = tmp_path / "canonical"
+    if operation == "resolve":
+        output = _write_state(source, output_root)
+    else:
+        output = _write_repairable_state(source, output_root)
+    monkeypatch.setenv("GRAPHIFY_MAX_GRAPH_BYTES", "1")
+
+    with pytest.raises(UpdateStateError, match="exceeds 1-byte cap"):
+        if operation == "resolve":
+            resolve_update_context(source, output_root=output_root)
+        else:
+            repair_update_state(source, output_root=output_root)
+
+    if operation == "repair":
+        assert not (output / ".graphify_root").exists()
 
 
 @pytest.mark.parametrize("defect", ["missing_manifest", "invalid_profile", "wrong_root"])

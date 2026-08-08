@@ -28,7 +28,7 @@ def _run(args, cwd):
     )
 
 
-def _write(p: Path, directed: bool, multigraph: bool, node_id: str):
+def _write(p: Path, directed: bool, multigraph: bool, node_id: str, *, peer_id: str | None = None):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
         json.dumps(
@@ -36,8 +36,11 @@ def _write(p: Path, directed: bool, multigraph: bool, node_id: str):
                 "directed": directed,
                 "multigraph": multigraph,
                 "graph": {},
-                "nodes": [{"id": node_id}],
+                "nodes": [{"id": node_id}] + ([{"id": peer_id}] if peer_id else []),
                 "links": [],
+                "hyperedges": (
+                    [{"id": f"flow-{node_id}", "nodes": [node_id, peer_id]}] if peer_id else []
+                ),
             }
         ),
         encoding="utf-8",
@@ -50,7 +53,7 @@ def test_merge_graphs_mixed_directed_and_multigraph(tmp_path):
     c = tmp_path / "r3" / "graphify-out" / "graph.json"
     _write(a, directed=True, multigraph=False, node_id="x")  # DiGraph
     _write(b, directed=False, multigraph=False, node_id="y")  # Graph
-    _write(c, directed=False, multigraph=True, node_id="z")  # MultiGraph
+    _write(c, directed=True, multigraph=True, node_id="z")  # MultiDiGraph
     out = tmp_path / "merged.json"
 
     r = _run(["merge-graphs", str(a), str(b), str(c), "--out", str(out)], tmp_path)
@@ -74,7 +77,7 @@ def test_merge_graphs_mixed_explicit_simple_collapses(tmp_path):
     c = tmp_path / "r3" / "graphify-out" / "graph.json"
     _write(a, directed=True, multigraph=False, node_id="x")  # DiGraph
     _write(b, directed=False, multigraph=False, node_id="y")  # Graph
-    _write(c, directed=False, multigraph=True, node_id="z")  # MultiGraph
+    _write(c, directed=True, multigraph=True, node_id="z")  # MultiDiGraph
     out = tmp_path / "merged.json"
 
     r = _run(["merge-graphs", str(a), str(b), str(c), "--simple", "--out", str(out)], tmp_path)
@@ -86,3 +89,20 @@ def test_merge_graphs_mixed_explicit_simple_collapses(tmp_path):
     assert data.get("multigraph") is False
     # projecting a multigraph input down is loud, never silent
     assert "WARNING" in r.stderr
+
+
+def test_merge_graphs_preserves_and_prefixes_hyperedges(tmp_path):
+    first = tmp_path / "r1" / "graphify-out" / "graph.json"
+    second = tmp_path / "r2" / "graphify-out" / "graph.json"
+    _write(first, directed=True, multigraph=True, node_id="a", peer_id="b")
+    _write(second, directed=True, multigraph=True, node_id="c", peer_id="d")
+    output = tmp_path / "merged.json"
+
+    result = _run(["merge-graphs", str(first), str(second), "--out", str(output)], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert {tuple(record["nodes"]) for record in payload["hyperedges"]} == {
+        ("r1::a", "r1::b"),
+        ("r2::c", "r2::d"),
+    }

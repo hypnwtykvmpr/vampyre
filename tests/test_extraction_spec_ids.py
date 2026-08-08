@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from graphify.build import canonicalize_semantic_fragment
 from graphify.extract import _file_stem, _make_id
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -77,20 +78,34 @@ def test_spec_files_are_discoverable():
     [(p, e, x) for (_f, p, e, x) in _examples()],
     ids=[f"{f.parent.parent.name}:{p}+{e}" for (f, p, e, x) in _examples()],
 )
-def test_spec_node_id_examples_match_ast_extractor(path, entity, expected):
-    got = _ast_symbol_id(path, entity)
-    assert got == expected, (
-        f"node-ID spec drift: spec says `{path}` + `{entity}` → `{expected}`, but "
-        f"extract._make_id(_file_stem(...), ...) produces `{got}`. Update the spec "
-        f"examples and the ID functions together."
+def test_spec_node_id_examples_canonicalize_to_ast_identity(tmp_path, path, entity, expected):
+    """Models emit readable producer IDs; Graphify owns hashed AST identity."""
+    source = tmp_path / path
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("fixture\n", encoding="utf-8")
+    fragment = canonicalize_semantic_fragment(
+        {
+            "nodes": [
+                {
+                    "id": expected,
+                    "label": entity,
+                    "source_file": str(source),
+                }
+            ],
+            "edges": [],
+            "hyperedges": [],
+        },
+        tmp_path,
     )
+
+    assert fragment["nodes"][0]["id"] == _ast_symbol_id(path, entity)
 
 
 def test_cautionary_wrong_forms_are_actually_wrong():
     """The canonical spec warns against the filename-only and full-path ID forms.
     Lock those anti-examples to the code too, so the warning can't go stale."""
     correct = _ast_symbol_id("src/auth/session.py", "ValidateToken")
-    assert correct == "src_auth_session_validatetoken"
+    assert correct != "src_auth_session_validatetoken"
     # filename-only (drops every dir) and immediate-parent-only (drops outer dirs)
     # are both wrong now that the stem is the full repo-relative path (#1504).
     assert _make_id("session", "ValidateToken") != correct

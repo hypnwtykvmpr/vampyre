@@ -37,6 +37,7 @@ from __future__ import annotations
 import html as _html
 import json
 from collections import defaultdict
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -65,8 +66,8 @@ def _make_truncation_leaf(extra: int) -> Dict[str, Any]:
     return {"name": f"(+{extra} more)", "total_count": extra, "children": []}
 
 
-def build_tree(
-    graph: Dict[str, Any],
+def _build_tree_from_nodes(
+    node_records: Iterable[Mapping[str, Any]],
     *,
     root: Optional[str] = None,
     max_children: int = DEFAULT_MAX_CHILDREN,
@@ -78,7 +79,7 @@ def build_tree(
     a synthetic "(+N more)" placeholder for truncated wide directories.
     Each interior node carries ``total_count = sum of leaf counts``.
     """
-    nodes: List[Dict[str, Any]] = list(graph.get("nodes", []))
+    nodes: List[Dict[str, Any]] = [dict(record) for record in node_records]
     file_nodes = [n for n in nodes if n.get("source_file")]
     if not file_nodes:
         return {"name": "(empty graph)", "total_count": 0, "children": []}
@@ -174,6 +175,22 @@ def build_tree(
 
     _finalise(root_node)
     return root_node
+
+
+def build_tree(
+    graph: Dict[str, Any],
+    *,
+    root: Optional[str] = None,
+    max_children: int = DEFAULT_MAX_CHILDREN,
+    project_label: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build the tree from node records; edge carriers are intentionally irrelevant."""
+    return _build_tree_from_nodes(
+        graph.get("nodes", []),
+        root=root,
+        max_children=max_children,
+        project_label=project_label,
+    )
 
 
 # ── HTML emitter (single-data-blob substitution) ──────────────────
@@ -576,11 +593,16 @@ def write_tree_html(
     # kept for CLI compatibility with the older signature; ignored now
     top_k_edges: int = 0,
 ) -> Path:
-    from graphify.security import check_graph_file_size_cap
+    from graphify.graph_loader import load_graph_state_file
+    from graphify.graph_state import DecodeMode
 
-    check_graph_file_size_cap(graph_path)
-    graph = json.loads(graph_path.read_text(encoding="utf-8"))
-    tree = build_tree(graph, root=root, max_children=max_children, project_label=project_label)
+    state = load_graph_state_file(graph_path, mode=DecodeMode.READ_ONLY_LEGACY)
+    tree = _build_tree_from_nodes(
+        state.nodes,
+        root=root,
+        max_children=max_children,
+        project_label=project_label,
+    )
     title = f"{tree['name']} — graphify tree viewer"
     header = f"{tree['name']} — Knowledge Graph"
     html = emit_html(tree, title=title, header=header)

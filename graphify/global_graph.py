@@ -6,12 +6,14 @@ import sys
 import warnings
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import cast
+
 import networkx as nx
-from networkx.readwrite import json_graph as _jg
 
 from graphify.graph_loader import GRAPHIFY_PROFILE_KEY
-from graphify.persistence import FileStateTransaction, atomic_write_text
-from graphify.projections import normalize_to_multidigraph
+from graphify.graph_state import GraphState, NodeId
+from graphify.persistence import FileStateTransaction, atomic_write_text, output_state_lock
+from graphify.projections import directed_edge_endpoints, normalize_to_multidigraph
 
 _GLOBAL_DIR = Path.home() / ".graphify"
 _GLOBAL_GRAPH = _GLOBAL_DIR / "global-graph.json"
@@ -23,6 +25,7 @@ _GRAPH_TYPE_SIMPLE = "simple"
 _GRAPH_TYPE_DIGRAPH = "digraph"
 _GRAPH_TYPE_MULTIDIGRAPH = "multidigraph"
 _GRAPH_TYPES = frozenset({_GRAPH_TYPE_SIMPLE, _GRAPH_TYPE_DIGRAPH, _GRAPH_TYPE_MULTIDIGRAPH})
+_REPO_OWNERS_FIELD = "graphify_repo_owners"
 
 
 def _graph_type_for_instance(G: nx.Graph) -> str:
@@ -68,10 +71,26 @@ def _project_to_class(G: nx.Graph, graph_type: str) -> nx.Graph:
     H.add_nodes_from((node, attrs.copy()) for node, attrs in G.nodes(data=True))
     if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)):
         for u, v, _key, data in G.edges(keys=True, data=True):
-            H.add_edge(u, v, **data)
+            attrs = data.copy()
+            if graph_type == _GRAPH_TYPE_DIGRAPH:
+                u, v = directed_edge_endpoints(G, u, v, attrs)
+                attrs.pop("_src", None)
+                attrs.pop("_tgt", None)
+            elif G.is_directed():
+                attrs.setdefault("_src", u)
+                attrs.setdefault("_tgt", v)
+            H.add_edge(u, v, **attrs)
     else:
         for u, v, data in G.edges(data=True):
-            H.add_edge(u, v, **data)
+            attrs = data.copy()
+            if graph_type == _GRAPH_TYPE_DIGRAPH:
+                u, v = directed_edge_endpoints(G, u, v, attrs)
+                attrs.pop("_src", None)
+                attrs.pop("_tgt", None)
+            elif G.is_directed():
+                attrs.setdefault("_src", u)
+                attrs.setdefault("_tgt", v)
+            H.add_edge(u, v, **attrs)
     return H
 
 
@@ -213,6 +232,13 @@ def refuse_pre_profile_upgrade(
 
 
 def backup_global_graph(*, transaction: FileStateTransaction | None = None) -> Path | None:
+    with output_state_lock(_GLOBAL_DIR) as lease:
+        if lease is None:  # blocking acquisition cannot normally return None
+            raise RuntimeError("could not acquire global publication lock")
+        return _backup_global_graph_locked(transaction=transaction)
+
+
+def _backup_global_graph_locked(*, transaction: FileStateTransaction | None = None) -> Path | None:
     """Snapshot the existing global-graph.json to a dated ``.bak`` before overwrite.
 
     Mirrors :func:`graphify.export.backup_if_protected`'s dated-snapshot pattern,
@@ -284,27 +310,27 @@ def _read_global_graph_data() -> dict | None:
     """
     if not _GLOBAL_GRAPH.exists():
         return None
-    from graphify.security import check_graph_file_size_cap
+    from graphify.graph_state import read_graph_state_payload
 
-    check_graph_file_size_cap(_GLOBAL_GRAPH)
-    data = json.loads(_GLOBAL_GRAPH.read_text(encoding="utf-8"))
+    data = read_graph_state_payload(_GLOBAL_GRAPH)
     if "links" not in data and "edges" in data:
         data = dict(data, links=data["edges"])
     return data
 
 
-def _load_global_graph() -> nx.Graph:
-    data = _read_global_graph_data()
-    if data is not None:
-        try:
-            G = _jg.node_link_graph(data, edges="links")
-        except TypeError:
-            G = _jg.node_link_graph(data)
-        # Surface the persisted profile (if any) on G.graph and reconcile its
-        # graph_type with the live instance so a later save round-trips stably.
-        _stamp_global_profile(G)
-        return G
-    return nx.Graph()
+def _load_global_graph(*, allow_pre_profile: bool = False) -> nx.Graph:
+    state = _load_global_state(allow_pre_profile=allow_pre_profile)
+    return state.graph if state is not None else nx.Graph()
+
+
+def _load_global_state(*, allow_pre_profile: bool = False) -> GraphState | None:
+    if _GLOBAL_GRAPH.exists():
+        from graphify.graph_loader import load_graph_state_file
+        from graphify.graph_state import DecodeMode
+
+        mode = DecodeMode.READ_ONLY_LEGACY if allow_pre_profile else DecodeMode.MIGRATE_LEGACY
+        return load_graph_state_file(_GLOBAL_GRAPH, mode=mode)
+    return None
 
 
 def _stamp_global_profile(G: nx.Graph) -> None:
@@ -321,22 +347,90 @@ def _stamp_global_profile(G: nx.Graph) -> None:
     G.graph[GRAPHIFY_PROFILE_KEY] = profile
 
 
-def _save_global_graph(G: nx.Graph) -> None:
+def _save_global_state(state: GraphState) -> None:
     _GLOBAL_DIR.mkdir(parents=True, exist_ok=True)
-    _stamp_global_profile(G)
-    try:
-        data = _jg.node_link_data(G, edges="links")
-    except TypeError:
-        data = _jg.node_link_data(G)
-    # Defensively guarantee the profile is present under data["graph"] even if a
-    # backend did not surface G.graph (node_link_data normally does).
-    graph_meta = data.get("graph")
-    if not isinstance(graph_meta, dict):
-        graph_meta = {}
-        data["graph"] = graph_meta
-    if GRAPHIFY_PROFILE_KEY not in graph_meta:
-        graph_meta[GRAPHIFY_PROFILE_KEY] = dict(G.graph[GRAPHIFY_PROFILE_KEY])
-    atomic_write_text(_GLOBAL_GRAPH, json.dumps(data, indent=2))
+    from graphify.persistence import publish_graph_state
+
+    publish_graph_state(_GLOBAL_GRAPH, state)
+
+
+def _rewrite_state_nodes(state: GraphState, nodes: list[dict[str, object]]) -> GraphState:
+    """Return ``state`` with canonical node records and matching live attributes."""
+    from graphify.graph_state import DecodeMode, decode_graph_state, encode_graph_state
+
+    payload = encode_graph_state(state)
+    payload["nodes"] = nodes
+    return decode_graph_state(payload, mode=DecodeMode.STRICT_CURRENT)
+
+
+def _node_repo_owners(record: dict[str, object]) -> set[str]:
+    raw_owners = record.get(_REPO_OWNERS_FIELD)
+    owners = (
+        {owner for owner in raw_owners if isinstance(owner, str) and owner}
+        if isinstance(raw_owners, list)
+        else set()
+    )
+    repo = record.get("repo")
+    if isinstance(repo, str) and repo:
+        owners.add(repo)
+    return owners
+
+
+def _annotate_incoming_external_owners(state: GraphState, repo_tag: str) -> GraphState:
+    nodes: list[dict[str, object]] = []
+    for raw in state.nodes:
+        record = dict(raw)
+        if not record.get("source_file"):
+            owners = _node_repo_owners(record)
+            owners.add(repo_tag)
+            record[_REPO_OWNERS_FIELD] = sorted(owners)
+        nodes.append(record)
+    return _rewrite_state_nodes(state, nodes)
+
+
+def _canonicalize_external_owners(state: GraphState) -> GraphState:
+    nodes: list[dict[str, object]] = []
+    for raw in state.nodes:
+        record = dict(raw)
+        if not record.get("source_file"):
+            owners = _node_repo_owners(record)
+            if owners:
+                record[_REPO_OWNERS_FIELD] = sorted(owners)
+        nodes.append(record)
+    return _rewrite_state_nodes(state, nodes)
+
+
+def _detach_repo_ownership(state: GraphState, repo_tag: str) -> tuple[GraphState, int]:
+    """Remove one repo's claims, pruning shared externals only at last owner."""
+    from graphify.graph_state import prune_graph_state
+
+    nodes: list[dict[str, object]] = []
+    remove_ids: set[object] = set()
+    for raw in state.nodes:
+        record = dict(raw)
+        node_id = record["id"]
+        if record.get("source_file"):
+            if record.get("repo") == repo_tag:
+                remove_ids.add(node_id)
+            nodes.append(record)
+            continue
+
+        owners = _node_repo_owners(record)
+        if repo_tag not in owners:
+            nodes.append(record)
+            continue
+        owners.remove(repo_tag)
+        if not owners:
+            remove_ids.add(node_id)
+            nodes.append(record)
+            continue
+        record[_REPO_OWNERS_FIELD] = sorted(owners)
+        if record.get("repo") == repo_tag:
+            record["repo"] = min(owners)
+        nodes.append(record)
+
+    rewritten = _rewrite_state_nodes(state, nodes)
+    return prune_graph_state(rewritten, remove_ids), len(remove_ids)
 
 
 def _file_hash(path: Path) -> str:
@@ -346,13 +440,18 @@ def _file_hash(path: Path) -> str:
 
 
 def global_add(source_path: Path, repo_tag: str) -> dict:
+    with output_state_lock(_GLOBAL_DIR) as lease:
+        if lease is None:  # blocking acquisition cannot normally return None
+            raise RuntimeError("could not acquire global publication lock")
+        return _global_add_locked(source_path, repo_tag)
+
+
+def _global_add_locked(source_path: Path, repo_tag: str) -> dict:
     """Add or update a project graph in the global graph.
 
     Returns a summary dict with keys: repo_tag, nodes_added, nodes_removed, skipped.
     Skipped=True means the source graph hasn't changed since last add.
     """
-    from graphify.build import prefix_graph_for_global, prune_repo_from_graph
-
     if not source_path.exists():
         raise FileNotFoundError(f"graph not found: {source_path}")
 
@@ -371,21 +470,11 @@ def global_add(source_path: Path, repo_tag: str) -> dict:
     if existing.get("source_hash") == src_hash:
         return {"repo_tag": repo_tag, "nodes_added": 0, "nodes_removed": 0, "skipped": True}
 
-    # Load source graph
-    from graphify.security import check_graph_file_size_cap
+    from graphify.graph_loader import load_graph_state_file
+    from graphify.graph_state import DecodeMode
 
-    check_graph_file_size_cap(source_path)
-    data = json.loads(source_path.read_text(encoding="utf-8"))
-    if "links" not in data and "edges" in data:
-        data = dict(data, links=data["edges"])
-    try:
-        src_G = _jg.node_link_graph(data, edges="links")
-    except TypeError:
-        src_G = _jg.node_link_graph(data)
-
-    # Prefix IDs for cross-project isolation (relabel_nodes preserves multigraph
-    # keys, so a MultiDiGraph source keeps its parallel edges through this step).
-    prefixed = prefix_graph_for_global(src_G, repo_tag)
+    src_state = load_graph_state_file(source_path, mode=DecodeMode.MIGRATE_LEGACY)
+    src_state = _annotate_incoming_external_owners(src_state, repo_tag)
 
     # Inspect the on-disk global graph BEFORE rehydrating, so the recovery
     # policy can see whether it is a pre-profile file that may already have
@@ -395,15 +484,28 @@ def global_add(source_path: Path, repo_tag: str) -> dict:
     # Load global graph and prune stale nodes for this repo. Pruning happens on
     # the loaded class; the surviving (other-repo) subgraph is what we compose
     # the incoming repo into.
-    G = _load_global_graph()
-    removed = prune_repo_from_graph(G, repo_tag)
+    existing_state = _load_global_state(
+        allow_pre_profile=existing_data is not None and detect_pre_profile(existing_data)
+    )
+    if existing_state is not None:
+        existing_state, removed = _detach_repo_ownership(existing_state, repo_tag)
+    else:
+        removed = 0
 
     # Resolve the composition target class: multidigraph if EITHER the existing
     # global graph OR the incoming source is multi; else digraph if either is
     # directed; else simple. Inferred (target_type=None) never silently
     # collapses — a simple+multi mix upgrades to multidigraph, which is exactly
     # the go/no-go gate (no class-mismatch crash, no silent collapse).
-    target_type = _infer_target_type([G, prefixed])
+    from graphify.graph_state import (
+        MetadataPolicy,
+        NamedGraphState,
+        compose_graph_states,
+        infer_composition_target_type,
+    )
+
+    composition_states = [state for state in (existing_state, src_state) if state is not None]
+    target_type = infer_composition_target_type(composition_states)
 
     # Recovery refusal: if composing would UPGRADE a pre-profile global graph to
     # multidigraph (lost parallel edges unreconstructable), back up first so the
@@ -413,61 +515,50 @@ def global_add(source_path: Path, repo_tag: str) -> dict:
             backup_hint = backup_global_graph()
             refuse_pre_profile_upgrade(existing_data, target_type, backup_hint=backup_hint)
 
-    # Normalize the surviving global graph and the prefixed source to the common
-    # target class. normalize_graphs_for_global returns them in the same order.
-    (G, prefixed), target_type = normalize_graphs_for_global([G, prefixed], target_type=target_type)
-
     # Merge external-library nodes (no source_file) by label to avoid duplication
     external_labels = {
-        d.get("label", ""): n
-        for n, d in G.nodes(data=True)
-        if not d.get("source_file") and d.get("label")
+        record.get("label", ""): record["id"]
+        for record in (existing_state.nodes if existing_state is not None else ())
+        if not record.get("source_file") and record.get("label")
     }
     # Map each deduplicated external onto the existing global node so that
     # edges incident to it can be rewired instead of dropped.
-    remap = {}
-    for node, data in prefixed.nodes(data=True):
-        if not data.get("source_file") and data.get("label") in external_labels:
-            remap[node] = external_labels[data["label"]]
+    remap: dict[NodeId, NodeId] = {
+        cast(NodeId, record["id"]): cast(NodeId, external_labels[record["label"]])
+        for record in src_state.nodes
+        if not record.get("source_file") and record.get("label") in external_labels
+    }
+    named_states = []
+    if existing_state is not None:
+        named_states.append(
+            NamedGraphState(
+                f"existing:{repo_tag}",
+                existing_state,
+                apply_namespace=False,
+            )
+        )
+    named_states.append(NamedGraphState(repo_tag, src_state, node_remap=remap))
+    composed_state = compose_graph_states(
+        named_states,
+        target_type=target_type,
+        metadata_policy=MetadataPolicy.NAMESPACE_CONFLICTS,
+    )
+    composed_state = _canonicalize_external_owners(composed_state)
 
-    # Compose: add prefixed nodes (except deduplicated externals) into global graph
-    for node, data in prefixed.nodes(data=True):
-        if node not in remap:
-            G.add_node(node, **data)
-    # KEY-AWARE edge compose. For a multigraph target, iterate keys=True and
-    # replay G.add_edge(u, v, key=key, ...) so parallel edges are preserved
-    # distinctly AND re-adding the same (pruned-then-readded) repo overwrites the
-    # same (u, v, key) slots instead of accumulating fresh auto-int keys — that
-    # keyless drift is the bug this fixes. Simple/digraph targets keep the
-    # historical keyless behavior (one edge per pair). Deduplicated externals are
-    # rewired through `remap` (not dropped) so incident edges survive.
-    if isinstance(prefixed, (nx.MultiGraph, nx.MultiDiGraph)):
-        for u, v, key, data in prefixed.edges(keys=True, data=True):
-            u = remap.get(u, u)
-            v = remap.get(v, v)
-            if u != v:  # don't introduce self-loops via remapping
-                G.add_edge(u, v, key=key, **data)
-    else:
-        for u, v, data in prefixed.edges(data=True):
-            u = remap.get(u, u)
-            v = remap.get(v, v)
-            if u != v:  # don't introduce self-loops via remapping
-                G.add_edge(u, v, **data)
-
-    added = prefixed.number_of_nodes() - len(remap)
+    added = len(src_state.nodes) - len(remap)
 
     manifest["repos"][repo_tag] = {
         "added_at": datetime.now(timezone.utc).isoformat(),
         "source_path": str(source_path.resolve()),
         "node_count": added,
-        "edge_count": prefixed.number_of_edges(),
+        "edge_count": src_state.graph.number_of_edges(),
         "source_hash": src_hash,
         "graph_type": target_type,
     }
     state_transaction = FileStateTransaction([_GLOBAL_GRAPH, _GLOBAL_MANIFEST])
     try:
         backup_global_graph(transaction=state_transaction)
-        _save_global_graph(G)
+        _save_global_state(composed_state)
         _save_manifest(manifest)
     except Exception:
         state_transaction.rollback()
@@ -478,20 +569,27 @@ def global_add(source_path: Path, repo_tag: str) -> dict:
 
 
 def global_remove(repo_tag: str) -> int:
-    """Remove all nodes for repo_tag from the global graph. Returns count removed."""
-    from graphify.build import prune_repo_from_graph
+    with output_state_lock(_GLOBAL_DIR) as lease:
+        if lease is None:  # blocking acquisition cannot normally return None
+            raise RuntimeError("could not acquire global publication lock")
+        return _global_remove_locked(repo_tag)
 
+
+def _global_remove_locked(repo_tag: str) -> int:
+    """Remove all nodes for repo_tag from the global graph. Returns count removed."""
     manifest = _load_manifest()
     if repo_tag not in manifest["repos"]:
         raise KeyError(f"repo '{repo_tag}' not in global graph")
 
-    G = _load_global_graph()
-    removed = prune_repo_from_graph(G, repo_tag)
+    state = _load_global_state()
+    if state is None:
+        raise RuntimeError("global graph is missing")
+    pruned_state, removed = _detach_repo_ownership(state, repo_tag)
     del manifest["repos"][repo_tag]
     state_transaction = FileStateTransaction([_GLOBAL_GRAPH, _GLOBAL_MANIFEST])
     try:
         backup_global_graph(transaction=state_transaction)
-        _save_global_graph(G)
+        _save_global_state(pruned_state)
         _save_manifest(manifest)
     except Exception:
         state_transaction.rollback()
@@ -502,7 +600,10 @@ def global_remove(repo_tag: str) -> int:
 
 def global_list() -> dict:
     """Return the manifest repos dict."""
-    return _load_manifest().get("repos", {})
+    with output_state_lock(_GLOBAL_DIR) as lease:
+        if lease is None:  # blocking acquisition cannot normally return None
+            raise RuntimeError("could not acquire global publication lock")
+        return _load_manifest().get("repos", {})
 
 
 def global_path() -> Path:

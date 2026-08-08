@@ -86,11 +86,20 @@ def test_cpp_cross_file_member_call_connects_with_relative_paths(tmp_path):
         for e in result["edges"]
         if e.get("relation") == "calls"
         and "main" in labels.get(e["source"], "")
-        and e["target"].endswith("_bar")
+        and labels.get(e["target"]) in {"bar", "Foo::bar()"}
     ]
     assert main_bar, "Main.cpp's f.bar() should resolve to Foo::bar across files"
     # The resolved target is Foo's bar (id under the Foo class), not some other class.
-    assert all("foo" in e["target"] for e in main_bar), main_bar
+    foo_id = foo_classes[0]["id"]
+    assert all(
+        any(
+            edge.get("source") == foo_id
+            and edge.get("target") == call["target"]
+            and edge.get("relation") in {"method", "defines"}
+            for edge in result["edges"]
+        )
+        for call in main_bar
+    ), main_bar
 
 
 # ── C++ member calls (#1547) ──────────────────────────────────────────────────

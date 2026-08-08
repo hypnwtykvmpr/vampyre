@@ -5,7 +5,12 @@ graphify/dedup.py."""
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import time
 from contextlib import contextmanager
+from typing import cast
 
 import pytest
 import networkx as nx
@@ -39,6 +44,10 @@ def _graph_to_json(G, path):
         data = jg.node_link_data(G, edges="links")
     except TypeError:
         data = jg.node_link_data(G)
+    if not G.is_directed():
+        for edge in data.get("links", []):
+            edge.setdefault("_src", edge["source"])
+            edge.setdefault("_tgt", edge["target"])
     path.write_text(json.dumps(data), encoding="utf-8")
 
 
@@ -114,6 +123,19 @@ def test_prefix_graph_rewrites_edges():
     H = prefix_graph_for_global(G, "repo1")
     assert H.has_edge("repo1::a", "repo1::b")
     assert not H.has_edge("a", "b")
+
+
+def test_prefix_graph_rewrites_hyperedge_members():
+    from graphify.build import prefix_graph_for_global
+
+    graph = _make_graph([{"id": "a", "label": "A"}, {"id": "b", "label": "B"}])
+    graph.graph["hyperedges"] = [{"label": "Flow", "nodes": ["a", "b"]}]
+
+    prefixed = prefix_graph_for_global(graph, "repoA")
+
+    assert len(prefixed.graph["hyperedges"]) == 1
+    assert prefixed.graph["hyperedges"][0]["nodes"] == ["repoA::a", "repoA::b"]
+    assert prefixed.graph["hyperedges"][0]["id"].startswith("hyperedge:v1:")
 
 
 def test_prune_repo_removes_correct_nodes():
@@ -210,6 +232,56 @@ def test_global_add_two_repos_no_collision(tmp_path):
     assert "repoA::userservice" in G.nodes
     assert "repoB::userservice" in G.nodes
     assert G.number_of_nodes() == 2  # no silent merge
+
+
+def test_global_add_prefixes_hyperedges_and_remove_prunes_them(tmp_path):
+    source = tmp_path / "graph.json"
+    graph = _make_graph([{"id": "a", "label": "A"}, {"id": "b", "label": "B"}])
+    graph.graph["hyperedges"] = [{"label": "Flow", "nodes": ["a", "b"]}]
+    _graph_to_json(graph, source)
+    global_dir = tmp_path / ".graphify"
+
+    with _patch_global(global_dir):
+        from graphify.global_graph import _load_global_graph, global_add, global_remove
+
+        global_add(source, "repoA")
+        composed = _load_global_graph()
+        assert composed.graph["hyperedges"][0]["nodes"] == ["repoA::a", "repoA::b"]
+        assert composed.graph["hyperedges"][0]["id"].startswith("repoA::hyperedge:v1:")
+
+        assert global_remove("repoA") == 2
+        assert _load_global_graph().graph["hyperedges"] == []
+
+
+def test_global_add_concurrent_processes_retain_both_repositories(tmp_path):
+    first_graph = tmp_path / "first.json"
+    second_graph = tmp_path / "second.json"
+    _graph_to_json(
+        _make_graph([{"id": "a", "label": "A", "source_file": "a.py"}]),
+        first_graph,
+    )
+    _graph_to_json(
+        _make_graph([{"id": "b", "label": "B", "source_file": "b.py"}]),
+        second_graph,
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
+    script = (
+        "import sys; from pathlib import Path; "
+        "from graphify.global_graph import global_add; "
+        "global_add(Path(sys.argv[1]), sys.argv[2])"
+    )
+    first = subprocess.Popen([sys.executable, "-c", script, str(first_graph), "repoA"], env=env)
+    second = subprocess.Popen([sys.executable, "-c", script, str(second_graph), "repoB"], env=env)
+    assert first.wait(timeout=20) == 0
+    assert second.wait(timeout=20) == 0
+
+    global_dir = home / ".graphify"
+    manifest = json.loads((global_dir / "global-manifest.json").read_text(encoding="utf-8"))
+    graph = json.loads((global_dir / "global-graph.json").read_text(encoding="utf-8"))
+    assert set(manifest["repos"]) == {"repoA", "repoB"}
+    assert {node["repo"] for node in graph["nodes"]} == {"repoA", "repoB"}
 
 
 def test_global_remove(tmp_path):
@@ -427,6 +499,71 @@ def test_global_add_rewires_edges_to_deduplicated_externals(tmp_path):
     assert G.edges["repoB::modb", "repoA::requests"]["relation"] == "imports"
 
 
+def test_shared_external_ownership_survives_first_repo_update_and_remove(tmp_path):
+    repo_a = tmp_path / "repo-a.json"
+    repo_b = tmp_path / "repo-b.json"
+
+    def source_graph(local_id: str) -> nx.MultiDiGraph:
+        graph = _make_multidigraph(
+            [
+                {"id": local_id, "label": local_id.upper(), "source_file": f"{local_id}.py"},
+                {"id": "requests", "label": "requests"},
+            ],
+            [
+                {
+                    "source": local_id,
+                    "target": "requests",
+                    "key": f"{local_id}:imports",
+                    "relation": "imports",
+                }
+            ],
+        )
+        graph.graph["hyperedges"] = [
+            {"id": f"{local_id}:integration", "nodes": [local_id, "requests"]}
+        ]
+        return graph
+
+    _graph_to_json(source_graph("a"), repo_a)
+    _graph_to_json(source_graph("b"), repo_b)
+    global_dir = tmp_path / ".graphify"
+
+    with _patch_global(global_dir):
+        from graphify.global_graph import _load_global_graph, global_add, global_remove
+
+        global_add(repo_a, "repoA")
+        global_add(repo_b, "repoB")
+        shared = _load_global_graph()
+        assert shared.nodes["repoA::requests"]["graphify_repo_owners"] == ["repoA", "repoB"]
+
+        _graph_to_json(
+            _make_multidigraph(
+                [{"id": "a", "label": "A", "source_file": "a.py"}],
+                [],
+            ),
+            repo_a,
+        )
+        global_add(repo_a, "repoA")
+        after_update = _load_global_graph()
+        after_update = cast(nx.MultiDiGraph, after_update)
+        assert after_update.nodes["repoA::requests"]["graphify_repo_owners"] == ["repoB"]
+        assert after_update.has_edge("repoB::b", "repoA::requests", key="b:imports")
+        assert any(
+            record["nodes"] == ["repoA::requests", "repoB::b"]
+            for record in after_update.graph["hyperedges"]
+        )
+
+        global_remove("repoA")
+        after_remove = cast(nx.MultiDiGraph, _load_global_graph())
+
+    assert "repoA::requests" in after_remove
+    assert after_remove.nodes["repoA::requests"]["graphify_repo_owners"] == ["repoB"]
+    assert after_remove.has_edge("repoB::b", "repoA::requests", key="b:imports")
+    assert any(
+        record["nodes"] == ["repoA::requests", "repoB::b"]
+        for record in after_remove.graph["hyperedges"]
+    )
+
+
 def test_global_add_rejects_oversized_source_graph(monkeypatch, tmp_path):
     """#F4: global_add must refuse to read a source graph.json that
     exceeds the size cap, rather than json.loads-ing it into memory."""
@@ -631,7 +768,10 @@ def test_normalize_graphs_for_global_infers_target(recwarn):
     input warns and projects the multigraph down to simple."""
     from graphify.global_graph import normalize_graphs_for_global
 
-    simple = _make_graph([{"id": "x"}, {"id": "y"}], [{"source": "x", "target": "y"}])
+    simple = _make_graph(
+        [{"id": "x"}, {"id": "y"}],
+        [{"source": "x", "target": "y", "_src": "x", "_tgt": "y"}],
+    )
     multi = _make_multidigraph(
         [{"id": "a"}, {"id": "b"}],
         [
@@ -645,7 +785,16 @@ def test_normalize_graphs_for_global_infers_target(recwarn):
     assert target == "multidigraph"
     assert all(isinstance(g, nx.MultiDiGraph) for g in normalized)
     assert normalized[1].number_of_edges("a", "b") == 2
+    assert normalized[0].has_edge("x", "y")
+    assert not normalized[0].has_edge("y", "x")
     assert len(recwarn.list) == 0
+
+    ambiguous = _make_graph(
+        [{"id": "m"}, {"id": "n"}],
+        [{"source": "m", "target": "n"}],
+    )
+    with pytest.raises(ValueError, match="unambiguous _src/_tgt"):
+        normalize_graphs_for_global([ambiguous, multi])
 
     # Explicit simple target with a multi input → WARNING + projection to simple.
     with pytest.warns(UserWarning, match="collaps"):
@@ -871,6 +1020,73 @@ def _run_merge_driver(monkeypatch, base_p, current_p, other_p):
         return exc.code if isinstance(exc.code, int) else 1
 
 
+def test_merge_driver_locks_before_reading_current_graph(tmp_path):
+    """A waiting merge must read the winner's state, not overwrite from a stale snapshot."""
+    from graphify.persistence import output_state_lock
+
+    base_path = tmp_path / "base.json"
+    current_path = tmp_path / "current.json"
+    other_path = tmp_path / "other.json"
+    _graph_to_json(_make_graph([{"id": "base"}]), base_path)
+    _graph_to_json(_make_graph([{"id": "current"}]), current_path)
+    _graph_to_json(_make_graph([{"id": "other"}]), other_path)
+
+    started_path = tmp_path / "child-started"
+    read_path = tmp_path / "child-read-current"
+    script = """
+import pathlib
+import sys
+
+import graphify.__main__ as mainmod
+
+current = pathlib.Path(sys.argv[1]).resolve()
+started = pathlib.Path(sys.argv[4])
+read_marker = pathlib.Path(sys.argv[5])
+real_read_text = pathlib.Path.read_text
+
+def tracked_read_text(self, *args, **kwargs):
+    if self.resolve() == current:
+        read_marker.write_text("read", encoding="utf-8")
+    return real_read_text(self, *args, **kwargs)
+
+pathlib.Path.read_text = tracked_read_text
+started.write_text("started", encoding="utf-8")
+mainmod.sys.argv = ["graphify", "merge-driver", sys.argv[2], sys.argv[1], sys.argv[3]]
+mainmod.main()
+"""
+
+    with output_state_lock(tmp_path):
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(current_path),
+                str(base_path),
+                str(other_path),
+                str(started_path),
+                str(read_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+        deadline = time.monotonic() + 10
+        while not started_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert started_path.exists(), "child did not reach command dispatch"
+        time.sleep(0.1)
+        assert child.poll() is None
+        assert not read_path.exists(), "merge-driver read current before acquiring its lease"
+        _graph_to_json(_make_graph([{"id": "current"}, {"id": "winner"}]), current_path)
+
+    stdout, stderr = child.communicate(timeout=20)
+    assert child.returncode == 0, (stdout, stderr)
+    merged, _ = _reload_graph(current_path)
+    assert set(merged) == {"current", "winner", "other"}
+
+
 def _run_merge_graphs(monkeypatch, paths, out_path, *flags):
     """Invoke `graphify merge-graphs` in-process; return the exit code (0 on ok)."""
     monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
@@ -926,8 +1142,15 @@ def test_merge_driver_mixed_classes_no_crash(monkeypatch, tmp_path):
     merged, data = _reload_graph(current_p)
     assert merged.is_multigraph()  # upgraded to the multi target, not collapsed
     assert data["graph"]["graphify_profile"]["graph_type"] == "multidigraph"
-    # Both the simple edge and BOTH parallel multi edges survive.
-    assert ("a", "b", 0) in _edge_keys(merged)
+    # Both the lifted simple edge and BOTH parallel multi edges survive.
+    simple_edges = [
+        (u, v, key, attrs)
+        for u, v, key, attrs in merged.edges(keys=True, data=True)
+        if {u, v} == {"a", "b"}
+    ]
+    assert len(simple_edges) == 1
+    assert simple_edges[0][2] is not None
+    assert simple_edges[0][3]["relation"] == "calls"
     assert ("a", "c", 0) in _edge_keys(merged)
     assert ("a", "c", 1) in _edge_keys(merged)
     assert merged.number_of_edges() == 3
@@ -979,6 +1202,65 @@ def test_merge_driver_idempotent_under_repeat(monkeypatch, tmp_path):
     assert snapshots[0] == snapshots[1] == snapshots[2]
     assert snapshots[0][0] == 3  # 1 simple + 2 parallel, never duplicated
     assert snapshots[0][2] == "multidigraph"
+
+
+def test_merge_driver_three_way_preserves_deletion_against_unchanged_side(monkeypatch, tmp_path):
+    base = _make_multidigraph(
+        [
+            {"id": "a", "label": "A", "source_file": "a.py"},
+            {"id": "b", "label": "B", "source_file": "b.py"},
+        ],
+        [{"source": "a", "target": "b", "key": "calls", "relation": "calls"}],
+    )
+    base.graph["hyperedges"] = [{"id": "flow", "nodes": ["a", "b"]}]
+    current = _make_multidigraph(
+        [{"id": "a", "label": "A", "source_file": "a.py"}],
+        [],
+    )
+    base_p = tmp_path / "base.json"
+    current_p = tmp_path / "current.json"
+    other_p = tmp_path / "other.json"
+    _graph_to_json(base, base_p)
+    _graph_to_json(current, current_p)
+    _graph_to_json(base, other_p)
+
+    assert _run_merge_driver(monkeypatch, base_p, current_p, other_p) == 0
+
+    merged, payload = _reload_graph(current_p)
+    assert set(merged) == {"a"}
+    assert merged.number_of_edges() == 0
+    assert payload["hyperedges"] == []
+
+
+def test_merge_driver_three_way_refuses_delete_modify_conflict(monkeypatch, tmp_path):
+    base = _make_multidigraph(
+        [
+            {"id": "a", "label": "A", "source_file": "a.py"},
+            {"id": "b", "label": "B", "source_file": "b.py"},
+        ],
+        [],
+    )
+    current = _make_multidigraph(
+        [{"id": "a", "label": "A", "source_file": "a.py"}],
+        [],
+    )
+    other = _make_multidigraph(
+        [
+            {"id": "a", "label": "A", "source_file": "a.py"},
+            {"id": "b", "label": "B renamed", "source_file": "b.py"},
+        ],
+        [],
+    )
+    base_p = tmp_path / "base.json"
+    current_p = tmp_path / "current.json"
+    other_p = tmp_path / "other.json"
+    _graph_to_json(base, base_p)
+    _graph_to_json(current, current_p)
+    _graph_to_json(other, other_p)
+    before = current_p.read_bytes()
+
+    assert _run_merge_driver(monkeypatch, base_p, current_p, other_p) == 1
+    assert current_p.read_bytes() == before
 
 
 def test_merge_graphs_multidigraph_preserves_parallel_edges(monkeypatch, tmp_path):
@@ -1203,13 +1485,8 @@ def _write_pre_profile_graph(path, nodes, edges):
     path.write_text(json.dumps(raw), encoding="utf-8")
 
 
-def test_merge_driver_pre_profile_other_does_not_block(monkeypatch, tmp_path):
-    """REGRESSION for the narrowed pre-profile refusal: when `current` is a real
-    MultiDiGraph and `other` is a LEGACY pre-profile simple graph, the merge must
-    SUCCEED — `other` is read-only (merged in, never rewritten), so its pre-profile
-    status implies no unreconstructable in-place loss. Before the fix the refusal
-    loop also inspected `other`, false-positive-blocking this valid merge with a
-    misleading 'global-graph.json / rebuild from source' recovery message."""
+def test_merge_driver_pre_profile_other_refuses_ambiguous_direction(monkeypatch, tmp_path):
+    """A pre-profile edge cannot be lifted without class and direction evidence."""
     # `current`: a genuine MultiDiGraph (carries multigraph:true + parallel edges).
     current = _make_multidigraph(
         [
@@ -1238,19 +1515,10 @@ def test_merge_driver_pre_profile_other_does_not_block(monkeypatch, tmp_path):
     base_p = tmp_path / "base.json"
     _graph_to_json(_make_graph([]), base_p)
 
+    before = current_p.read_bytes()
     code = _run_merge_driver(monkeypatch, base_p, current_p, other_p)
-    assert code == 0  # NOT refused — a pre-profile `other` must not block the merge
-
-    merged, data = _reload_graph(current_p)
-    assert merged.is_multigraph()  # current stays multidigraph, not collapsed
-    assert data["graph"]["graphify_profile"]["graph_type"] == "multidigraph"
-    keys = _edge_keys(merged)
-    # current's parallel edges preserved...
-    assert ("a", "b", 0) in keys
-    assert ("a", "b", 1) in keys
-    # ...and other's edge is merged in (keyed onto the multi target).
-    assert ("a", "c", 0) in keys
-    assert merged.number_of_edges() == 3
+    assert code == 1
+    assert current_p.read_bytes() == before
 
 
 def test_merge_driver_pre_profile_current_still_refused(monkeypatch, tmp_path):

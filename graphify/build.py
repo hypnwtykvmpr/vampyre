@@ -31,7 +31,12 @@ from collections.abc import Hashable
 from pathlib import Path
 import networkx as nx
 from .edge_identity import make_stable_key, strip_schema_key
-from .ids import make_id, normalize_id as _normalize_id
+from .graph_state import (
+    GraphStateError,
+    reconcile_hyperedges,
+    repair_legacy_file_node_hyperedge_aliases,
+)
+from .ids import disambiguate_path_scoped_ids, make_id, normalize_id as _normalize_id
 from .paths import (
     default_graph_json as _default_graph_json,
     is_absolute_path,
@@ -148,6 +153,8 @@ def _norm_source_file(p: str | None, root: str | None = None) -> str | None:
     if not p:
         return p
     p = p.replace("\\", "/")
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", p):
+        return p
     # Canonicalize './' and '..' segments so a stored source_file like './a.py' or
     # 'pkg/../a.py' matches the canonical 'a.py' used in eviction/relativization
     # sets (#1521 F2: a non-canonical path could otherwise let a stale edge escape
@@ -335,6 +342,21 @@ def _semantic_id_remap(nodes: list, root: str | None) -> dict:
     are skipped (they are already canonical via the extract() post-pass)."""
     from graphify.extractors.base import _file_stem  # local: avoid import cost at module load
 
+    ast_file_ids = {
+        _normalize_id(str(node["id"]))
+        for node in nodes
+        if isinstance(node, dict)
+        and node.get("_origin") == "ast"
+        and node.get("id")
+        and node.get("source_location") in (None, "", "L1")
+        and isinstance(node.get("source_file"), str)
+        and bool(node.get("source_file"))
+        and str(node.get("label") or "")
+        in {
+            Path(str(node["source_file"])).name,
+            Path(str(node["source_file"])).as_posix(),
+        }
+    }
     remap: dict[str, str] = {}
     for node in nodes:
         if not isinstance(node, dict):
@@ -366,6 +388,14 @@ def _semantic_id_remap(nodes: list, root: str | None) -> dict:
             if norm_nid != new_stem:
                 remap[nid] = new_stem
             continue
+        if label and (
+            (norm_nid == new_stem and new_stem in ast_file_ids)
+            or norm_nid.startswith(new_stem + "_")
+        ):
+            canonical_labeled_id = make_id(new_stem, label)
+            if canonical_labeled_id != nid:
+                remap[nid] = canonical_labeled_id
+            continue
         if norm_nid == new_stem or norm_nid.startswith(new_stem + "_"):
             continue
         new_id: str | None = None
@@ -383,6 +413,174 @@ def _semantic_id_remap(nodes: list, root: str | None) -> dict:
         if new_id and new_id != nid:
             remap[nid] = new_id
     return remap
+
+
+def canonicalize_semantic_fragment(
+    fragment: dict,
+    root: str | Path | None,
+) -> dict:
+    """Canonicalize semantic identity before completion-order-independent merge."""
+
+    root_text = str(root) if root is not None else None
+    result = dict(fragment)
+    nodes = [dict(item) if isinstance(item, dict) else item for item in fragment.get("nodes", [])]
+    edges = [dict(item) if isinstance(item, dict) else item for item in fragment.get("edges", [])]
+    hyperedges = [
+        dict(item) if isinstance(item, dict) else item for item in fragment.get("hyperedges", [])
+    ]
+
+    def _source_key(record: dict) -> str:
+        source_file = record.get("source_file")
+        if not isinstance(source_file, str) or not source_file:
+            return ""
+        normalized = _norm_source_file(source_file, root_text) or source_file
+        record["source_file"] = normalized
+        return normalized
+
+    node_rows: list[tuple[dict, str, str, str]] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        old_id = node.get("id")
+        if not isinstance(old_id, str) or not old_id:
+            continue
+        source_key = _source_key(node)
+        desired = _semantic_id_remap([node], root_text).get(old_id, old_id)
+        node_rows.append((node, old_id, source_key, desired))
+
+    desired_sources: dict[str, set[str]] = {}
+    for _node, _old_id, source_key, desired in node_rows:
+        if source_key:
+            desired_sources.setdefault(desired, set()).add(source_key)
+    scoped_targets = {
+        desired: disambiguate_path_scoped_ids(desired, source_keys)
+        for desired, source_keys in desired_sources.items()
+        if len(source_keys) > 1
+    }
+
+    source_remap: dict[tuple[str, str], str] = {}
+    old_targets: dict[str, set[str]] = {}
+    for node, old_id, source_key, desired in node_rows:
+        new_id = scoped_targets.get(desired, {}).get(source_key, desired)
+        node["id"] = new_id
+        source_remap[(old_id, source_key)] = new_id
+        old_targets.setdefault(old_id, set()).add(new_id)
+
+    unambiguous = {
+        old_id: next(iter(targets)) for old_id, targets in old_targets.items() if len(targets) == 1
+    }
+    contested = {old_id for old_id, targets in old_targets.items() if len(targets) > 1}
+    final_ids = {node.get("id") for node in nodes if isinstance(node, dict)}
+    diagnostics = dict(result.get("graphify_identity_diagnostics") or {})
+    diagnostics.update(
+        {
+            "semantic_contested_aliases": sorted(contested),
+            "semantic_skipped_edges": 0,
+            "semantic_skipped_hyperedge_members": 0,
+            "semantic_dropped_hyperedges": 0,
+        }
+    )
+
+    def _remap_reference(value: object, source_key: str) -> tuple[object, bool]:
+        if is_hashable(value) and value in final_ids:
+            return value, False
+        if isinstance(value, str):
+            target = source_remap.get((value, source_key)) or unambiguous.get(value)
+            if target is not None:
+                return target, False
+            if value in contested:
+                return value, True
+        return value, False
+
+    surviving_edges: list[object] = []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            surviving_edges.append(edge)
+            continue
+        source_key = _source_key(edge)
+        source, source_contested = _remap_reference(edge.get("source"), source_key)
+        target, target_contested = _remap_reference(edge.get("target"), source_key)
+        if source_contested or target_contested:
+            diagnostics["semantic_skipped_edges"] += 1
+            continue
+        edge["source"] = source
+        edge["target"] = target
+        surviving_edges.append(edge)
+
+    surviving_hyperedges: list[object] = []
+    for hyperedge in hyperedges:
+        if not isinstance(hyperedge, dict):
+            surviving_hyperedges.append(hyperedge)
+            continue
+        source_key = _source_key(hyperedge)
+        member_field = next(
+            (
+                field_name
+                for field_name in ("nodes", "members", "node_ids")
+                if isinstance(hyperedge.get(field_name), list)
+            ),
+            None,
+        )
+        if member_field is None:
+            surviving_hyperedges.append(hyperedge)
+            continue
+        members: list[object] = []
+        for member in hyperedge[member_field]:
+            replacement, member_contested = _remap_reference(member, source_key)
+            if member_contested:
+                diagnostics["semantic_skipped_hyperedge_members"] += 1
+                continue
+            members.append(replacement)
+        hyperedge[member_field] = list(dict.fromkeys(members))
+        if len(hyperedge[member_field]) < 2:
+            diagnostics["semantic_dropped_hyperedges"] += 1
+            continue
+        surviving_hyperedges.append(hyperedge)
+
+    def _fingerprint(record: object) -> str:
+        return json.dumps(record, sort_keys=True, ensure_ascii=False, default=str)
+
+    node_by_id: dict[object, tuple[str, dict]] = {}
+    other_nodes: list[object] = []
+    for node in nodes:
+        if not isinstance(node, dict) or not is_hashable(node.get("id")):
+            other_nodes.append(node)
+            continue
+        node_id = node["id"]
+        fingerprint = _fingerprint(node)
+        previous = node_by_id.get(node_id)
+        if previous is not None and previous[0] != fingerprint:
+            raise ValueError(f"conflicting semantic node id: {node_id!r}")
+        node_by_id[node_id] = (fingerprint, node)
+
+    reconciled_hyperedges: dict[object, tuple[str, object]] = {}
+    unkeyed_hyperedges: dict[str, object] = {}
+    for hyperedge in surviving_hyperedges:
+        fingerprint = _fingerprint(hyperedge)
+        explicit_id = hyperedge.get("id") if isinstance(hyperedge, dict) else None
+        if explicit_id is None:
+            unkeyed_hyperedges[fingerprint] = hyperedge
+            continue
+        previous = reconciled_hyperedges.get(explicit_id)
+        if previous is not None and previous[0] != fingerprint:
+            raise ValueError(f"conflicting semantic hyperedge id: {explicit_id!r}")
+        reconciled_hyperedges[explicit_id] = (fingerprint, hyperedge)
+
+    result["nodes"] = [
+        record for _fingerprint, record in sorted(node_by_id.values(), key=lambda item: item[0])
+    ] + sorted(other_nodes, key=_fingerprint)
+    result["edges"] = [
+        record
+        for _fingerprint, record in sorted(
+            {_fingerprint(record): record for record in surviving_edges}.items()
+        )
+    ]
+    result["hyperedges"] = [
+        record
+        for _fingerprint, record in sorted(reconciled_hyperedges.values(), key=lambda item: item[0])
+    ] + [record for _fingerprint, record in sorted(unkeyed_hyperedges.items())]
+    result["graphify_identity_diagnostics"] = diagnostics
+    return result
 
 
 def graph_has_legacy_ids(nodes: list, root: str | Path | None = None, sample: int = 300) -> bool:
@@ -432,51 +630,7 @@ def graph_has_legacy_ids(nodes: list, root: str | Path | None = None, sample: in
 
 def _repair_hyperedge_file_node_aliases_from_records(nodes: list, hyperedges: list) -> list:
     """Resolve legacy semantic file-node members from serialized node records."""
-    aliases: dict[str, Hashable | None] = {}
-    valid_ids: set[Hashable] = set()
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        node_id = node.get("id")
-        if is_hashable(node_id):
-            valid_ids.add(node_id)
-        if not isinstance(node_id, str) or node.get("_origin") != "ast":
-            continue
-        if node.get("source_location") != "L1":
-            continue
-        source_file = node.get("source_file")
-        if not isinstance(source_file, str) or not source_file:
-            continue
-        rel = Path(source_file)
-        if is_absolute_path(source_file) or not rel.name:
-            continue
-        label = str(node.get("label") or "")
-        if label not in {rel.name, rel.as_posix()}:
-            continue
-        path_alias = make_id(rel.as_posix())
-        for alias in (path_alias, make_id(path_alias, "node")):
-            normalized = _normalize_id(alias)
-            prior = aliases.get(normalized)
-            if prior is None and normalized not in aliases:
-                aliases[normalized] = node_id
-            elif prior != node_id:
-                aliases[normalized] = None
-
-    repaired: list = []
-    for hyperedge in hyperedges:
-        if not isinstance(hyperedge, dict) or not isinstance(hyperedge.get("nodes"), list):
-            repaired.append(hyperedge)
-            continue
-        item = dict(hyperedge)
-        members = []
-        for member in hyperedge["nodes"]:
-            replacement = None
-            if isinstance(member, str) and member not in valid_ids:
-                replacement = aliases.get(_normalize_id(member))
-            members.append(replacement if replacement is not None else member)
-        item["nodes"] = members
-        repaired.append(item)
-    return repaired
+    return repair_legacy_file_node_hyperedge_aliases(nodes, hyperedges)
 
 
 def _repair_hyperedge_file_node_aliases(G: nx.Graph, hyperedges: list) -> list:
@@ -645,6 +799,8 @@ def build_from_json(
     # those keys so Pass 2 skips them — same conservatism as
     # _rewire_unique_stub_nodes, which only merges when exactly one real def exists.
     for nid in node_set:
+        if not isinstance(nid, str):
+            continue
         attrs = G.nodes[nid]
         label = str(attrs.get("label", "")).strip()
         sf = str(attrs.get("source_file", ""))
@@ -685,16 +841,42 @@ def build_from_json(
             if isinstance(he, dict) and isinstance(he.get("nodes"), list):
                 he["nodes"] = [_ghost_remap.get(node_id, node_id) for node_id in he["nodes"]]
 
-    # Normalized ID map: lets edges survive when the LLM generates IDs with
-    # slightly different casing or punctuation than the AST extractor.
-    # e.g. "Session_ValidateToken" maps to "session_validatetoken".
-    norm_to_id: dict[str, Hashable] = {
-        _normalize_id(nid): nid for nid in node_set if isinstance(nid, str)
-    }
-    # Also map ghost IDs to their canonical AST replacements.
-    for ghost_id, canonical_id in _ghost_remap.items():
-        norm_to_id[_normalize_id(ghost_id)] = canonical_id
-        norm_to_id[ghost_id] = canonical_id
+    # Exact endpoint IDs always win. Fuzzy aliases are accepted only when one
+    # canonical node claims them; contested aliases are skipped rather than
+    # assigned according to set/hash iteration order.
+    exact_alias_to_id: dict[str, Hashable] = {}
+    normalized_alias_to_id: dict[str, Hashable] = {}
+    contested_exact_aliases: set[str] = set()
+    contested_normalized_aliases: set[str] = set()
+
+    def _register_alias(alias: str, canonical_id: Hashable, *, exact: bool) -> None:
+        normalized = _normalize_id(alias)
+        prior_normalized = normalized_alias_to_id.get(normalized)
+        if normalized in contested_normalized_aliases:
+            pass
+        elif prior_normalized is None:
+            normalized_alias_to_id[normalized] = canonical_id
+        elif prior_normalized != canonical_id:
+            normalized_alias_to_id.pop(normalized, None)
+            contested_normalized_aliases.add(normalized)
+        if not exact:
+            return
+        prior_exact = exact_alias_to_id.get(alias)
+        if alias in contested_exact_aliases:
+            return
+        if prior_exact is None:
+            exact_alias_to_id[alias] = canonical_id
+        elif prior_exact != canonical_id:
+            exact_alias_to_id.pop(alias, None)
+            contested_exact_aliases.add(alias)
+
+    for node_id in sorted(
+        (node_id for node_id in node_set if isinstance(node_id, str)),
+        key=lambda value: (value.casefold(), value),
+    ):
+        _register_alias(node_id, node_id, exact=False)
+    for ghost_id, canonical_id in sorted(_ghost_remap.items()):
+        _register_alias(ghost_id, canonical_id, exact=True)
     # Pre-migration alias index (#1504): register each canonical node's OLD-stem id
     # forms as aliases so a stale-id edge endpoint coming from an un-re-keyed
     # fragment (e.g. an incremental update whose fragment references a symbol in a
@@ -703,6 +885,8 @@ def build_from_json(
     from graphify.extractors.base import _file_stem as _fs
 
     for nid in node_set:
+        if not isinstance(nid, str):
+            continue
         attrs = G.nodes[nid]
         sf = attrs.get("source_file")
         if not sf:
@@ -710,7 +894,10 @@ def build_from_json(
         rel = Path(str(sf))
         if is_absolute_path(str(sf)):
             continue
-        new_stem = make_id(_fs(rel))
+        raw_stem = _fs(rel)
+        if not raw_stem:
+            continue
+        new_stem = make_id(raw_stem)
         suffix = ""
         if _normalize_id(nid).startswith(new_stem):
             suffix = _normalize_id(nid)[len(new_stem) :]  # leading "_entity" or ""
@@ -718,8 +905,12 @@ def build_from_json(
             if old_stem == new_stem:
                 continue
             alias = old_stem + suffix
-            norm_to_id.setdefault(_normalize_id(alias), nid)
-            norm_to_id.setdefault(alias, nid)
+            _register_alias(alias, nid, exact=True)
+    identity_diagnostics = {
+        "contested_exact_aliases": sorted(contested_exact_aliases),
+        "contested_normalized_aliases": sorted(contested_normalized_aliases),
+        "skipped_contested_endpoints": 0,
+    }
     multigraph_groups: dict[tuple[Hashable, Hashable, str], list[dict]] = {}
     multigraph_explicit_keys: set[tuple[Hashable, Hashable, str]] = set()
     multigraph_diagnostics = {"exact_duplicate_edges": 0, "key_collision_edges": 0}
@@ -762,9 +953,23 @@ def build_from_json(
             continue
         # Remap mismatched IDs via normalization before dropping the edge.
         if isinstance(src, str) and src not in node_set:
-            src = norm_to_id.get(_normalize_id(src), src)
+            exact_target = exact_alias_to_id.get(src)
+            normalized = _normalize_id(src)
+            if exact_target is not None:
+                src = exact_target
+            elif normalized not in contested_normalized_aliases:
+                src = normalized_alias_to_id.get(normalized, src)
+            else:
+                identity_diagnostics["skipped_contested_endpoints"] += 1
         if isinstance(tgt, str) and tgt not in node_set:
-            tgt = norm_to_id.get(_normalize_id(tgt), tgt)
+            exact_target = exact_alias_to_id.get(tgt)
+            normalized = _normalize_id(tgt)
+            if exact_target is not None:
+                tgt = exact_target
+            elif normalized not in contested_normalized_aliases:
+                tgt = normalized_alias_to_id.get(normalized, tgt)
+            else:
+                identity_diagnostics["skipped_contested_endpoints"] += 1
         if src not in node_set or tgt not in node_set:
             continue  # skip edges to external/stdlib nodes - expected, not an error
         # Exclude legacy from/to alongside source/target so they don't survive
@@ -964,9 +1169,12 @@ def build_from_json(
         for he in hyperedges:
             if isinstance(he, dict) and he.get("source_file"):
                 he["source_file"] = _norm_source_file(he["source_file"], _root)
-        G.graph["hyperedges"] = hyperedges
+        G.graph["hyperedges"] = list(reconcile_hyperedges(hyperedges, live_node_ids=set(G.nodes)))
+    else:
+        G.graph["hyperedges"] = []
     if multigraph:
         G.graph["graphify_multigraph_diagnostics"] = multigraph_diagnostics
+    G.graph["graphify_identity_diagnostics"] = identity_diagnostics
     return G
 
 
@@ -997,6 +1205,7 @@ def build(
 
     combined = _combine_extractions(extractions)
     dedup_diagnostics: dict = {}
+    dedup_node_remap: dict[str, str] = {}
     if dedup and combined["nodes"]:
         combined["nodes"], combined["edges"] = deduplicate_entities(
             combined["nodes"],
@@ -1004,6 +1213,14 @@ def build(
             communities={},
             dedup_llm_backend=dedup_llm_backend,
             diagnostics=dedup_diagnostics,
+            node_remap=dedup_node_remap,
+        )
+        combined["hyperedges"] = list(
+            reconcile_hyperedges(
+                combined["hyperedges"],
+                live_node_ids={node["id"] for node in combined["nodes"]},
+                node_remap=dedup_node_remap,
+            )
         )
     G = build_from_json(combined, directed=directed, root=root, multigraph=multigraph)
     if multigraph and dedup_diagnostics:
@@ -1134,39 +1351,19 @@ def build_merge(
     simple-graph behavior.
     """
     graph_path = Path(graph_path if graph_path is not None else _default_graph_json())
+    existing_state = None
     if graph_path.exists():
-        # Read JSON directly instead of going through node_link_graph().
-        # The latter rebuilds an undirected nx.Graph and then enumerating
-        # edges() yields endpoints based on node insertion order, which
-        # silently flips directional edges (e.g. `calls`) when the callee
-        # was inserted before the caller. The _src/_tgt direction-preserving
-        # attrs are popped before saving in export.py, so going through the
-        # NetworkX round-trip loses direction permanently (#760).
-        from graphify.security import check_graph_file_size_cap
+        from graphify.graph_loader import load_graph_state_file
+        from graphify.graph_state import DecodeMode
 
-        check_graph_file_size_cap(graph_path)
         try:
-            data = json.loads(graph_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
+            state = load_graph_state_file(graph_path, mode=DecodeMode.MIGRATE_LEGACY)
+        except GraphStateError as exc:
             raise RuntimeError(
                 f"Cannot read {graph_path} for incremental merge: {exc}. "
                 "Delete the file and run a full rebuild."
             ) from exc
-        if not isinstance(data, dict):
-            raise TypeError(
-                f"saved graph.json at {graph_path} must be a JSON object, got {type(data).__name__}"
-            )
-        # Honor the saved graph's `multigraph` flag so a stateful update of a
-        # multigraph graph.json preserves keyed parallel edges instead of
-        # collapsing to a simple graph. Existing edges keep their stored `key`
-        # when re-fed through build(multigraph=True), so distinct parallel edges
-        # between the same node pair survive the merge round-trip.
-        saved_multigraph = data.get("multigraph", False)
-        if saved_multigraph is not True and saved_multigraph is not False:
-            raise TypeError(
-                f"'multigraph' in {graph_path} must be a boolean, "
-                f"got {type(saved_multigraph).__name__} ({saved_multigraph!r})"
-            )
+        saved_multigraph = state.graph_type == "multidigraph"
         if multigraph is None:
             multigraph = saved_multigraph
         elif multigraph != saved_multigraph:
@@ -1175,16 +1372,7 @@ def build_merge(
                 f"saved graph.json multigraph={saved_multigraph}",
                 file=sys.stderr,
             )
-        # Honor the saved graph's `directed` flag unless the caller explicitly
-        # overrides. Without this, an update with default args on a directed
-        # graph silently downgrades it and loses edge direction on next export.
-        saved_directed_raw = data.get("directed", False)
-        if saved_directed_raw is not True and saved_directed_raw is not False:
-            raise TypeError(
-                f"'directed' in {graph_path} must be a boolean, "
-                f"got {type(saved_directed_raw).__name__} ({saved_directed_raw!r})"
-            )
-        saved_directed = saved_directed_raw
+        saved_directed = state.graph_type in {"digraph", "multidigraph"}
         if directed is None:
             directed = saved_directed
         elif directed != saved_directed:
@@ -1193,10 +1381,10 @@ def build_merge(
                 f"saved graph.json directed={saved_directed}",
                 file=sys.stderr,
             )
-        links_key = "links" if "links" in data else "edges"
-        existing_nodes = list(data.get("nodes", []))
-        existing_edges = list(data.get(links_key, []))
-        existing_hyperedges = list(data.get("hyperedges", []))
+        existing_nodes = list(state.nodes)
+        existing_edges = list(state.edges)
+        existing_hyperedges = list(state.hyperedges)
+        existing_state = state
         had_graph = True
     else:
         if directed is None:
@@ -1258,12 +1446,21 @@ def build_merge(
 
             incoming = _combine_extractions(incoming_chunks)
             if incoming["nodes"]:
+                incoming_remap: dict[str, str] = {}
                 incoming["nodes"], incoming["edges"] = deduplicate_entities(
                     incoming["nodes"],
                     incoming["edges"],
                     communities={},
                     dedup_llm_backend=dedup_llm_backend,
                     diagnostics=dedup_diagnostics,
+                    node_remap=incoming_remap,
+                )
+                incoming["hyperedges"] = list(
+                    reconcile_hyperedges(
+                        incoming["hyperedges"],
+                        live_node_ids={node["id"] for node in existing_nodes + incoming["nodes"]},
+                        node_remap=incoming_remap,
+                    )
                 )
             all_chunks = base + [incoming]
         else:
@@ -1311,7 +1508,8 @@ def build_merge(
         for he in existing_hyperedges:
             if not isinstance(he, dict):
                 continue
-            sf = he.get("source_file")
+            sf_value = he.get("source_file")
+            sf = str(sf_value) if sf_value is not None else None
             norm = _norm_source_file(sf, _eff_root)
             if sf in new_sources or norm in new_sources:
                 continue  # re-extracted — replaced by the new chunk's version
@@ -1373,6 +1571,30 @@ def build_merge(
                 file=sys.stderr,
             )
 
+    G.graph["hyperedges"] = list(
+        reconcile_hyperedges(G.graph.get("hyperedges", []), live_node_ids=set(G.nodes))
+    )
+
+    if existing_state is not None:
+        from graphify.graph_state import (
+            TOP_LEVEL_METADATA_CARRIER,
+            merge_graph_metadata,
+        )
+
+        hyperedges = G.graph.get("hyperedges", [])
+        graph_type = (
+            "multidigraph" if G.is_multigraph() else "digraph" if G.is_directed() else "simple"
+        )
+        merged_metadata = merge_graph_metadata(
+            existing_state.graph_metadata,
+            G.graph,
+            target_type=graph_type,
+        )
+        G.graph.clear()
+        G.graph.update(merged_metadata)
+        G.graph["hyperedges"] = hyperedges
+        G.graph[TOP_LEVEL_METADATA_CARRIER] = dict(existing_state.top_level_metadata)
+
     # Safety check: refuse to shrink the graph silently (#479).
     # Stateful dedup applies only to incoming chunks, so only explicit pruning
     # may reduce the saved graph's node count.
@@ -1402,6 +1624,13 @@ def prefix_graph_for_global(G: nx.Graph, repo_tag: str) -> nx.Graph:
     for node, data in H.nodes(data=True):
         data["repo"] = repo_tag
         data.setdefault("local_id", node.split("::", 1)[1])
+    H.graph["hyperedges"] = list(
+        reconcile_hyperedges(
+            G.graph.get("hyperedges", []),
+            live_node_ids=set(H.nodes),
+            node_remap=relabel,
+        )
+    )
     return H
 
 
@@ -1409,4 +1638,7 @@ def prune_repo_from_graph(G: nx.Graph, repo_tag: str) -> int:
     """Remove all nodes tagged with repo_tag from G in-place. Returns count removed."""
     to_remove = [n for n, d in G.nodes(data=True) if d.get("repo") == repo_tag]
     G.remove_nodes_from(to_remove)
+    G.graph["hyperedges"] = list(
+        reconcile_hyperedges(G.graph.get("hyperedges", []), live_node_ids=set(G.nodes))
+    )
     return len(to_remove)

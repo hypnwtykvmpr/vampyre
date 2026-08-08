@@ -1,11 +1,9 @@
 """Token-reduction benchmark - measures how much context graphify saves vs naive full-corpus approach."""
 
 from __future__ import annotations
-import json
 import sys
 from pathlib import Path
 import networkx as nx
-from networkx.readwrite import json_graph
 
 from graphify.build import edge_data
 from graphify.serve import _query_terms
@@ -105,14 +103,9 @@ def run_benchmark(
     Returns dict with: corpus_tokens, avg_query_tokens, reduction_ratio, per_question
     """
     graph_path = graph_path or _default_graph_json()
-    from graphify.security import check_graph_file_size_cap
+    from graphify.graph_loader import load_graph_file
 
-    check_graph_file_size_cap(Path(graph_path))
-    data = json.loads(Path(graph_path).read_text(encoding="utf-8"))
-    try:
-        G = json_graph.node_link_graph(data, edges="links")
-    except TypeError:
-        G = json_graph.node_link_graph(data)
+    G = load_graph_file(Path(graph_path))
 
     # Rough estimate: each node label is ~3 words, plus source context.
     resolved_corpus_words = corpus_words if corpus_words is not None else G.number_of_nodes() * 50

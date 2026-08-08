@@ -283,6 +283,16 @@ def _read_json_file(path: str | Path) -> dict[str, Any]:
         ) from exc
     if not isinstance(data, dict):
         raise ValueError("diagnostic input must be a JSON object")
+    graph_metadata = data.get("graph")
+    is_graphify_state = (
+        "schema_version" in data
+        or "graphify_profile" in data
+        or (isinstance(graph_metadata, dict) and "graphify_profile" in graph_metadata)
+    )
+    if is_graphify_state:
+        from graphify.graph_state import DecodeMode, decode_graph_state, encode_graph_state
+
+        return encode_graph_state(decode_graph_state(data, mode=DecodeMode.READ_ONLY_LEGACY))
     return data
 
 

@@ -8,9 +8,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from .graph_loader import GRAPHIFY_PROFILE_KEY
+from .graph_state import (
+    DecodeMode,
+    GraphStateError,
+    decode_graph_state,
+    read_graph_state_payload,
+)
+from .ids import AST_NODE_ID_SCHEMA_PROFILE_KEY, CURRENT_AST_NODE_ID_SCHEMA
 from .paths import GRAPHIFY_OUT, resolve_scan_root_marker, write_scan_root_marker
-from .security import check_graph_file_size_cap
+from .semantic_schema import (
+    LEGACY_SEMANTIC_NODE_ID_SCHEMA,
+    PROMPT_SCHEMA_VERSION,
+    SEMANTIC_NODE_ID_SCHEMA_PROFILE_KEY,
+)
 
 GraphType = Literal["simple", "digraph", "multidigraph"]
 
@@ -39,6 +49,76 @@ class UpdateContext:
         return self.graph_type in {"digraph", "multidigraph"}
 
 
+@dataclass(frozen=True)
+class IdentitySchemas:
+    """Producer-specific identity contracts declared by serialized state."""
+
+    ast: str | None
+    semantic: str | None
+
+
+def _identity_schemas(data: object) -> IdentitySchemas:
+    """Read identity declarations without treating one producer as another."""
+    if not isinstance(data, dict):
+        raise UpdateStateError("graph.json must contain a JSON object")
+    nested = data.get("graph")
+    profiles = [data.get("graphify_profile")]
+    if isinstance(nested, dict):
+        profiles.append(nested.get("graphify_profile"))
+    profiles = [profile for profile in profiles if profile is not None]
+    if not profiles or any(not isinstance(profile, dict) for profile in profiles):
+        raise UpdateStateError("graph.json is missing a valid explicit graphify profile")
+
+    def _declaration(key: str, label: str) -> str | None:
+        values = [profile.get(key) for profile in profiles if profile.get(key) is not None]
+        if len({repr(value) for value in values}) > 1:
+            raise UpdateStateError(f"top-level and nested {label} node-ID schemas conflict")
+        value = values[0] if values else None
+        if value is not None and not isinstance(value, str):
+            raise UpdateStateError(f"{label} node-ID schema must be a string")
+        return value
+
+    return IdentitySchemas(
+        ast=_declaration(AST_NODE_ID_SCHEMA_PROFILE_KEY, "AST"),
+        semantic=_declaration(SEMANTIC_NODE_ID_SCHEMA_PROFILE_KEY, "semantic"),
+    )
+
+
+def require_identity_schemas(
+    data: object,
+    *,
+    allow_unmarked_legacy_ast_ids: bool = False,
+    require_current_semantic: bool = False,
+) -> IdentitySchemas:
+    """Validate producer schemas for the mutation a caller intends to perform."""
+    schemas = _identity_schemas(data)
+    if schemas.ast is None and not allow_unmarked_legacy_ast_ids:
+        raise UpdateStateError(
+            "graph.json predates the current AST node-ID schema; run ordinary "
+            "`graphify update` to migrate deterministic IDs and preserved references"
+        )
+    if schemas.ast not in (None, CURRENT_AST_NODE_ID_SCHEMA):
+        raise UpdateStateError(
+            f"unsupported AST node-ID schema {schemas.ast!r}; upgrade Graphify before "
+            "modifying this graph"
+        )
+    if schemas.semantic not in (
+        None,
+        PROMPT_SCHEMA_VERSION,
+        LEGACY_SEMANTIC_NODE_ID_SCHEMA,
+    ):
+        raise UpdateStateError(
+            f"unsupported semantic node-ID schema {schemas.semantic!r}; upgrade Graphify "
+            "before modifying this graph"
+        )
+    if require_current_semantic and schemas.semantic != PROMPT_SCHEMA_VERSION:
+        raise UpdateStateError(
+            "graph.json contains unmarked or legacy semantic identity; run "
+            "`graphify update --remap` before incremental semantic extraction"
+        )
+    return schemas
+
+
 def _output_dir(output_root: Path) -> Path:
     configured = Path(GRAPHIFY_OUT)
     return (
@@ -63,46 +143,39 @@ def _output_root_from_dir(output_dir: Path) -> Path:
 def _strict_graph_type(data: object) -> GraphType:
     if not isinstance(data, dict):
         raise UpdateStateError("graph.json must contain a JSON object")
-    if "multigraph" not in data or "directed" not in data:
-        raise UpdateStateError("graph.json is missing an explicit graph profile")
-
-    multigraph = data["multigraph"]
-    directed = data["directed"]
-    if not isinstance(multigraph, bool) or not isinstance(directed, bool):
-        raise UpdateStateError("graph.json profile flags must be booleans")
-    if multigraph and not directed:
-        raise UpdateStateError("graph.json has a conflicting multigraph/directed profile")
-
-    graph_type: GraphType
-    if multigraph:
-        graph_type = "multidigraph"
-    elif directed:
-        graph_type = "digraph"
-    else:
-        graph_type = "simple"
-
-    graph_meta = data.get("graph")
-    nested_profile = graph_meta.get(GRAPHIFY_PROFILE_KEY) if isinstance(graph_meta, dict) else None
-    top_profile = data.get(GRAPHIFY_PROFILE_KEY)
-    profiles = [profile for profile in (top_profile, nested_profile) if profile is not None]
-    if not profiles:
+    nested = data.get("graph")
+    profile = data.get("graphify_profile")
+    if profile is None and isinstance(nested, dict):
+        profile = nested.get("graphify_profile")
+    if not isinstance(profile, dict) or profile.get("graph_type") not in {
+        "simple",
+        "digraph",
+        "multidigraph",
+    }:
         raise UpdateStateError("graph.json is missing a valid explicit graphify profile")
-    for profile in profiles:
-        if not isinstance(profile, dict):
-            raise UpdateStateError("graph.json contains a malformed graphify profile")
-        declared = profile.get("graph_type")
-        if declared not in {"simple", "digraph", "multidigraph"}:
-            raise UpdateStateError("graph.json is missing a valid explicit graphify profile")
-        if declared != graph_type:
-            raise UpdateStateError(
-                "graph.json profile conflicts with its multigraph/directed flags"
-            )
+    try:
+        return decode_graph_state(data, mode=DecodeMode.MIGRATE_LEGACY).graph_type
+    except GraphStateError as exc:
+        message = str(exc)
+        if message in {
+            "graphify profile is required",
+            "graphify profile is missing a valid graph_type",
+        }:
+            message = "graph.json is missing a valid explicit graphify profile"
+        raise UpdateStateError(message) from exc
 
-    nodes = data.get("nodes")
-    edges = data.get("links", data.get("edges"))
-    if not isinstance(nodes, list) or not isinstance(edges, list):
-        raise UpdateStateError("graph.json is missing valid nodes and edge lists")
-    return graph_type
+
+def _graph_type_from_file(graph_path: Path) -> GraphType:
+    try:
+        return _strict_graph_type(read_graph_state_payload(graph_path))
+    except GraphStateError as exc:
+        message = str(exc)
+        if message in {
+            "graphify profile is required",
+            "graphify profile is missing a valid graph_type",
+        }:
+            message = "graph.json is missing a valid explicit graphify profile"
+        raise UpdateStateError(message) from exc
 
 
 def resolve_update_context(
@@ -111,6 +184,7 @@ def resolve_update_context(
     output_root: Path | None = None,
     output_dir: Path | None = None,
     cwd: Path | None = None,
+    allow_unmarked_legacy_ast_ids: bool = False,
 ) -> UpdateContext:
     """Resolve an existing graph update without creating or guessing state."""
     working_dir = (Path.cwd() if cwd is None else Path(cwd)).resolve()
@@ -158,11 +232,16 @@ def resolve_update_context(
         )
 
     try:
-        check_graph_file_size_cap(graph_path)
-        data = json.loads(graph_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        graph_payload = read_graph_state_payload(graph_path)
+        graph_type = _strict_graph_type(graph_payload)
+        require_identity_schemas(
+            graph_payload,
+            allow_unmarked_legacy_ast_ids=allow_unmarked_legacy_ast_ids,
+        )
+    except UpdateStateError:
+        raise
+    except (GraphStateError, OSError, UnicodeError, ValueError) as exc:
         raise UpdateStateError(f"existing graph state is unreadable: {exc}") from exc
-    graph_type = _strict_graph_type(data)
 
     return UpdateContext(
         scan_root=marker_scan,
@@ -207,11 +286,9 @@ def repair_update_state(
         raise UpdateStateError(f"existing graph state has no manifest: {manifest_path}")
 
     try:
-        check_graph_file_size_cap(graph_path)
-        graph_data = json.loads(graph_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        graph_type = _graph_type_from_file(graph_path)
+    except (OSError, UnicodeError, UpdateStateError, ValueError) as exc:
         raise UpdateStateError(f"existing graph state is unreadable: {exc}") from exc
-    graph_type = _strict_graph_type(graph_data)
 
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
