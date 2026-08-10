@@ -351,38 +351,94 @@ def test_file_state_transaction_rolls_back_under_current_generation(tmp_path):
 
 def test_output_state_lock_serializes_real_processes(tmp_path):
     events = tmp_path / "events.txt"
+    release = tmp_path / "release-first"
     script = textwrap.dedent(
         """
         import sys
         import time
         from pathlib import Path
-        from graphify.persistence import output_state_lock
+        from graphify.persistence import locked_file, output_state_lock
 
         output = Path(sys.argv[1])
         events = Path(sys.argv[2])
         name = sys.argv[3]
-        delay = float(sys.argv[4])
+        release_arg = sys.argv[4]
+        probe_contention = sys.argv[5] == "probe"
+
+        def write_event(value):
+            with events.open("a", encoding="utf-8") as stream:
+                stream.write(value + "\\n")
+                stream.flush()
+
+        if probe_contention:
+            with locked_file(output / ".rebuild.guard", blocking=False) as acquired:
+                write_event(f"{name}:probe:{'acquired' if acquired else 'contended'}")
+            if acquired:
+                raise SystemExit("probe unexpectedly acquired the held output lock")
+
         with output_state_lock(output):
-            with events.open("a", encoding="utf-8") as stream:
-                stream.write(f"{name}:start\\n")
-                stream.flush()
-            time.sleep(delay)
-            with events.open("a", encoding="utf-8") as stream:
-                stream.write(f"{name}:end\\n")
-                stream.flush()
+            write_event(f"{name}:start")
+            if release_arg != "-":
+                release = Path(release_arg)
+                deadline = time.monotonic() + 10
+                while not release.exists():
+                    if time.monotonic() >= deadline:
+                        raise SystemExit("timed out waiting for parent release")
+                    time.sleep(0.01)
+            write_event(f"{name}:end")
         """
     )
+
+    def wait_for_event(value: str, process: subprocess.Popen) -> None:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if events.exists() and value in events.read_text(encoding="utf-8").splitlines():
+                return
+            return_code = process.poll()
+            assert return_code is None, f"child exited {return_code} before {value!r}"
+            time.sleep(0.01)
+        pytest.fail(f"timed out waiting for child event {value!r}")
+
     first = subprocess.Popen(
-        [sys.executable, "-c", script, str(tmp_path / "out"), str(events), "first", "0.3"]
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(tmp_path / "out"),
+            str(events),
+            "first",
+            str(release),
+            "no-probe",
+        ]
     )
-    time.sleep(0.05)
+    wait_for_event("first:start", first)
+
     second = subprocess.Popen(
-        [sys.executable, "-c", script, str(tmp_path / "out"), str(events), "second", "0"]
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(tmp_path / "out"),
+            str(events),
+            "second",
+            "-",
+            "probe",
+        ]
     )
+    try:
+        wait_for_event("second:probe:contended", second)
+        assert events.read_text(encoding="utf-8").splitlines() == [
+            "first:start",
+            "second:probe:contended",
+        ]
+    finally:
+        release.touch()
+
     assert first.wait(timeout=10) == 0
     assert second.wait(timeout=10) == 0
     assert events.read_text(encoding="utf-8").splitlines() == [
         "first:start",
+        "second:probe:contended",
         "first:end",
         "second:start",
         "second:end",

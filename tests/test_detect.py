@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from graphify.detect import (
+    _gitignore_regex,
+    _parse_gitignore_line,
     classify_file,
     count_words,
     detect,
@@ -211,7 +213,6 @@ def test_graphifyignore_missing_is_fine(tmp_path):
         ("  *.log", "file.log", False),
         ("  *.log", "  file.log", True),
         (r"name\ ", "name ", True),
-        (r"name\\ ", "name\\", True),
     ],
 )
 def test_internal_ignore_matcher_matches_git(tmp_path, pattern, relative, ignored):
@@ -224,6 +225,14 @@ def test_internal_ignore_matcher_matches_git(tmp_path, pattern, relative, ignore
     patterns = _load_graphifyignore(tmp_path)
     assert _is_ignored(target, tmp_path, patterns) is ignored
     assert _is_ignored(target, tmp_path, patterns) is _git_ignored(tmp_path, relative)
+
+
+def test_gitignore_escaped_trailing_backslash_is_matched_portably():
+    pattern = _parse_gitignore_line(r"name\\ ")
+
+    assert pattern == r"name\\"
+    assert re.fullmatch(_gitignore_regex(pattern), "name\\") is not None
+    assert re.fullmatch(_gitignore_regex(pattern), "name") is None
 
 
 @pytest.mark.parametrize(

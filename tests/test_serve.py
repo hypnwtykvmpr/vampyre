@@ -471,7 +471,11 @@ print(_query_graph_text(graph, "target", depth=1, token_budget=45))
             capture_output=True,
             text=True,
             encoding="utf-8",
-            env={**os.environ, "PYTHONHASHSEED": seed},
+            env={
+                **os.environ,
+                "PYTHONHASHSEED": seed,
+                "PYTHONIOENCODING": "utf-8",
+            },
         )
         outputs.append(result.stdout)
 
