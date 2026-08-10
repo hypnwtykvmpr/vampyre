@@ -1,5 +1,5 @@
 ```powershell
-# Detect Python in this fork's uv tool environment.
+# Detect Python in Vampyre's uv tool environment.
 New-Item -ItemType Directory -Force -Path graphify-out | Out-Null
 $GRAPHIFY_PYTHON = $null
 
@@ -18,7 +18,7 @@ function Find-GraphifyPython {
     return $null
 }
 
-# Try to find the installed fork first.
+# Try to find the installed Vampyre tool first.
 $GRAPHIFY_PYTHON = Find-GraphifyPython
 
 # Not found — install then re-detect
@@ -26,7 +26,7 @@ if (-not $GRAPHIFY_PYTHON) {
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
         throw "graphify requires uv; install uv first, then retry."
     }
-    uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
+    uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v0.9.5"
     $GRAPHIFY_PYTHON = Find-GraphifyPython
 }
 if (-not $GRAPHIFY_PYTHON) { throw "graphify's uv tool interpreter could not be resolved." }

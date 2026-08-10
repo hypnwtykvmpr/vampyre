@@ -1,85 +1,114 @@
 # Architecture
 
-graphify is a Claude Code skill backed by a Python library. The skill orchestrates the library; the library can be used standalone.
+Vampyre is a Python package, command-line application, agent-skill bundle, and
+optional MCP server. The `graphify` CLI is the shared entry point; agent
+integrations invoke the same implementation rather than maintaining a separate
+graph engine.
 
 ## Pipeline
 
-```
-detect()  →  extract()  →  build_graph()  →  cluster()  →  analyze()  →  report()  →  export()
-```
-
-Each stage is a single function in its own module. They communicate through plain Python dicts and NetworkX graphs - no shared state, no side effects outside `graphify-out/`.
-
-## Module responsibilities
-
-| Module | Function | Input → Output |
-|--------|----------|----------------|
-| `detect.py` | `collect_files(root)` | directory → `[Path]` filtered list |
-| `extract.py` | `extract(path)` | file path → `{nodes, edges}` dict |
-| `build.py` | `build_graph(extractions)` | list of extraction dicts → `nx.Graph` |
-| `cluster.py` | `cluster(G)` | graph → graph with `community` attr on each node |
-| `analyze.py` | `analyze(G)` | graph → analysis dict (god nodes, surprises, questions) |
-| `report.py` | `render_report(G, analysis)` | graph + analysis → GRAPH_REPORT.md string |
-| `export.py` | `export(G, out_dir, ...)` | graph → Obsidian vault, graph.json, graph.html, graph.svg |
-| `callflow_html.py` | `write_callflow_html(...)` | graphify-out files → Mermaid architecture/call-flow HTML |
-| `ingest.py` | `ingest(url, ...)` | URL → file saved to corpus dir |
-| `cache.py` | `check_semantic_cache / save_semantic_cache` | files → (cached, uncached) split |
-| `security.py` | validation helpers | URL / path / label → validated or raises |
-| `validate.py` | `validate_extraction(data)` | extraction dict → raises on schema errors |
-| `serve.py` | `start_server(graph_path)` | graph file path → MCP stdio server |
-| `watch.py` | `watch(root, flag_path)` | directory → writes flag file on change |
-| `benchmark.py` | `run_benchmark(graph_path)` | graph file → corpus vs subgraph token comparison |
-
-## Extraction output schema
-
-Every extractor returns:
-
-```json
-{
-  "nodes": [
-    {"id": "unique_string", "label": "human name", "source_file": "path", "source_location": "L42"}
-  ],
-  "edges": [
-    {"source": "id_a", "target": "id_b", "relation": "calls|imports|uses|...", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}
-  ]
-}
+```text
+detect -> local extraction/conversion -> semantic egress -> build
+       -> cluster -> analyze -> transactional publish -> query/export/serve
 ```
 
-`validate.py` enforces this schema before `build_graph()` consumes it.
+Incremental paths reuse the same state contracts:
 
-## Confidence labels
-
-| Label | Meaning |
-|-------|---------|
-| `EXTRACTED` | Relationship is explicitly stated in the source (e.g., an import statement, a direct call) |
-| `INFERRED` | Relationship is a reasonable deduction (e.g., call-graph second pass, co-occurrence in context) |
-| `AMBIGUOUS` | Relationship is uncertain; flagged for human review in GRAPH_REPORT.md |
-
-## Adding a new language extractor
-
-1. Add a `extract_<lang>(path: Path) -> dict` function in `extract.py` following the existing pattern (tree-sitter parse → walk nodes → collect `nodes` and `edges` → call-graph second pass for INFERRED `calls` edges).
-2. Register the file suffix in `extract()` dispatch and `collect_files()`.
-3. Add the suffix to `CODE_EXTENSIONS` in `detect.py` and `_WATCHED_EXTENSIONS` in `watch.py`.
-4. Add the tree-sitter package to `pyproject.toml` dependencies.
-5. Add a fixture file to `tests/fixtures/` and tests to `tests/test_languages.py`.
-
-## Security
-
-All external input passes through `graphify/security.py` before use:
-
-- URLs → `validate_url()` (http/https only) + `_NoFileRedirectHandler` (blocks file:// redirects)
-- Fetched content → `safe_fetch()` / `safe_fetch_text()` (size cap, timeout)
-- Graph file paths → `validate_graph_path()` (must resolve inside `graphify-out/`)
-- Node labels → `sanitize_label()` (strips control chars, caps 256 chars, HTML-escapes)
-
-See `SECURITY.md` for the full threat model.
-
-## Testing
-
-One test file per module under `tests/`. Run with:
-
-```bash
-pytest tests/ -q
+```text
+manifest + source marker + graph profile
+       -> detect changes -> stable extraction -> merge/prune
+       -> validate -> transactional publish
 ```
 
-All tests are pure unit tests - no network calls, no file system side effects outside `tmp_path`.
+## Major Modules
+
+| Module | Responsibility |
+| --- | --- |
+| `__main__.py` | CLI dispatch and full extraction orchestration |
+| `detect.py` | file classification, ignore rules, manifests, content snapshots |
+| `extract.py`, `extractors/` | deterministic language and format extraction |
+| `llm.py`, `egress.py` | semantic backend selection, credential egress gate, untrusted-source payloads |
+| `build.py`, `edge_identity.py` | node reconciliation, keyed edge identity, graph construction |
+| `graph_state.py`, `graph_loader.py` | canonical serialized-state codec and read modes |
+| `cluster.py`, `projections.py` | deterministic community detection and explicit simple projections |
+| `analyze.py`, `report.py` | graph metrics, quality analysis, Markdown report |
+| `export.py`, `wiki.py`, `callflow_html.py` | JSON, HTML, wiki, Obsidian, GraphML, SVG, Neo4j, and call-flow outputs |
+| `watch.py`, `update_state.py`, `hooks.py` | strict incremental updates and Git lifecycle integration |
+| `persistence.py` | locks, atomic writes, leases, rollback, and pending generations |
+| `serve.py`, `security.py` | CLI/MCP queries, HTTP transport, path and network boundaries |
+| `cache.py`, `provenance.py`, `semantic_schema.py` | identity-aware caches and producer provenance |
+
+## Canonical Graph State
+
+`graph.json` uses NetworkX node-link data with one explicit profile:
+
+- `simple`: undirected `Graph`
+- `digraph`: directed `DiGraph`
+- `multidigraph`: keyed directed `MultiDiGraph`
+
+Undirected multigraphs are intentionally not representable. A serialized state
+must have consistent boolean class flags, profile, node IDs, edge endpoints,
+keyed edge identities, provenance, and hyperedge members. Current mutation paths
+use strict decoding and refuse malformed state. Read-only compatibility paths
+may normalize legacy shapes only when the interpretation is lossless.
+
+The canonical profile, metadata, custom profile fields, hyperedges, edge keys,
+parallel relationships, and producer provenance must survive every stateful
+path. Algorithms that need simple topology use explicit projections rather than
+silently changing the stored graph class.
+
+## Identity And Determinism
+
+Node IDs are path-qualified and generated from canonical POSIX-style source
+identities. AST and semantic producers carry independent schema versions, and
+their caches are namespaced by the inputs that affect identity.
+
+Ordering is canonicalized before serialization and before order-sensitive graph
+algorithms. Ambiguous aliases are skipped with diagnostics rather than bound to
+an arbitrary first writer. LLM-authored content is the explicit nondeterministic
+boundary; structural extraction, merge, clustering inputs, state serialization,
+and repeated no-change updates are expected to be deterministic.
+
+## Persistence
+
+The selected output root owns all graph state, locks, queues, caches, reports,
+markers, and temporary files. Atomic replacement occurs in the destination
+directory. Multi-file publication captures prior state and performs best-effort
+rollback across every captured file before reporting rollback failures.
+
+Source bytes are hashed before extraction and checked again before manifest
+advancement. A source change during extraction refuses publication instead of
+marking mixed content current. Lease and generation checks prevent an older
+publisher from acknowledging or overwriting newer work.
+
+## Security Boundaries
+
+- URL fetches validate scheme, destination, redirects, and response size.
+- Source and graph paths are canonicalized and contained to configured roots.
+- Credential-classified semantic content is blocked before provider dispatch.
+- The confined Claude CLI backend runs without project tools or inherited
+  repository authority.
+- HTTP MCP is loopback-only without authentication; non-loopback binds require
+  API-key auth and TLS, with DNS-rebinding and Host-header controls.
+- Multi-project and GitHub MCP authority are explicit allowlists.
+
+See [SECURITY.md](SECURITY.md) for operational details.
+
+## Extending Extractors
+
+Language extractors return `nodes`, `edges`, and optional `hyperedges` using the
+shared schema. New or moved extractors must preserve facade imports, registry
+identity, source-root handling, provenance, keyed relationship identity, and
+deterministic output. Follow [the extractor migration guide](graphify/extractors/MIGRATION.md)
+and add non-vacuous fixtures for both expected output and edge cases.
+
+## Verification
+
+```sh
+uv run --frozen pytest tests/ -n auto -q --tb=short
+uv run --frozen pre-commit run --all-files
+```
+
+CI runs the complete strict suite on Windows, macOS, and Linux. The release
+workflow separately builds the wheel and installs it in isolated uv tool roots
+on all three operating systems before publishing artifacts.

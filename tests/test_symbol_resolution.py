@@ -984,7 +984,7 @@ def test_resolve_python_import_guided_calls_metadata_is_sanitized(tmp_path: Path
     helper = tmp_path / "helper.py"
     # Import alias that includes an angle bracket — pathological but defensive
     # cover: the resolver itself does not parse names this aggressively, but a
-    # future extractor or upstream fragment could. The boundary is the cycle's
+    # future extractor or imported fragment could. The boundary is the cycle's
     # stated policy: every edge metadata field goes through sanitize_metadata.
     caller.write_text(
         "from helper import transform as tx\n\ndef run(value):\n    return tx(value)\n",

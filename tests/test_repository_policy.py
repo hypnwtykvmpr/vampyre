@@ -1,15 +1,31 @@
-"""Repository policy checks for the independent Vampyre fork."""
+"""Repository policy checks for standalone Vampyre."""
 
 from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
+from urllib.parse import unquote
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FORK_SOURCE = "git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
+VAMPYRE_SOURCES = {
+    "git+https://github.com/hypnwtykvmpr/vampyre.git@v0.9.5",
+    "git+https://github.com/hypnwtykvmpr/vampyre.git@main",
+}
 GUIDANCE_SUFFIXES = {".md", ".py", ".toml", ".yml", ".yaml", ".sh", ".ps1"}
+PUBLIC_DOCUMENTS = (
+    Path("README.md"),
+    Path("ARCHITECTURE.md"),
+    Path("SECURITY.md"),
+    Path("PROJECT.md"),
+    Path("docs/how-it-works.md"),
+    Path("docs/command-reference.md"),
+    Path("docs/agent-integrations.md"),
+    Path("docs/releases/0.9.5.md"),
+    Path("packaging/release/INSTALL.md"),
+)
 
 
 def _tracked_guidance_files() -> list[Path]:
@@ -26,12 +42,14 @@ def _tracked_guidance_files() -> list[Path]:
         path = ROOT / name
         if name == "CHANGELOG.md" or name.startswith("tests/"):
             continue
-        if path.name == "Dockerfile" or path.suffix.lower() in GUIDANCE_SUFFIXES:
+        if path.is_file() and (
+            path.name == "Dockerfile" or path.suffix.lower() in GUIDANCE_SUFFIXES
+        ):
             paths.append(path)
     return paths
 
 
-def test_tracked_guidance_uses_uv_and_installs_the_fork() -> None:
+def test_tracked_guidance_uses_uv_and_installs_vampyre() -> None:
     forbidden_install = re.compile(
         r"\b(?:p"
         + r"ip3?\s+(?:install|uninstall)|python[^\n]*-m\s+(?:p"
@@ -51,13 +69,13 @@ def test_tracked_guidance_uses_uv_and_installs_the_fork() -> None:
         ):
             if forbidden_install.search(line):
                 violations.append(f"{path.relative_to(ROOT)}:{line_number}: forbidden manager")
-            if ambiguous_uv.search(line) and FORK_SOURCE not in line:
-                violations.append(f"{path.relative_to(ROOT)}:{line_number}: non-fork uv source")
+            if ambiguous_uv.search(line) and not any(source in line for source in VAMPYRE_SOURCES):
+                violations.append(f"{path.relative_to(ROOT)}:{line_number}: non-Vampyre uv source")
 
     assert violations == []
 
 
-def test_project_metadata_points_to_the_fork() -> None:
+def test_project_metadata_points_to_vampyre() -> None:
     metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "https://github.com/hypnwtykvmpr/vampyre" in metadata
     assert "https://github.com/safishamsi/graphify" not in metadata
@@ -87,8 +105,160 @@ def test_public_branch_guidance_uses_main_for_development() -> None:
 
     assert "git checkout main" in readme
     assert "Active development happens on `main`" in readme
-    assert "`v9` is the accepted installation mirror" in readme
+    assert "Development snapshots install from `main`" in readme
+    assert "@v9" not in readme
     assert retired_checkout == []
+
+
+def test_public_docs_describe_a_standalone_repository() -> None:
+    forbidden = (
+        "independent fork",
+        "this fork",
+        "active fork",
+        "upstream synchronization",
+        "github.com/safishamsi/graphify",
+        "github.com/graphify-labs/graphify",
+        "graphifylabs.ai",
+        "@v9",
+    )
+    authority_docs = (
+        ROOT / "README.md",
+        ROOT / "SECURITY.md",
+        ROOT / "PROJECT.md",
+        ROOT / "docs" / "releases" / "0.9.5.md",
+        ROOT / "packaging" / "release" / "INSTALL.md",
+    )
+
+    assert not (ROOT / "FORK.md").exists()
+    assert not (ROOT / "docs" / "translations").exists()
+    assert not (ROOT / "docs" / "node-summaries-rfc.md").exists()
+    for relative_path in PUBLIC_DOCUMENTS:
+        path = ROOT / relative_path
+        text = path.read_text(encoding="utf-8").lower()
+        for marker in forbidden:
+            assert marker not in text, f"{path.relative_to(ROOT)} still contains {marker!r}"
+    for path in authority_docs:
+        text = path.read_text(encoding="utf-8").lower()
+        assert "https://github.com/hypnwtykvmpr/vampyre" in text
+        assert "canonical" in text
+
+
+def test_retired_translations_have_public_migration_guidance() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    project = (ROOT / "PROJECT.md").read_text(encoding="utf-8")
+    release_notes = (ROOT / "docs" / "releases" / "0.9.5.md").read_text(encoding="utf-8")
+
+    assert "## Documentation Language" in readme
+    assert "Pre-standalone translations were retired" in readme
+    assert "English documentation is authoritative" in project
+    assert "Pre-standalone translations" in project
+    assert "translated READMEs were retired" in release_notes
+
+
+def test_readme_links_current_command_and_platform_references() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    command_reference = (ROOT / "docs" / "command-reference.md").read_text(encoding="utf-8")
+    integrations = (ROOT / "docs" / "agent-integrations.md").read_text(encoding="utf-8")
+
+    assert "[Command reference](docs/command-reference.md)" in readme
+    assert "[Agent integration matrix](docs/agent-integrations.md)" in readme
+    for command in ("extract", "update", "query", "export", "provider", "serve"):
+        assert f"`graphify {command}" in command_reference
+    for platform in ("Claude Code", "Codex", "GitHub Copilot CLI", "VS Code Copilot Chat"):
+        assert platform in integrations
+
+
+def test_public_references_cover_the_live_top_level_command_inventory() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "graphify", "--help"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    commands = {
+        match.group(1)
+        for line in result.stdout.splitlines()
+        if (match := re.match(r"^  ([a-z][a-z0-9-]*)(?:\s|$)", line))
+    }
+    references = "\n".join(
+        (ROOT / relative).read_text(encoding="utf-8")
+        for relative in (Path("docs/command-reference.md"), Path("docs/agent-integrations.md"))
+    )
+    undocumented = sorted(
+        command for command in commands if f"graphify {command}" not in references
+    )
+
+    assert commands
+    assert undocumented == []
+
+
+def test_agent_matrix_covers_the_live_install_platform_inventory() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "graphify", "install", "--help"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    platform_line = next(
+        line.removeprefix("Platforms: ")
+        for line in result.stdout.splitlines()
+        if line.startswith("Platforms: ")
+    )
+    platforms = platform_line.split(", ")
+    integrations = (ROOT / "docs" / "agent-integrations.md").read_text(encoding="utf-8")
+
+    assert platforms
+    assert (
+        sorted(platform for platform in platforms if f"--platform {platform}" not in integrations)
+        == []
+    )
+
+
+def test_public_install_references_distinguish_distribution_from_command() -> None:
+    metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    references = [
+        (ROOT / relative).read_text(encoding="utf-8")
+        for relative in (Path("docs/command-reference.md"), Path("docs/agent-integrations.md"))
+    ]
+
+    assert 'name = "graphifyy"' in metadata
+    for text in references:
+        assert "The distribution name is `graphifyy`; the installed command is `graphify`." in text
+        assert 'uv tool install --force "graphifyy @ git+' in text
+
+
+def test_public_documentation_local_links_resolve() -> None:
+    missing: list[str] = []
+    link_pattern = re.compile(r"(?<!!)\[[^]]*]\(([^)]+)\)")
+
+    for relative in PUBLIC_DOCUMENTS:
+        document = ROOT / relative
+        assert document.is_file(), f"missing public document: {relative}"
+        for target in link_pattern.findall(document.read_text(encoding="utf-8")):
+            target = target.strip().split(maxsplit=1)[0].strip("<>")
+            if target.startswith(("#", "http://", "https://", "mailto:")):
+                continue
+            path_text = unquote(target.split("#", 1)[0])
+            if path_text and not (document.parent / path_text).resolve().exists():
+                missing.append(f"{relative}: {target}")
+
+    assert missing == []
+
+
+def test_live_docs_use_current_security_and_privacy_model() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+
+    assert "Query logging is off by default" in readme
+    assert "Non-loopback binds require all three" in readme
+    assert "API key" in security
+    assert "TLS certificate and key" in security
+    assert "0.9.5" in security
+    assert "no network listener" not in security.lower()
 
 
 def test_ci_targets_active_branches_and_security_findings_block() -> None:
@@ -212,7 +382,7 @@ def test_tracked_home_paths_are_only_explicit_portability_examples() -> None:
     ).stdout.splitlines()
     violations: list[str] = []
     for name in tracked:
-        if name == "tests/test_fork_policy.py":
+        if name == "tests/test_repository_policy.py":
             continue
         path = ROOT / name
         if not path.is_file():

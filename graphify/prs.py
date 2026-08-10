@@ -10,7 +10,7 @@ Usage:
   graphify prs --triage          # Opus ranks your review queue
   graphify prs --worktrees       # show worktree → branch → PR mapping
   graphify prs --conflicts       # PRs sharing graph communities (merge-order risk)
-  graphify prs --base <branch>   # filter to PRs targeting this base (default: v8)
+  graphify prs --base <branch>   # filter to PRs targeting this base (default: repository default)
 """
 
 from __future__ import annotations
@@ -134,7 +134,7 @@ _STATUS_ORDER = [
 _STALE_DAYS = 14
 
 
-def _classify(pr: "PRInfo", base: str = "v8") -> str:
+def _classify(pr: "PRInfo", base: str = "main") -> str:
     if pr.base_branch != base:
         return "WRONG-BASE"
     if pr.ci_status == "FAILURE":
@@ -476,7 +476,7 @@ def _truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def render_dashboard(prs: list[PRInfo], base: str = "v8", show_wrong_base: bool = False) -> None:
+def render_dashboard(prs: list[PRInfo], base: str = "main", show_wrong_base: bool = False) -> None:
     actionable = [p for p in prs if p.base_branch == base]
     wrong_base = [p for p in prs if p.base_branch != base]
 
@@ -575,7 +575,7 @@ def render_worktrees(prs: list[PRInfo], worktrees: dict[str, str]) -> None:
 
 def render_conflicts(
     prs: list[PRInfo],
-    base: str = "v8",
+    base: str = "main",
     community_labels: dict[int, list[str]] | None = None,
 ) -> None:
     actionable = [p for p in prs if p.base_branch == base and p.communities_touched]

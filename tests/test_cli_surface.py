@@ -2,7 +2,7 @@
 
 Catches the class of regression where a rebuild/merge silently DROPS a CLI command
 or flag. Real example this guards against: `graphify update --no-viz` was dropped
-when graphify/__main__.py was rebuilt on upstream v8 -- the unit tests only covered
+when graphify/__main__.py was rebuilt from an older baseline -- the unit tests only covered
 watch._rebuild_code(no_viz=...), never the CLI arg-parse, so it shipped broken.
 
 Legacy probes use a nonexistent path where the command parses options first. The
@@ -47,6 +47,8 @@ REQUIRED_COMMANDS = [
     "add",
     "save-result",
     "check-update",
+    "provider",
+    "prs",
     "serve",
 ]
 
@@ -138,7 +140,31 @@ _BAD_PATH = "/no/such/graphify/path/xyz-123"
 
 @pytest.mark.parametrize("cmd", REQUIRED_COMMANDS)
 def test_command_present_in_help(cmd: str) -> None:
-    assert cmd in _graphify("--help"), f"CLI command '{cmd}' disappeared from `graphify --help`"
+    help_text = _graphify("--help")
+    assert re.search(rf"(?m)^  {re.escape(cmd)}(?:\s|$)", help_text), (
+        f"CLI command '{cmd}' disappeared from `graphify --help`"
+    )
+
+
+def test_prs_help_reaches_command_specific_usage() -> None:
+    output = _graphify("prs", "--help")
+
+    assert "graphify prs --base <branch>" in output
+    assert "Run 'graphify --help' for full usage." not in output
+
+
+def test_provider_help_reaches_command_specific_usage() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "graphify", "provider", "--help"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0
+    assert "graphify provider [add|list|show|remove]" in output
+    assert "Run 'graphify --help' for full usage." not in output
 
 
 @pytest.mark.parametrize(
@@ -198,6 +224,8 @@ def test_tracked_guidance_uses_only_parser_proven_strict_command_flags() -> None
 
     for name in tracked:
         path = root / name
+        if not path.is_file():
+            continue
         if name == "CHANGELOG.md" or name.startswith("tests/"):
             continue
         if path.name != "Dockerfile" and path.suffix.lower() not in guidance_suffixes:

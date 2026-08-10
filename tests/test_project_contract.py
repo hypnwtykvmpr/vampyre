@@ -1,7 +1,7 @@
-"""Fork-contract guard.
+"""Vampyre contract guard.
 
-Every assertion here is a fork-specific guarantee that a naive "rebuild on current
-upstream" has dropped (or could drop). This is the tripwire for upstream-drift:
+Every assertion here is a Vampyre-specific guarantee that must survive future
+maintenance. This is the tripwire for contract drift:
 when we re-base on a newer graphify, this file fails fast if our own surface or
 privacy posture regressed.
 """
@@ -73,19 +73,19 @@ def test_simple_build_still_collapses() -> None:
 
 
 def test_query_logging_is_opt_in_by_default(monkeypatch) -> None:
-    """Fork privacy policy: query logging OFF unless GRAPHIFY_QUERY_LOG is set."""
+    """Vampyre privacy policy: query logging is off unless explicitly enabled."""
     from graphify import querylog
 
     monkeypatch.delenv("GRAPHIFY_QUERY_LOG", raising=False)
     monkeypatch.delenv("GRAPHIFY_QUERY_LOG_DISABLE", raising=False)
-    assert querylog._log_path() is None, "query logging must default OFF (opt-in) in this fork"
+    assert querylog._log_path() is None, "query logging must default OFF (opt-in) in Vampyre"
 
 
 def test_cli_advertises_multigraph_surface() -> None:
     h = _graphify("--help")
-    assert "--multigraph" in h, "fork --multigraph flag missing from CLI help"
-    assert "--simple" in h, "fork --simple flag missing from CLI help"
-    assert "merge-graphs" in h, "fork merge-graphs command missing from CLI help"
+    assert "--multigraph" in h, "Vampyre --multigraph flag missing from CLI help"
+    assert "--simple" in h, "Vampyre --simple flag missing from CLI help"
+    assert "merge-graphs" in h, "Vampyre merge-graphs command missing from CLI help"
 
 
 def test_private_agent_files_not_tracked() -> None:
@@ -99,4 +99,4 @@ def test_private_agent_files_not_tracked() -> None:
         encoding="utf-8",
     )
     tracked = [ln for ln in r.stdout.splitlines() if ln.strip()]
-    assert not tracked, f"private agent files re-tracked by an upstream merge: {tracked}"
+    assert not tracked, f"private agent files were tracked: {tracked}"

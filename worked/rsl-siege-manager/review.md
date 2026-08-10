@@ -145,7 +145,7 @@ The underlying graph build is solid. The findings above are about how the report
 
 ## Suggested follow-ups
 
-Patterns from this review that may be worth tracking upstream:
+Patterns from this review that may be worth tracking in future Vampyre work:
 
 1. **Test-fixture suppression** — degree centrality on covered codebases consistently surfaces test factories; documenting the ignore-pattern recipe in a "first run on a codebase with tests" section would shorten the iteration loop for users.
 2. **Cross-language INFERRED edges in monorepos** — name-based matches between Python and TypeScript types in mixed-language repos may warrant a higher confidence threshold or a "potential contract" label rather than the current "surprising connection" framing.

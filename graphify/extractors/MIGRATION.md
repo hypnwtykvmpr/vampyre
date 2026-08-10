@@ -1,8 +1,7 @@
 # Migrating a language extractor out of extract.py
 
-`graphify/extract.py` is being split into this package, one language per PR
-(upstream issue #1212). This is the playbook for porting ONE language. It is
-written so an AI agent can execute it in a single session.
+`graphify/extract.py` is being split into this package one language at a time.
+This is the playbook for moving one language without changing its behavior.
 
 ## Status
 
@@ -24,8 +23,8 @@ must move first as its own coordinated batch. Pick a bespoke extractor.
 1. **Verbatim moves only.** No renames, no docstring edits, no reformatting,
    no added annotations, no "improvements". Verify: save the block before
    cutting and confirm the pasted block is byte-identical.
-2. **One language per PR.** Small diffs keep review trivial and avoid
-   conflicts with other in-flight ports.
+2. **One language per change.** Small diffs keep review precise and avoid
+   conflicts with other in-flight migrations.
 3. **Facade re-export is mandatory.** `extract.py` must keep exporting every
    moved name (`from graphify.extractors.<mod> import extract_<lang>  # noqa: F401`
    in the marked migration block, kept alphabetical). Existing importers
@@ -40,7 +39,7 @@ must move first as its own coordinated batch. Pick a bespoke extractor.
 
 For every `_name` your function references that is defined OUTSIDE it:
 
-- run `grep -c '_name' graphify/extract.py` AFTER your candidate move;
+- run `grep -c '_name' graphify/extract.py` after your candidate move;
 - remaining uses > 0 -> **shared**: move it to `base.py` and add it to the
   facade re-import in extract.py;
 - remaining uses = 0 -> **private**: move it into your language module.
@@ -52,9 +51,9 @@ that are not satisfied internally, and verify each header import is used.
 
 ## Pre-flight
 
-1. Check upstream for conflicts: open PRs/issues mentioning your language,
-   and churn: `git log --oneline --since="3 months ago" upstream/<default> | grep -i <lang>`.
-   High churn -> pick another language.
+1. Check current `main`, open repository work, and recent churn for the language.
+   If another migration touches the same extractor, coordinate the ordering
+   before editing.
 2. Confirm your extractor is bespoke (its `extract_<lang>` is a full function,
    not a 5-line `_extract_generic(path, LanguageConfig(...))` wrapper).
 3. Check whether tests/ exercises your language's behavior (grep for
@@ -80,7 +79,7 @@ that are not satisfied internally, and verify each header import is used.
    the now-adjacent top-level definitions; add the facade re-import; add the
    registry entry in `__init__.py` (alphabetical); update the Status table
    above.
-5. `uv run pytest -q` -> 0 failures, no test file changed except the registry
+5. `uv run --frozen pytest tests/ -n auto -q --tb=short` -> 0 failures, no test file changed except the registry
    test. If ImportError/NameError: a helper was misclassified — go to
    Helper classification.
 6. One commit: `refactor(extract): move extract_<lang> to extractors/<lang>.py (verbatim)`.

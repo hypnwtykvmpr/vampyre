@@ -17,7 +17,7 @@ raw/
 ## How to run
 
 ```bash
-uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
+uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v0.9.5"
 
 graphify install                        # Claude Code
 graphify install --platform codex       # Codex

@@ -1,101 +1,106 @@
-# How graphify works
+# How Vampyre Works
 
-## The three passes
+## 1. Detect And Classify
 
-graphify processes your files in three passes:
+Vampyre walks the requested source root without following external symlink
+targets. It combines Git-compatible `.gitignore` and `.graphifyignore` rules,
+classifies supported inputs, and records content hashes in `manifest.json`.
+Custom output directories are excluded from their own scans.
 
-**Pass 1 — Code structure (free, no API calls)**
-Tree-sitter parses your code files and extracts classes, functions, imports, call graphs, and inline comments. This runs locally with no LLM involved. 25 languages supported. SQL files get special treatment: tables, views, foreign keys, and JOIN relationships are extracted deterministically.
+Incremental detection compares content, not only timestamps. Source bytes are
+snapshotted again before publication, so files changed during extraction cannot
+be committed as a mixed-generation graph.
 
-Code files are not sent to the LLM semantic extractor in the normal pipeline. If a corpus contains only code files, Pass 3 is skipped entirely; semantic extraction is reserved for docs, papers, images, and transcripts.
+## 2. Extract Local Structure
 
-**Pass 2 — Video and audio (local, no API calls)**
-Video and audio files are transcribed with faster-whisper. To focus the transcript on your domain, the transcription prompt is seeded with your top god nodes (the most-connected concepts in your code graph so far). Transcripts are cached — re-runs skip already-processed files.
+Code and structured project files use tree-sitter or deterministic parsers.
+These paths emit symbols, imports, calls, type references, manifests, and other
+explicit relationships without an LLM. CPU-bound AST work can use multiple
+processes while preserving stable output ordering.
 
-**Pass 3 — Docs, papers, images (Claude subagents, costs tokens)**
-Claude runs in parallel over markdown, PDFs, images, and transcripts. Each subagent reads a batch of files and outputs a JSON fragment: nodes, edges, and any group relationships. The fragments are merged into a single graph.
+Optional local converters handle Office files, PDFs, Google Workspace pointer
+files, images, and media. Audio/video transcription uses the optional video
+dependencies and caches completed work by content identity.
 
-Before Pass 3, optional converters turn supported pointer/binary formats into
-Markdown sidecars under `graphify-out/converted/`. Office files (`.docx`,
-`.xlsx`) use the `[office]` extra. Google Workspace shortcuts (`.gdoc`,
-`.gsheet`, `.gslides`) are opt-in with `--google-workspace` or
-`GRAPHIFY_GOOGLE_WORKSPACE=1` and require an authenticated `gws` CLI.
+## 3. Gate Semantic Egress
 
----
+Code files are not sent to the LLM semantic extractor. If a corpus contains
+only code files, Pass 3 is skipped entirely; semantic extraction is reserved
+for docs, papers, images, and transcripts.
 
-## How community detection works
+Documents, papers, images, and transcripts can enter semantic extraction. For
+every candidate, Vampyre validates root containment and applies credential path
+and content policy before preparing an outbound payload. Credential-classified
+content is reported and omitted; it cannot be overridden per run.
 
-Communities are found using the [Leiden algorithm](https://www.nature.com/articles/s41598-019-41695-z) — a graph-clustering method that groups nodes by edge density. Nodes with many connections between them end up in the same community.
+Accepted text is neutralized and wrapped in hash-stamped
+`<untrusted_source>` blocks. Backends include Gemini, Kimi, Anthropic, OpenAI and
+compatible endpoints, DeepSeek, Azure OpenAI, Bedrock, Ollama, and a confined
+Claude CLI path. Backend choice is explicit or detected from configured
+credentials. A warm cache avoids another request when the semantic identity,
+backend, model, schema, and content all match.
 
-**No embeddings needed.** The semantic similarity edges that Claude extracts (`semantically_similar_to`) are already in the graph, so they influence community shape directly. The graph structure is the similarity signal — there's no separate embedding step or vector database.
+## 4. Reconcile And Build
 
----
+Extractor results are validated before graph construction. Nodes are reconciled
+by canonical identity. Ambiguous aliases are skipped instead of being attached
+to an arbitrary candidate. Edge identity includes the fields required to retain
+valid parallel relationships and distinct call sites.
 
-## Confidence tagging
+The graph profile is one of:
 
-Every relationship is tagged with one of three labels:
+- `simple`: undirected, one edge per endpoint pair;
+- `digraph`: directed, one edge per ordered endpoint pair;
+- `multidigraph`: directed, keyed parallel edges.
 
-| Tag | Meaning |
-|-----|---------|
-| `EXTRACTED` | Found directly in the source (e.g. a function call, an import) |
-| `INFERRED` | A reasonable inference Claude made, with a `confidence_score` (0.0–1.0) |
-| `AMBIGUOUS` | Uncertain — flagged in the report for manual review |
+Hyperedges remain graph-level records with two or more live members. Profile,
+custom metadata, provenance, keys, and hyperedges are part of the serialized
+state contract, not optional decorations.
 
-EXTRACTED edges always have confidence 1.0. INFERRED edges use a discrete rubric:
-- **0.95** — near-certain (explicit cross-file reference, one plausible target)
-- **0.85** — strong evidence (naming + context align)
-- **0.75** — reasonable (contextual but not explicit)
-- **0.65** — weak (naming similarity only)
-- **0.55** — speculative
+## 5. Cluster And Analyze
 
----
+Community detection receives a canonically ordered graph projection. Native
+Leiden is used when its optional dependency and Python version are supported;
+the deterministic NetworkX fallback is used otherwise. Directed and parallel
+state is preserved in storage while algorithms that require simple topology use
+explicit projections.
 
-## Token benchmark
+Analysis computes community membership, cohesion, distinct-neighbor hubs,
+surprising cross-community relationships, and suggested graph questions.
+Community labels can be deterministic placeholders or generated through the
+selected LLM backend.
 
-The first run extracts and builds the graph — this costs tokens. Every subsequent query reads the compact graph instead of raw files. That's where the savings compound.
+## 6. Publish Transactionally
 
-On a mixed corpus (Karpathy repos + 5 papers + 4 images, 52 files): **71.5x fewer tokens per query** vs reading the raw files directly.
+The graph, manifest, scan-root marker, analysis, labels, report, and related
+state are written under one selected output root. Same-directory temporary
+files, atomic replacement, output locks, generation checks, and multi-file
+rollback prevent partial or stale publishers from silently becoming canonical.
 
-| Corpus | Files | Reduction |
-|--------|-------|-----------|
-| Karpathy repos + papers + images | 52 | **71.5x** |
-| graphify source + Transformer paper | 4 | **5.4x** |
-| httpx (synthetic Python library) | 6 | ~1x |
+No-change updates are byte-stable after settlement. `update` and `watch` refuse
+unprofiled or ambiguous existing state before mutation. `--out` separates the
+source root from the storage root without changing node IDs or cache identity.
 
-Token reduction scales with corpus size. Six files already fits in a context window — the graph value there is structural clarity, not compression. At 52 files the savings compound quickly.
+## 7. Query, Export, And Serve
 
-Each `worked/` folder in the repo has the raw input files and actual output (`GRAPH_REPORT.md`, `graph.json`) so you can run it yourself and verify.
+The graph can be queried through `query`, `path`, `explain`, and `affected`, or
+served over MCP stdio/HTTP. Parallel relationships are reported as bounded
+relationship envelopes rather than silently selecting one edge.
 
----
+Exports include HTML, call-flow HTML, Markdown wiki, Obsidian, GraphML, SVG, and
+Neo4j forms. Exporters track their own generated files and do not delete
+unowned user content.
 
-## Parallel extraction
+## Serialized Shape
 
-Code files are extracted in parallel using `ProcessPoolExecutor` — bypasses Python's GIL for genuine multiprocessing. Doc/paper/image batches are dispatched as parallel Claude subagents. On a corpus of 84 code files, parallel AST extraction runs in about 1.66x less time than sequential.
+`graph.json` is canonical NetworkX node-link JSON. At minimum, nodes carry an
+`id`, `label`, source identity, and file type. Edges carry `source`, `target`,
+`relation`, confidence, provenance, and a key when the profile is a
+`multidigraph`. Graph metadata carries the explicit profile and identity schema.
+Hyperedges live in graph metadata with stable IDs and live member IDs.
 
----
+The strict codec rejects malformed current state. A separate read-only legacy
+mode can normalize only shapes that have one lossless interpretation.
 
-## SHA256 cache
-
-Every extracted file is fingerprinted by content hash. Re-runs skip unchanged files entirely — only new or modified files go through extraction again. The cache lives in `graphify-out/cache/`.
-
----
-
-## The graph format
-
-The output `graph.json` uses NetworkX's node-link format. Each node has:
-- `id` — stable identifier
-- `label` — human-readable name
-- `file_type` — `code`, `document`, `paper`, `image`, `rationale`
-- `source_file` — where it came from
-
-See [RFC: file-level node summaries](node-summaries-rfc.md) for two proposed
-ways to add compact optional summaries for AI navigation.
-
-Each edge has:
-- `source`, `target` — node IDs
-- `relation` — verb phrase (e.g. `calls`, `imports`, `implements`, `semantically_similar_to`)
-- `confidence` — `EXTRACTED`, `INFERRED`, or `AMBIGUOUS`
-- `confidence_score` — float (INFERRED only)
-- `source_file` — where the relationship was found
-
-Hyperedges (group relationships connecting 3+ nodes) live in `G.graph["hyperedges"]`.
+See [ARCHITECTURE.md](../ARCHITECTURE.md) for module ownership and
+[SECURITY.md](../SECURITY.md) for the trust boundaries.

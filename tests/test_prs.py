@@ -28,13 +28,13 @@ def make_pr(
     number: int = 1,
     title: str = "Test PR",
     branch: str = "feature",
-    base_branch: str = "v8",
+    base_branch: str = "main",
     author: str = "alice",
     is_draft: bool = False,
     review_decision: str = "",
     ci_status: str = "SUCCESS",
     updated_at: datetime | None = None,
-    expected_base: str = "v8",
+    expected_base: str = "main",
 ) -> PRInfo:
     """Build a minimal PRInfo with sensible defaults."""
     if updated_at is None:
@@ -57,41 +57,45 @@ def make_pr(
 
 
 class TestClassify:
+    def test_default_base_is_main(self):
+        assert _classify(make_pr(base_branch="main")) == "READY"
+        assert _classify(make_pr(base_branch="v8")) == "WRONG-BASE"
+
     def test_ready(self):
         pr = make_pr(ci_status="SUCCESS", review_decision="", is_draft=False)
-        assert _classify(pr, base="v8") == "READY"
+        assert _classify(pr) == "READY"
 
     def test_ci_fail(self):
         pr = make_pr(ci_status="FAILURE")
-        assert _classify(pr, base="v8") == "CI-FAIL"
+        assert _classify(pr) == "CI-FAIL"
 
     def test_changes_req(self):
         pr = make_pr(ci_status="SUCCESS", review_decision="CHANGES_REQUESTED")
-        assert _classify(pr, base="v8") == "CHANGES-REQ"
+        assert _classify(pr) == "CHANGES-REQ"
 
     def test_draft(self):
         pr = make_pr(ci_status="SUCCESS", is_draft=True)
-        assert _classify(pr, base="v8") == "DRAFT"
+        assert _classify(pr) == "DRAFT"
 
     def test_stale(self):
         old = datetime.now(timezone.utc) - timedelta(days=20)
         pr = make_pr(ci_status="SUCCESS", updated_at=old, is_draft=False)
-        assert _classify(pr, base="v8") == "STALE"
+        assert _classify(pr) == "STALE"
 
     def test_draft_not_marked_stale(self):
         # Drafts show as DRAFT even when old — stale-detection only applies to non-drafts
         old = datetime.now(timezone.utc) - timedelta(days=20)
         pr = make_pr(ci_status="SUCCESS", updated_at=old, is_draft=True)
-        assert _classify(pr, base="v8") == "DRAFT"
+        assert _classify(pr) == "DRAFT"
 
     def test_pending(self):
         pr = make_pr(ci_status="PENDING", is_draft=False, review_decision="")
-        assert _classify(pr, base="v8") == "PENDING"
+        assert _classify(pr) == "PENDING"
 
     def test_wrong_base(self):
         # WRONG-BASE takes precedence over everything else
         pr = make_pr(base_branch="master", ci_status="FAILURE")
-        assert _classify(pr, base="v8") == "WRONG-BASE"
+        assert _classify(pr) == "WRONG-BASE"
 
 
 # ── _parse_ci ─────────────────────────────────────────────────────────────────
@@ -290,28 +294,28 @@ class TestFormatPrsText:
             make_pr(
                 number=101,
                 title="Add awesome feature",
-                base_branch="v8",
-                expected_base="v8",
+                base_branch="main",
+                expected_base="main",
                 ci_status="SUCCESS",
             ),
             make_pr(
                 number=102,
                 title="Fix flaky test",
-                base_branch="v8",
-                expected_base="v8",
+                base_branch="main",
+                expected_base="main",
                 ci_status="FAILURE",
             ),
             make_pr(
                 number=103,
                 title="Wrong base PR",
                 base_branch="master",
-                expected_base="v8",
+                expected_base="main",
             ),
         ]
-        out = format_prs_text(prs, base="v8")
+        out = format_prs_text(prs, base="main")
 
         # Count header: 2 actionable, 1 on wrong base
-        assert "Open PRs targeting v8: 2" in out
+        assert "Open PRs targeting main: 2" in out
         assert "(1 on wrong base, not shown)" in out
 
         # PR numbers and titles included
@@ -328,8 +332,8 @@ class TestFormatPrsText:
         assert "#103" not in out
 
     def test_empty_pr_list(self):
-        out = format_prs_text([], base="v8")
-        assert "Open PRs targeting v8: 0" in out
+        out = format_prs_text([], base="main")
+        assert "Open PRs targeting main: 0" in out
         assert "(0 on wrong base, not shown)" in out
 
 
@@ -384,6 +388,12 @@ class TestDetectDefaultBranch:
             ),
         ):
             assert _detect_default_branch() == "main"
+
+    def test_help_describes_repository_default_branch(self):
+        from graphify import prs
+
+        assert "default: repository default" in (prs.__doc__ or "")
+        assert "default: v8" not in (prs.__doc__ or "")
 
 
 # ── build_community_labels ─────────────────────────────────────────────────────

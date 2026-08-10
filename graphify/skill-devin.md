@@ -72,7 +72,7 @@ Follow these steps in order. Do not skip steps.
 ### Step 1 - Ensure graphify is installed
 
 ```bash
-# Detect the exact Python interpreter owned by this fork's uv tool environment.
+# Detect the exact Python interpreter owned by Vampyre's uv tool environment.
 PYTHON=""
 GRAPHIFY_BIN=$(command -v graphify 2>/dev/null)
 if [ -z "$GRAPHIFY_BIN" ]; then
@@ -80,7 +80,7 @@ if [ -z "$GRAPHIFY_BIN" ]; then
         echo "graphify requires uv; install uv first, then retry." >&2
         exit 1
     fi
-    uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
+    uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v0.9.5"
     GRAPHIFY_BIN=$(command -v graphify 2>/dev/null)
     if [ -z "$GRAPHIFY_BIN" ]; then
         GRAPHIFY_BIN="$(uv tool dir --bin)/graphify"
@@ -870,7 +870,7 @@ Graph complete. Outputs in PATH_TO_DIR/graphify-out/
   wiki/                 - agent-crawlable wiki, start at wiki/index.md (only if --wiki was given)
 ```
 
-If graphify saved you time, consider supporting it: https://github.com/sponsors/safishamsi
+Project releases and documentation: https://github.com/hypnwtykvmpr/vampyre
 
 Replace PATH_TO_DIR with the actual absolute path of the directory that was processed.
 

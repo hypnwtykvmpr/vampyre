@@ -2079,10 +2079,11 @@ def serve_http(
     process can host the graph for a whole team. Clients point their IDE MCP
     config at ``http://<host>:<port><path>`` (default ``/mcp``).
 
-    ``api_key`` (or the ``GRAPHIFY_API_KEY`` env var) enables a simple header
-    check (``Authorization: Bearer <key>`` or ``X-API-Key: <key>``). OAuth is a
-    deliberate follow-up. Binding ``0.0.0.0`` exposes the server beyond
-    localhost — set an api_key when you do.
+    ``api_key`` (or the ``GRAPHIFY_API_KEY`` env var) enables authentication.
+    Clients authenticate with either ``Authorization: Bearer <key>`` or
+    ``X-API-Key: <key>``. OAuth is a deliberate follow-up. Non-loopback binds
+    fail closed unless an API key and readable TLS certificate/key pair are
+    configured; wildcard binds also need explicit allowed Host headers.
     """
     graph_path = graph_path or _default_graph_json()
     try:

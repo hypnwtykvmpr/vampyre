@@ -1029,7 +1029,7 @@ def _default_model_for_backend(backend: str) -> str:
 
 
 def _backend_pkg_hint(pkg: str, extra: str) -> str:
-    """Return fork-specific guidance for an optional backend package."""
+    """Return Vampyre guidance for an optional backend package."""
     return (
         f"the '{pkg}' package is required for this backend but is not installed. "
         f"Install it with: {uv_tool_install_command(extra)}"

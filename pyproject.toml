@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "graphifyy"
 version = "0.9.5"
-description = "AI coding assistant skill (Claude Code, CodeBuddy, Codex, OpenCode, Kilo Code, Cursor, Gemini CLI, Aider, OpenClaw, Factory Droid, Trae, Hermes, Kiro, Pi, Devin CLI, Google Antigravity) - turn any folder of code, docs, papers, images, or videos into a queryable knowledge graph"
+description = "Cross-platform code and document knowledge graphs for agents, automation, and human analysis"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -47,7 +47,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/hypnwtykvmpr/vampyre"
 Repository = "https://github.com/hypnwtykvmpr/vampyre"
-Issues = "https://github.com/hypnwtykvmpr/vampyre/issues"
+Changelog = "https://github.com/hypnwtykvmpr/vampyre/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 # starlette is pulled in transitively by mcp, but graphify/serve.py imports it
@@ -73,7 +73,7 @@ chinese = ["jieba3>=1.0.2"]
 sql = ["tree-sitter-sql"]
 # tree-sitter-dm (BYOND DreamMaker) ships only a Windows wheel, so on Linux/Mac it
 # must compile from source (needs a C toolchain + python3-dev). Keeping it optional
-# avoids breaking the default fork installation for everyone (#1104).
+# avoids breaking the default Vampyre installation for everyone (#1104).
 # Safe to make optional: extract_dm() in graphify/extract.py lazily imports
 # tree_sitter_dm inside try/except ImportError and returns an empty result with a
 # "tree-sitter-dm not installed" note, so .dm/.dme files degrade gracefully (no
@@ -108,8 +108,8 @@ dev = [
 ]
 
 [tool.uv]
-# Install from the active fork branch; the registry package is a separate upstream product.
-# uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
+# Install the immutable Vampyre release tag rather than an unrelated registry artifact.
+# uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v0.9.5"
 package = true
 
 [tool.setuptools]

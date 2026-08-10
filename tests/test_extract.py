@@ -984,7 +984,7 @@ def test_extract_generic_surfaces_tree_sitter_version_mismatch_hint(monkeypatch)
     assert "error" in result
     assert "tree-sitter version mismatch" in result["error"]
     assert "uv tool install --force" in result["error"]
-    assert "git+https://github.com/hypnwtykvmpr/vampyre.git@v9" in result["error"]
+    assert "git+https://github.com/hypnwtykvmpr/vampyre.git@v0.9.5" in result["error"]
 
 
 def test_extract_js_destructured_require_imports_from():

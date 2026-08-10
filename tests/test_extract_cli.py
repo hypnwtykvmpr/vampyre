@@ -1946,7 +1946,7 @@ def test_extract_no_cluster_incremental_zero_merge_exits_nonzero_and_preserves_g
     )
 
     # Modify app.py AFTER the manifest is saved so the incremental scan detects a
-    # CHANGED file and proceeds to build_merge. Upstream's "no incremental changes
+    # changed file and proceeds to build_merge. The former "no incremental changes
     # detected" early-exit otherwise short-circuits with exit 0 before the merge,
     # so the empty-merge guard under test would never run.
     (corpus / "app.py").write_text(

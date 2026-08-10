@@ -9,6 +9,7 @@ lives only in the references, and no reference duplicates core content.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.skillgen import gen  # noqa: E402
+from graphify.installation import VAMPYRE_UV_SOURCE  # noqa: E402
 from graphify.semantic_schema import EDGE_RELATIONS, render_semantic_schema  # noqa: E402
 
 
@@ -36,7 +38,7 @@ def test_check_passes():
 
 
 def test_render_is_idempotent():
-    """Rendering twice yields byte-identical output (no timestamps/versions)."""
+    """Rendering twice yields byte-identical output with no dynamic metadata."""
     platforms = gen.load_platforms()
     first = gen.render_all(platforms, only="claude")
     second = gen.render_all(platforms, only="claude")
@@ -52,13 +54,26 @@ def test_render_output_is_lf_only():
         assert not art.content.endswith("\n\n"), art.path
 
 
-def test_no_version_or_timestamp_in_output():
-    """No generated artifact carries the package version string."""
+def test_release_source_is_canonical_and_version_is_not_duplicated():
+    """Release versions appear only as the canonical immutable install source."""
     from graphify.__main__ import __version__
 
     platforms = gen.load_platforms()
+    saw_release_source = False
     for art in gen.render_all(platforms, only="claude"):
-        assert __version__ not in art.content, f"{art.path} leaked a version string"
+        install_sources = re.findall(
+            r"git\+https://github\.com/hypnwtykvmpr/vampyre\.git@v[0-9][0-9A-Za-z.+-]*",
+            art.content,
+        )
+        assert set(install_sources) <= {VAMPYRE_UV_SOURCE}, (
+            f"{art.path} carries a non-canonical Vampyre install source: {install_sources}"
+        )
+        saw_release_source = saw_release_source or bool(install_sources)
+        without_release_source = art.content.replace(VAMPYRE_UV_SOURCE, "")
+        assert __version__ not in without_release_source, (
+            f"{art.path} carries the package version outside the canonical install source"
+        )
+    assert saw_release_source, "generated guidance lost the immutable release install source"
 
 
 def _claude_artifacts():

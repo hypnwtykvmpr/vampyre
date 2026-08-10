@@ -13,8 +13,7 @@ _NODES_RE = re.compile(r"(\d+)\s+nodes?\s+found")
 
 
 def _log_path() -> Path | None:
-    # Fork privacy policy: query logging is OPT-IN (off by default). Upstream logs to
-    # ~/.cache/graphify-queries.log unless disabled; we flip it so nothing is recorded
+    # Vampyre privacy policy: query logging is opt-in (off by default), so nothing is recorded
     # unless GRAPHIFY_QUERY_LOG is explicitly set -- to a file path, or to "1"/"true"/
     # "yes" for the default ~/.cache location. GRAPHIFY_QUERY_LOG_DISABLE still wins.
     if os.environ.get("GRAPHIFY_QUERY_LOG_DISABLE", "").lower() in ("1", "true", "yes"):

@@ -191,12 +191,12 @@ def test_kind_mcp_query(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# fork policy: opt-in (off by default)
+# Vampyre policy: opt-in (off by default)
 # ---------------------------------------------------------------------------
 
 
 def test_optin_off_by_default(tmp_path, monkeypatch):
-    # With no GRAPHIFY_QUERY_LOG set, nothing is logged (fork opt-in policy).
+    # With no GRAPHIFY_QUERY_LOG set, nothing is logged (Vampyre opt-in policy).
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.delenv("GRAPHIFY_QUERY_LOG", raising=False)
     monkeypatch.delenv("GRAPHIFY_QUERY_LOG_DISABLE", raising=False)

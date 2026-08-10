@@ -120,7 +120,7 @@ This step has two parts: **structural extraction** (deterministic, free) and **s
 > **graphify needs no API key. Never ask the user for one, and never block on one.** Code is extracted structurally (AST) with no LLM and no key at all — a code-only corpus (the common `/graphify .` on a repo) skips semantic extraction entirely, so it needs nothing here: go straight to Part A and skip Part B. Semantic extraction (only for docs, papers, and images) uses Gemini **only if** `GEMINI_API_KEY`/`GOOGLE_API_KEY` is already set; otherwise the host agent itself is the LLM. graphify does **not** read `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or any other provider key. If you catch yourself about to prompt for, wait on, or stop because of a missing API key, that is a misread of this skill — proceed without one.
 
 **Before semantic extraction:** check whether `GEMINI_API_KEY` or `GOOGLE_API_KEY` is set. If neither is set, print this one-liner to the user:
-> Tip: set `GEMINI_API_KEY` or `GOOGLE_API_KEY` to use Gemini for semantic extraction (`uv tool install --force "graphifyy[gemini] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"`).
+> Tip: set `GEMINI_API_KEY` or `GOOGLE_API_KEY` to use Gemini for semantic extraction (`uv tool install --force "graphifyy[gemini] @ git+https://github.com/hypnwtykvmpr/vampyre.git@v0.9.5"`).
 
 Print it once, then continue — do not wait for the user to supply a key. If `GEMINI_API_KEY` or `GOOGLE_API_KEY` IS set, use `graphify.llm.extract_corpus_parallel(files, backend="gemini")` for semantic extraction instead of dispatching subagents. The default Gemini model is `gemini-3-flash-preview`; set `GRAPHIFY_GEMINI_MODEL` or pass `--model` in headless CLI flows to override it.
 
@@ -587,7 +587,7 @@ Graph complete. Outputs in PATH_TO_DIR/graphify-out/
   obsidian/             - Obsidian vault (only if --obsidian was given)
 ```
 
-If graphify saved you time, consider supporting it: https://github.com/sponsors/safishamsi
+Project releases and documentation: https://github.com/hypnwtykvmpr/vampyre
 
 Replace PATH_TO_DIR with the actual absolute path of the directory that was processed.
 

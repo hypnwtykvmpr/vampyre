@@ -514,20 +514,20 @@ def test_simple_graph_dedup_output_unchanged():
     G = build([extraction], dedup=True, directed=True)
     assert "graphify_multigraph_diagnostics" not in G.graph
 
-    # NOTE: upstream/v8 changed dedup since this fork's baseline. `_norm` now maps
+    # NOTE: the inherited baseline changed dedup behavior. `_norm` now maps
     # "_" to a space, so "graph_extractor" -> "graph extractor" while "GraphExtractor"
     # -> "graphextractor". Those normalized forms differ, so their MinHash shingles no
     # longer LSH-pair and the two separator-variants are NOT merged. Verified identical
-    # to pure upstream/v8 (also 4 nodes) — our multigraph code does not alter the default
+    # to the inherited simple behavior (also 4 nodes); multigraph code does not alter the default
     # simple-graph path, which is the invariant this go/no-go test guards.
     surviving_nodes = set(G.nodes())
 
-    # All four nodes survive (the two graph-extractor variants no longer merge upstream).
+    # All four nodes survive (the two graph-extractor variants no longer merge).
     assert G.number_of_nodes() == 4, (
         f"Expected 4 nodes after dedup, got {G.number_of_nodes()}: {sorted(surviving_nodes)}"
     )
 
-    # Both separator-variants survive under current upstream dedup.
+    # Both separator variants survive under current deduplication.
     assert {"graphextractor", "graph_extractor"} <= surviving_nodes
 
     assert "dataloader" in surviving_nodes

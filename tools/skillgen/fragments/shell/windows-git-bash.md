@@ -1,7 +1,7 @@
 Claude Code on Windows runs skill commands in Git Bash. Run every command block in this skill in Git Bash, not PowerShell or `cmd.exe`.
 
 ```bash
-# Resolve the exact Python interpreter owned by this fork's uv tool environment.
+# Resolve the exact Python interpreter owned by Vampyre's uv tool environment.
 if ! command -v uv >/dev/null 2>&1; then
     echo "graphify requires uv; install uv first, then retry." >&2
     exit 1
@@ -23,7 +23,7 @@ find_graphify_python() {
 
 PYTHON=$(find_graphify_python || true)
 if [ -z "$PYTHON" ]; then
-    uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
+    uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v0.9.5"
     PYTHON=$(find_graphify_python || true)
 fi
 if [ -z "$PYTHON" ]; then

@@ -1,54 +1,85 @@
 # Security Policy
 
-## Supported Versions
+## Supported Version
 
-| Version | Supported |
-|---------|-----------|
-| 0.3.x   | Yes       |
-| < 0.3   | No        |
+| Version | Status |
+| --- | --- |
+| 0.9.5 | Supported |
+| Earlier versions | Unsupported |
 
-## Reporting a Vulnerability
+The canonical security policy and supported releases are maintained only at
+https://github.com/hypnwtykvmpr/vampyre. Security fixes are delivered from this
+repository and its `v0.9.5` release, not from a predecessor or parent project.
 
-**Do not open a public GitHub issue for security vulnerabilities.**
+## Reporting A Vulnerability
 
-Report security issues via GitHub's private vulnerability reporting, or email the maintainer directly. Please include:
+Do not open a public issue containing vulnerability details, credentials, or a
+working exploit. Use GitHub private vulnerability reporting when available, or
+contact the repository owner privately. Include the affected version, impact,
+reproduction steps, and the smallest safe proof needed to validate the report.
 
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Suggested fix (if any)
+## Local And Remote Work
 
-We will acknowledge receipt within 48 hours and aim to release a fix within 7 days for critical issues.
+Vampyre performs code AST extraction, deterministic parsing, graph building,
+clustering, analysis, querying, and local exports on the machine where it runs.
+Network access is possible only through features that inherently require it:
 
-## Security Model
+- semantic extraction and community labeling through a selected LLM backend;
+- explicit URL ingestion and video retrieval;
+- optional Google Workspace conversion, PostgreSQL, Neo4j, or GitHub tools;
+- optional MCP HTTP serving.
 
-graphify is a **local development tool**. It runs as a Claude Code skill and optionally as a local MCP stdio server. It makes no network calls during graph analysis - only during `ingest` (explicit URL fetch by the user).
+Documents, papers, images, and transcripts can be sent to the configured LLM
+provider. Code files use local AST extraction in the normal pipeline. Before any
+semantic payload leaves the machine, the egress gate blocks credential-bearing
+paths and content, contains paths to the scan root, and records content-free
+decisions. There is no waiver or per-run bypass for blocked credential content.
 
-### Threat Surface
+The selected backend determines data residency. Use an explicitly configured
+local backend when source content must remain on-host. A non-loopback Ollama URL
+is remote for this purpose and produces a warning.
 
-| Vector | Mitigation |
-|--------|-----------|
-| SSRF via URL fetch | `security.validate_url()` allows only `http` and `https` schemes, blocks private/loopback/link-local IPs, and blocks cloud metadata endpoints. Redirect targets are re-validated. All fetch paths including tweet oEmbed go through `safe_fetch()`. |
-| Oversized downloads | `safe_fetch()` streams responses and aborts at 50 MB. `safe_fetch_text()` aborts at 10 MB. |
-| Non-2xx HTTP responses | `safe_fetch()` raises `HTTPError` on non-2xx status codes - error pages are not silently treated as content. |
-| Path traversal in MCP server | `security.validate_graph_path()` resolves paths and requires them to be inside `graphify-out/`. Also requires the `graphify-out/` directory to exist. |
-| XSS in graph HTML output | `security.sanitize_label()` strips control characters, caps at 256 chars, and HTML-escapes all node labels and edge titles before pyvis embeds them. |
-| Prompt injection via node labels | `sanitize_label()` also applied to MCP text output - node labels from user-controlled source files cannot break the text format returned to agents. |
-| Prompt injection via source file content | During the semantic pass, source files are attacker-controlled text mixed into the LLM context. `_read_files()` in `llm.py` wraps every file in a hash-stamped `<untrusted_source path=... sha256=...>` delimiter block, the extraction system prompt instructs the model to treat that block as inert data and never as instructions, and `_neutralise_injection_sentinels()` defangs known chat-template/jailbreak tokens (`<\|im_start\|>`, `[INST]`, `<<SYS>>`, forged `</untrusted_source>`, etc.) before insertion. This is the table-stakes defense (issue #1210): it does not make injection impossible, but changes it from "works on first try" to "requires evasion." |
-| YAML frontmatter injection | `_yaml_str()` escapes backslashes, double quotes, and newlines before embedding user-controlled strings (webpage titles, query questions) in YAML frontmatter. |
-| Encoding crashes on source files | All tree-sitter byte slices decoded with `errors="replace"` - non-UTF-8 source files degrade gracefully instead of crashing extraction. |
-| Symlink traversal | `os.walk(..., followlinks=False)` is explicit throughout `detect.py`. |
-| Corrupted graph.json | `_load_graph()` in `serve.py` wraps `json.JSONDecodeError` and prints a clear recovery message instead of crashing. |
+## MCP Transport
 
-### What graphify does NOT do
+The default MCP transport is local stdio. HTTP defaults to `127.0.0.1`.
 
-- Does not run a network listener (MCP server communicates over stdio only)
-- Does not execute code from source files (tree-sitter parses ASTs - no eval/exec)
-- Does not use `shell=True` in any subprocess call
-- Does not store credentials or API keys
+Non-loopback HTTP binds fail closed unless all of the following are present:
 
-### Optional network calls
+1. an API key supplied by `--api-key` or `GRAPHIFY_API_KEY`;
+2. a readable TLS certificate and key;
+3. valid Host-header configuration, with explicit `--allow-host` entries for a
+   wildcard bind.
 
-- `ingest` subcommand: fetches URLs explicitly provided by the user
-- PDF extraction: reads local files only (pypdf does not make network calls)
-- watch mode: local filesystem events only (watchdog does not make network calls)
+HTTP uses constant-time credential comparison, DNS-rebinding protection, bounded
+session/context caches, and configurable idle-session reaping. Multi-project
+paths must remain under configured `--allow-project-root` values. GitHub tools
+are disabled by default and, when enabled, require one fixed `OWNER/REPO` scope.
+
+## Threat Controls
+
+| Vector | Control |
+| --- | --- |
+| SSRF and redirects | URL validation allows HTTP(S), resolves destinations, blocks private/loopback/link-local/metadata targets, and revalidates redirects. |
+| Oversized or hostile input | Download, graph, Office, archive, XML, and document paths enforce size/depth/member limits and safe parsers. |
+| Path traversal and symlinks | Paths are resolved against explicit roots; out-of-root symlink targets and graph paths are refused. |
+| Credential egress | Filename and content classification occurs before LLM dispatch; blocked files are not transmitted. |
+| Prompt injection | Accepted source is neutralized, hash-delimited, and marked as untrusted data; the Claude CLI path is capability-confined. |
+| HTML/text injection | Labels and user-controlled display values are bounded and escaped before HTML or MCP rendering. |
+| Corrupt graph state | Strict decoding rejects conflicting class flags, profiles, endpoints, keys, provenance, and hyperedge membership before mutation. |
+| Partial publication | Same-directory atomic writes, file locks, generation checks, and best-effort multi-file rollback protect canonical state. |
+| Secret persistence | API keys are read from arguments/environment for the selected operation and are not intentionally written to graph state or query logs. |
+
+## Query Logging
+
+Query logging is disabled by default. It activates only when
+`GRAPHIFY_QUERY_LOG` is set to `1`, `true`, `yes`, or an explicit file path.
+Full graph responses require the additional explicit
+`GRAPHIFY_QUERY_LOG_RESPONSES=1`. `GRAPHIFY_QUERY_LOG_DISABLE=1` always wins.
+
+## Dependency And Release Security
+
+The lock file is managed only with uv. CI blocks on dependency vulnerability
+audit, static security analysis, lint, type checking, warnings, and the complete
+cross-platform test suite. Release artifacts are built from a version-matching
+tag, smoke-tested on Windows, macOS, and Linux, and published with SHA-256
+checksums.

@@ -1,4 +1,4 @@
-"""The Claude backend must be installable through the fork's uv-tool extra."""
+"""The Claude backend must be installable through Vampyre's uv-tool extra."""
 
 from pathlib import Path
 
@@ -32,4 +32,4 @@ def test_backend_pkg_hint_points_at_uv_tool_and_extra():
     msg = _backend_pkg_hint("anthropic", "anthropic")
     assert "uv tool install" in msg
     assert "graphifyy[anthropic]" in msg
-    assert "git+https://github.com/hypnwtykvmpr/vampyre.git@v9" in msg
+    assert "git+https://github.com/hypnwtykvmpr/vampyre.git@v0.9.5" in msg

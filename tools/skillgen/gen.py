@@ -16,7 +16,8 @@ Usage (from the repo root)::
 
 The render is idempotent: the core template's per-platform slots are filled in a
 fixed order, the reference index is sorted by name, output is LF-newline, and no
-timestamp or version is ever written into a generated file.
+dynamic timestamp or version is written into a generated file. Immutable release
+references come from the edited fragments and are guarded against drift.
 """
 
 from __future__ import annotations

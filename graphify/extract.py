@@ -3726,7 +3726,7 @@ def _extract_generic(
         # so users see the upgrade path instead of a bare TypeError.
         hint = (
             f"tree-sitter version mismatch for {config.ts_module}: {e}. "
-            f"Reinstall the fork with: {uv_tool_install_command()}"
+            f"Reinstall Vampyre with: {uv_tool_install_command()}"
         )
         return {"nodes": [], "edges": [], "error": hint}
     except Exception as e:

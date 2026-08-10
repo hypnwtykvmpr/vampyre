@@ -1,5 +1,5 @@
 ```bash
-# Detect the exact Python interpreter owned by this fork's uv tool environment.
+# Detect the exact Python interpreter owned by Vampyre's uv tool environment.
 PYTHON=""
 GRAPHIFY_BIN=$(command -v graphify 2>/dev/null)
 if [ -z "$GRAPHIFY_BIN" ]; then
@@ -7,7 +7,7 @@ if [ -z "$GRAPHIFY_BIN" ]; then
         echo "graphify requires uv; install uv first, then retry." >&2
         exit 1
     fi
-    uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v9"
+    uv tool install --force "graphifyy @ git+https://github.com/hypnwtykvmpr/vampyre.git@v0.9.5"
     GRAPHIFY_BIN=$(command -v graphify 2>/dev/null)
     if [ -z "$GRAPHIFY_BIN" ]; then
         GRAPHIFY_BIN="$(uv tool dir --bin)/graphify"

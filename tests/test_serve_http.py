@@ -52,6 +52,14 @@ _MCP_HEADERS = {
 }
 
 
+def test_http_docstring_names_supported_authentication_headers() -> None:
+    guidance = serve_mod.serve_http.__doc__ or ""
+
+    assert "Clients authenticate with either" in guidance
+    assert "``Authorization: Bearer <key>``" in guidance
+    assert "``X-API-Key: <key>``" in guidance
+
+
 def _graph_file(tmp_path: Path) -> str:
     p = tmp_path / "graph.json"
     p.write_text(json.dumps(SAMPLE_GRAPH), encoding="utf-8")

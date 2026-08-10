@@ -39,7 +39,7 @@ try:
 except Exception:
     _EXTRACTOR_VERSION = "unknown"
 
-# Package versions are human-controlled in this fork, so a correctness change
+# Package versions are human-controlled in Vampyre, so a correctness change
 # cannot rely on a version bump to invalidate incompatible AST fragments. Keep
 # the extractor schema independent and include it in the on-disk namespace.
 _AST_CACHE_SCHEMA = CURRENT_AST_NODE_ID_SCHEMA

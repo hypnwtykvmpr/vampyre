@@ -2066,7 +2066,7 @@ def test_watch_full_rebuild_preserves_non_ast_edges(tmp_path, no_cluster):
         data["links"] = links
         # Multigraph so the two semantic edges on the same foo->bar pair coexist as
         # parallels — a simple DiGraph collapses them to one, masking the assertion.
-        # The fork's real semantic layer lives in a MultiDiGraph anyway.
+        # Vampyre's real semantic layer lives in a MultiDiGraph anyway.
         _promote_to_multidigraph(data)
         graph_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 

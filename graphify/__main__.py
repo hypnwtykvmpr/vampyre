@@ -3076,7 +3076,7 @@ def _cmd_extract_locked() -> None:
                     f"[graphify extract] error: all semantic chunks failed "
                     f"for backend '{backend}' ({len(uncached_paths)} uncached files) - "
                     f"see per-chunk errors above. If you see 'requires the X package', "
-                    f"reinstall the fork with the named uv extra and retry.",
+                    f"reinstall Vampyre with the named uv extra and retry.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -3781,7 +3781,11 @@ def _cmd_provider(argv: list[str]) -> None:
     subcmd = argv[0] if argv else ""
     global_path = _custom_providers_path(global_=True)
 
-    if subcmd == "list":
+    if subcmd in {"-h", "--help", "-?"}:
+        print("Usage: graphify provider [add|list|show|remove]")
+        return
+
+    elif subcmd == "list":
         global_path.parent.mkdir(parents=True, exist_ok=True)
         existing: dict = {}
         if global_path.is_file():
@@ -3965,6 +3969,10 @@ def _main_dispatch() -> None:
         print(
             "  clone <github-url>      clone a GitHub repo locally and print its path for /graphify"
         )
+        print("    --branch <branch>       checkout a specific branch (default: repo default)")
+        print(
+            "    --out <dir>             clone to a custom directory (default: ~/.graphify/repos/<owner>/<repo>)"
+        )
         print(
             "  merge-driver <base> <current> <other>  git merge driver: union-merge two graph.json files (set up via hook install)"
         )
@@ -3972,10 +3980,6 @@ def _main_dispatch() -> None:
             "  merge-graphs <g1> <g2> [--multigraph|--simple]  merge two or more graph.json files into one cross-repo graph"
         )
         print("    --out <path>            output path (default: graphify-out/merged-graph.json)")
-        print("    --branch <branch>       checkout a specific branch (default: repo default)")
-        print(
-            "    --out <dir>             clone to a custom directory (default: ~/.graphify/repos/<owner>/<repo>)"
-        )
         print("  add <url>               fetch a URL and save it to ./raw, then update the graph")
         print('    --author "Name"         tag the author of the content')
         print('    --contributor "Name"    tag who added it to the corpus')
@@ -4149,7 +4153,14 @@ def _main_dispatch() -> None:
         print("  global list              list repos in the global graph")
         print("  global path              print path to the global graph file")
         print("  benchmark [graph.json]  measure token reduction vs naive full-corpus approach")
-        print("  export callflow-html    emit Mermaid-based architecture/call-flow HTML")
+        print(
+            "  export <format>         export HTML, wiki, Obsidian, GraphML, SVG, Neo4j, or call-flow views"
+        )
+        print("  provider <action>       add, list, show, or remove custom model providers")
+        print("  prs [number]            graph-aware GitHub pull-request dashboard and impact view")
+        print(
+            "  serve [graph.json]      start the MCP server (stdio by default; optional secured HTTP)"
+        )
         print(
             "  hook install            install post-commit/post-checkout git hooks (all platforms)"
         )
@@ -4225,18 +4236,20 @@ def _main_dispatch() -> None:
     # Universal help guard: -h/--help/-? anywhere after the command shows help
     # and stops — prevents flags from silently triggering destructive subcommands
     # (e.g. "cursor install --help" was silently installing into Cursor, #821).
-    # Exempt: free-text commands (user string may contain these tokens), and
-    # "install"/"uninstall" which have their own per-subcommand help handlers.
-    _FREE_TEXT_CMDS = {
+    # Exempt free-text commands (the user string may contain these tokens) and
+    # commands that implement their own complete help handler.
+    _HELP_PASSTHROUGH_CMDS = {
         "query",
         "explain",
         "path",
         "save-result",
         "install",
         "uninstall",
+        "provider",
         "serve",
+        "prs",
     }
-    if cmd not in _FREE_TEXT_CMDS and any(a in {"-h", "--help", "-?"} for a in sys.argv[2:]):
+    if cmd not in _HELP_PASSTHROUGH_CMDS and any(a in {"-h", "--help", "-?"} for a in sys.argv[2:]):
         print("Run 'graphify --help' for full usage.")
         return
 

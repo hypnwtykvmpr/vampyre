@@ -4,11 +4,11 @@ Per-repo graph.json files written by different extract paths at different times
 don't always agree on the `directed` / `multigraph` flags. compose requires one
 uniform type, so a mixed set used to crash with an unhandled NetworkXError.
 
-Fork semantics (diverges from upstream's fix): instead of collapsing every
+Vampyre semantics: instead of collapsing every
 input to a plain undirected Graph, `normalize_graphs_for_global` lifts the
 batch to the common LOSSLESS class — multidigraph if any input is multi, else
 digraph if any is directed — so no parallel edges or edge directions are
-silently dropped. Upstream's collapse behavior remains available behind the
+silently dropped. Lossy collapse behavior remains available behind the
 explicit `--simple` flag (which warns before projecting).
 """
 
@@ -71,7 +71,7 @@ def test_merge_graphs_mixed_directed_and_multigraph(tmp_path):
 
 
 def test_merge_graphs_mixed_explicit_simple_collapses(tmp_path):
-    """Upstream's collapse-to-simple behavior stays available behind --simple."""
+    """Collapse-to-simple behavior stays available behind --simple."""
     a = tmp_path / "r1" / "graphify-out" / "graph.json"
     b = tmp_path / "r2" / "graphify-out" / "graph.json"
     c = tmp_path / "r3" / "graphify-out" / "graph.json"

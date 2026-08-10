@@ -1,4 +1,4 @@
-// Test fixture for upstream PR — exercises every new extraction path.
+// Test fixture that exercises every advanced extraction path.
 //
 // Expected nodes after this PR:
 //   - IUserRepository       (interface)
