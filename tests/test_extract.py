@@ -1023,18 +1023,21 @@ def test_extract_js_member_require_emits_property_symbol():
     assert _make_id(helpers_stem, "helperFn") in sym_targets
 
 
-def test_extract_js_arrow_function_still_extracted():
-    """Regression: arrow functions in lexical_declaration must still produce nodes."""
+def test_extract_js_arrow_function_still_extracted(tmp_path):
+    """Regression: arrow functions in lexical_declaration must still produce nodes.
+
+    Written under tmp_path, not into the shared fixtures directory. Creating and
+    unlinking a file inside FIXTURES raced the parity test, which enumerates
+    that directory: under parallel execution a worker could observe the
+    temporary file mid-existence and report a spurious mismatch.
+    """
     from graphify.extract import extract_js
 
-    arrow_fixture = FIXTURES / "_arrow_only.js"
+    arrow_fixture = tmp_path / "_arrow_only.js"
     arrow_fixture.write_text("const greet = () => console.log('hi');\n", encoding="utf-8")
-    try:
-        result = extract_js(arrow_fixture)
-        labels = [n["label"] for n in result["nodes"]]
-        assert "greet()" in labels
-    finally:
-        arrow_fixture.unlink()
+    result = extract_js(arrow_fixture)
+    labels = [n["label"] for n in result["nodes"]]
+    assert "greet()" in labels
 
 
 def test_extract_js_this_assigned_methods(tmp_path):

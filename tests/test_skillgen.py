@@ -892,3 +892,146 @@ def test_agents_body_matches_amp_modulo_hooks_wording():
             continue
         assert amp[name] == agents[name], f"{name} drifted between amp and agents"
     assert amp["hooks.md"] != agents["hooks.md"]
+
+
+# --- generated query fallback: budget boundaries (executed, not just read) ---
+
+_FALLBACK_BLOCK = re.compile(
+    r"^(notice = f'\.\.\. \(truncated.*?^    print\('\\n'\.join\(admitted\).*?$)",
+    re.MULTILINE | re.DOTALL,
+)
+
+_FIXTURE_LINES = [
+    "Traversal: BFS | Start: ['target'] | 4 nodes",
+    "  NODE target [src=a.py loc=L1]",
+    "  NODE peer [src=b.py loc=L2]",
+    "  NODE other [src=c.py loc=L3]",
+    "  EDGE target --calls [EXTRACTED]--> peer",
+]
+
+
+# Every generated surface carrying the fallback: 14 platform query references
+# plus the Aider and Devin cores, which inline the same block.
+EXPECTED_FALLBACK_SURFACES = 16
+
+
+def _budget_blocks() -> list[tuple[str, str]]:
+    """Extract the budget-admission block from every generated surface.
+
+    Reading the text is not enough: the emitted code is what an agent runs, so
+    its boundary behaviour has to be executed. Aider and Devin inline the block
+    into their cores rather than a references file, so globbing only
+    ``skills/*/references/query.md`` silently skipped two real surfaces.
+    """
+    candidates = sorted(REPO_ROOT.glob("graphify/skills/*/references/query.md"))
+    candidates += [REPO_ROOT / "graphify/skill-aider.md", REPO_ROOT / "graphify/skill-devin.md"]
+    blocks = []
+    for path in sorted(candidates):
+        if not path.exists():
+            continue
+        match = _FALLBACK_BLOCK.search(path.read_text(encoding="utf-8"))
+        if match:
+            blocks.append((str(path.relative_to(REPO_ROOT)), match.group(1)))
+    return blocks
+
+
+def _run_block(tmp_path, source: str, token_budget: int):
+    """Run the generated block the way an agent would: as a real Python process."""
+    import json
+    import subprocess
+
+    script = tmp_path / "fallback.py"
+    prelude = (
+        f"token_budget = {token_budget}\n"
+        f"char_budget = token_budget * 3\n"
+        f"lines = {json.dumps(_FIXTURE_LINES)}\n"
+    )
+    script.write_text(prelude + source + "\n", encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+    )
+
+
+def test_generated_query_fallback_covers_every_surface():
+    """Pin the exact surface count.
+
+    Asserting merely "non-empty" let the extractor silently miss the Aider and
+    Devin cores, so two shipped surfaces went untested.
+    """
+    found = sorted(name for name, _ in _budget_blocks())
+    assert len(found) == EXPECTED_FALLBACK_SURFACES, found
+    assert "graphify/skill-aider.md" in found, found
+    assert "graphify/skill-devin.md" in found, found
+
+
+def _distinct_budget_blocks() -> list[tuple[str, str]]:
+    """One representative per DISTINCT block body.
+
+    All surfaces render from the same fragments, so their blocks are usually
+    byte-identical. Executing every copy multiplies subprocess cost without
+    adding coverage; ``test_generated_query_fallback_covers_every_surface``
+    already pins the surface count, and any surface whose block differs shows up
+    here as its own representative.
+    """
+    seen: dict[str, str] = {}
+    for name, source in _budget_blocks():
+        seen.setdefault(source, name)
+    return [(name, source) for source, name in seen.items()]
+
+
+def test_generated_query_fallback_refuses_budget_below_one_record(tmp_path):
+    """A budget too small for one record must refuse, not emit an oversized answer.
+
+    The earlier form always admitted the first line, so token_budget=1 (a
+    3-character cap) printed a ~105-character response.
+    """
+    for name, source in _distinct_budget_blocks():
+        result = _run_block(tmp_path, source, token_budget=1)
+        assert result.returncode != 0, (name, result.stdout)
+        assert not result.stdout.strip(), (name, result.stdout)
+        assert "budget" in result.stderr.lower(), (name, result.stderr)
+
+
+def test_generated_query_fallback_never_exceeds_its_budget(tmp_path):
+    """Whatever the generated block emits must fit the budget it declares."""
+    for name, source in _distinct_budget_blocks():
+        for token_budget in (1, 20, 40, 60, 90, 140, 400):
+            result = _run_block(tmp_path, source, token_budget=token_budget)
+            if result.returncode != 0:
+                continue  # explicit refusal is the correct alternative to overrun
+            emitted = result.stdout.rstrip("\n")
+            assert len(emitted) <= token_budget * 3, (
+                name,
+                token_budget,
+                len(emitted),
+                emitted,
+            )
+
+
+def test_generated_query_fallback_never_returns_header_only_success(tmp_path):
+    """Success must carry evidence, not just a header and a truncation notice.
+
+    At a budget that fit the header but no record, the block exited 0 with a
+    traversal header plus notice and no NODE/EDGE line at all — apparent success
+    conveying nothing.
+    """
+    for name, source in _distinct_budget_blocks():
+        # The failure lives at the boundary where refusal stops, so scan upward
+        # and stop after the first few successes rather than sweeping the range.
+        successes = 0
+        for token_budget in range(1, 120):
+            result = _run_block(tmp_path, source, token_budget=token_budget)
+            if result.returncode != 0:
+                continue
+            emitted = result.stdout
+            assert any(marker in emitted for marker in ("NODE ", "EDGE ")), (
+                f"{name}: budget={token_budget} returned header-only success:\n{emitted}"
+            )
+            successes += 1
+            if successes >= 3:
+                break
+        assert successes, f"{name}: no budget in 1..119 produced a successful render"

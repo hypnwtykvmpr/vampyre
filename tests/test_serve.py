@@ -9,6 +9,10 @@ import networkx as nx
 from networkx.readwrite import json_graph
 
 from graphify.serve import (
+    InsufficientBudgetError,
+    _estimate_tokens_for_budget,
+    _IDF_CACHE,
+    _TRIGRAM_INDEX_CACHE,
     _communities_from_graph,
     _score_nodes,
     _compute_idf,
@@ -285,8 +289,12 @@ def test_find_node_source_file_path_prefers_file_level_node():
 def test_trigram_index_cached_and_rebuilt_per_graph():
     G = _make_big_graph()
     idx1 = _get_trigram_index(G)
-    assert idx1 is _get_trigram_index(G)  # cached on the same graph object
-    assert G.graph["_trigram_index"] is idx1
+    assert idx1 is _get_trigram_index(G)  # cached per graph object
+    # The cache is keyed by graph identity OUTSIDE graph state: the postings hold
+    # array('i') values, which are not JSON representable, so storing them in
+    # G.graph made a query mutate graph state and broke re-encoding.
+    assert "_trigram_index" not in G.graph
+    assert _TRIGRAM_INDEX_CACHE[G] is idx1
     G2 = _make_big_graph()
     assert _get_trigram_index(G2) is not idx1  # a fresh graph rebuilds (reload safety)
 
@@ -446,22 +454,37 @@ def test_query_output_is_stable_across_insertion_order_and_mixed_ids():
     first = make_graph(["seed", "z", 1, "a"])
     second = make_graph(["seed", "a", 1, "z"])
 
-    assert _query_graph_text(first, "target", depth=1, token_budget=45) == _query_graph_text(
-        second, "target", depth=1, token_budget=45
+    first_min = _minimum_budget(
+        lambda b: _query_graph_text(first, "target", depth=1, token_budget=b)
+    )
+    second_min = _minimum_budget(
+        lambda b: _query_graph_text(second, "target", depth=1, token_budget=b)
+    )
+    assert first_min == second_min, (first_min, second_min)
+    assert _query_graph_text(first, "target", depth=1, token_budget=first_min) == _query_graph_text(
+        second, "target", depth=1, token_budget=first_min
     )
 
 
 def test_query_truncation_is_stable_across_hash_seeds():
+    # The refusal minimum is itself part of the determinism contract: catch the
+    # refusal, retry at the reported minimum, and compare BOTH across seeds.
     code = """
 import networkx as nx
-from graphify.serve import _query_graph_text
+from graphify.serve import _query_graph_text, InsufficientBudgetError
 
 graph = nx.Graph()
 graph.add_node("seed", label="target", source_file="seed.py", source_location="L1")
 for node_id in {"z", "a", "m", "q", "b", "y"}:
     graph.add_node(node_id, label=f"peer-{node_id}", source_file=f"{node_id}.py", source_location="L1")
     graph.add_edge("seed", node_id, relation="calls", confidence="EXTRACTED")
-print(_query_graph_text(graph, "target", depth=1, token_budget=45))
+try:
+    _query_graph_text(graph, "target", depth=1, token_budget=45)
+    raise SystemExit("expected refusal at budget 45")
+except InsufficientBudgetError as exc:
+    minimum = exc.required_minimum
+print(minimum)
+print(_query_graph_text(graph, "target", depth=1, token_budget=minimum))
 """
     outputs = []
     for seed in ("1", "2", "3", "42"):
@@ -511,10 +534,46 @@ def test_subgraph_to_text_contains_labels():
 
 
 def test_subgraph_to_text_truncates():
+    """At the viable boundary a large expansion still drops optional units.
+
+    The former four-node fixture can no longer show this: its entire output now
+    fits as soon as the primary unit plus notice fits, so truncation needs a
+    fixture with genuine optional expansion.
+    """
+    G = _seed_starved_graph()
+
+    def render(budget):
+        return _query_graph_text(G, "target", depth=2, token_budget=budget)
+
+    assert "truncated" in render(_minimum_budget(render))
+
+
+def test_subgraph_to_text_refuses_budget_below_one_complete_record():
+    """A budget too small for one whole record refuses instead of splitting it.
+
+    The previous renderer sliced the joined output at a character offset, so a
+    tiny budget emitted a partial NODE line as though it were evidence.
+    """
     G = _make_graph()
-    # Very small budget forces truncation
-    text = _subgraph_to_text(G, {"n1", "n2", "n3", "n4"}, [("n1", "n2")], token_budget=1)
-    assert "truncated" in text
+    with pytest.raises(InsufficientBudgetError) as excinfo:
+        _subgraph_to_text(G, {"n1", "n2", "n3", "n4"}, [("n1", "n2")], token_budget=1)
+    assert excinfo.value.required_minimum > 1
+
+
+def test_subgraph_to_text_never_emits_a_partial_record():
+    """Every emitted line is a complete NODE or EDGE record at any viable budget."""
+    G = _make_graph()
+    for budget in range(1, 200, 3):
+        try:
+            text = _subgraph_to_text(G, {"n1", "n2", "n3", "n4"}, [("n1", "n2")], budget)
+        except InsufficientBudgetError:
+            continue
+        assert len(text) <= budget * 3, (budget, len(text))
+        for line in text.splitlines():
+            if line.startswith("..."):
+                continue
+            assert line.startswith(("NODE ", "EDGE ")), (budget, line)
+            assert line.endswith(("]", ")")) or "-->" in line, (budget, line)
 
 
 def test_subgraph_to_text_edge_included():
@@ -557,16 +616,20 @@ def test_subgraph_to_text_learning_suffix_counts_against_budget():
     """The learning= suffix is part of the NODE line BEFORE the budget cut, so it
     is included in the char_budget accounting (a budget tight enough to fit the
     bare line but not the suffixed line forces truncation)."""
-    G = _make_graph()
-    bare = _subgraph_to_text(G, {"n1", "n2", "n3"}, [])
+    # Needs enough optional evidence that the ANNOTATED primary unit plus notice
+    # still fits while the full annotated render does not. A small fixture can no
+    # longer show this: admission is unit-based, so annotation that overflows the
+    # primary unit refuses outright instead of truncating.
+    G = _seed_starved_graph()
+    bare_full = _query_graph_text(G, "target", depth=2, token_budget=4000)
     # token_budget chosen so the un-annotated render fits without truncation...
-    budget = (len(bare) // 3) + 1
-    assert "truncated" not in _subgraph_to_text(G, {"n1", "n2", "n3"}, [], token_budget=budget)
+    budget = (len(bare_full) // 3) + 1
+    assert "truncated" not in _query_graph_text(G, "target", depth=2, token_budget=budget)
     # ...but once every node carries a learning= suffix, the same budget overflows.
     G.graph["_learning_overlay"] = {
-        n: {"status": "preferred", "stale": False} for n in ("n1", "n2", "n3")
+        node: {"status": "preferred", "stale": False} for node in G.nodes()
     }
-    annotated = _subgraph_to_text(G, {"n1", "n2", "n3"}, [], token_budget=budget)
+    annotated = _query_graph_text(G, "target", depth=2, token_budget=budget)
     assert "learning=preferred" in annotated
     assert "truncated" in annotated
 
@@ -763,12 +826,15 @@ def test_idf_downweights_common_terms():
     assert scored[0][1] == "fbs", f"FooBarService should rank first, got {scored[0][1]}"
 
 
-def test_idf_cached_on_graph():
-    """IDF results are stored in G.graph so repeated queries don't recompute."""
+def test_idf_cached_per_graph_outside_graph_state():
+    """IDF results are memoized per graph object so repeated queries don't recompute.
+
+    The cache is held outside G.graph: a query must never mutate graph state.
+    """
     G = _make_graph()
     _score_nodes(G, ["extract"])
-    assert "_idf_cache" in G.graph
-    assert "extract" in G.graph["_idf_cache"]
+    assert "_idf_cache" not in G.graph
+    assert "extract" in _IDF_CACHE[G]
 
 
 def test_idf_new_graph_starts_fresh():
@@ -776,6 +842,7 @@ def test_idf_new_graph_starts_fresh():
     G1 = _make_graph()
     G2 = _make_graph()
     _score_nodes(G1, ["extract"])
+    assert G2 not in _IDF_CACHE
     assert "_idf_cache" not in G2.graph
 
 
@@ -834,10 +901,25 @@ def test_pick_seeds_respects_max_k():
 
 def test_subgraph_to_text_truncation_hint_is_actionable():
     """Truncation message must tell Claude what to do, not just say truncated."""
-    G = _make_graph()
-    text = _subgraph_to_text(G, {"n1", "n2", "n3", "n4"}, [("n1", "n2")], token_budget=1)
+    G = _seed_starved_graph()
+
+    def render(budget):
+        return _query_graph_text(G, "target", depth=2, token_budget=budget)
+
+    text = render(_minimum_budget(render))
     assert "truncated" in text
     assert "get_node" in text or "context_filter" in text
+
+
+def test_insufficient_budget_error_carries_actionable_minimum():
+    """The refusal must name a retry budget that actually works."""
+    G = _make_graph()
+    with pytest.raises(InsufficientBudgetError) as excinfo:
+        _subgraph_to_text(G, {"n1", "n2", "n3", "n4"}, [("n1", "n2")], token_budget=1)
+    retry = excinfo.value.required_minimum
+    # Retrying at the reported minimum must not raise again.
+    text = _subgraph_to_text(G, {"n1", "n2", "n3", "n4"}, [("n1", "n2")], token_budget=retry)
+    assert text.splitlines()[0].startswith("NODE ")
 
 
 # --- integration: identifier + noise query seeds from identifier (#897) ---
@@ -988,3 +1070,524 @@ def test_community_header_sanitizes_name():
     out = _community_header(3, "Pay\x00ments\x1b[31m")
     assert out.startswith("Community 3 — ")
     assert "\x00" not in out and "\x1b" not in out
+
+
+# --- D0: seed-first rendering (queried symbol must survive the budget) ---
+
+
+def _seed_starved_graph() -> nx.Graph:
+    """Low-degree queried seed surrounded by high-degree peers.
+
+    ``_subgraph_to_text`` orders the expansion by descending distinct-neighbour
+    degree, so without seed-first rendering the queried symbol sorts last and a
+    realistic small budget cuts it out of its own answer.
+    """
+    graph = nx.Graph()
+    graph.add_node("seed", label="target", source_file="seed.py", source_location="L1", community=0)
+    for peer in ("p1", "p2"):
+        graph.add_node(
+            peer, label=f"peer-{peer}", source_file=f"{peer}.py", source_location="L1", community=0
+        )
+        graph.add_edge("seed", peer, relation="calls", confidence="EXTRACTED", context="call")
+    # Inflate peer degree so both outrank the seed in the degree-sorted expansion.
+    for filler in ("f1", "f2", "f3", "f4", "f5", "f6"):
+        graph.add_node(
+            filler, label=f"filler-{filler}", source_file=f"{filler}.py", source_location="L1"
+        )
+        for peer in ("p1", "p2"):
+            graph.add_edge(peer, filler, relation="calls", confidence="EXTRACTED", context="call")
+    return graph
+
+
+def _minimum_budget(render) -> int:
+    """Lowest budget at which ``render(budget)`` succeeds.
+
+    Budgets are derived, never hardcoded: the minimum depends on fixture label
+    widths and on the truncation notice, which embeds the budget itself. The
+    refusal reports the minimum, so this is O(1); that the reported value really
+    is the first viable budget is asserted separately by
+    ``test_reported_minimum_equals_first_viable_budget``.
+    """
+    try:
+        render(1)
+    except InsufficientBudgetError as excinfo:
+        return excinfo.required_minimum
+    return 1
+
+
+def test_subgraph_to_text_seed_argument_renders_seed_first():
+    """Control: the seed-first capability itself works when the argument is passed.
+
+    This must pass before and after the D0 fix. If it ever fails, the D0
+    regression tests below are proving nothing.
+    """
+    graph = _seed_starved_graph()
+    nodes = {"seed", "p1", "p2"}
+    edges = [("seed", "p1"), ("seed", "p2")]
+
+    def render(budget):
+        return _subgraph_to_text(graph, nodes, edges, budget, seeds=["seed"])
+
+    out = render(_minimum_budget(render))
+    node_lines = [line for line in out.splitlines() if line.startswith("NODE ")]
+    assert node_lines, "control produced no NODE lines; the fixture is broken"
+    assert node_lines[0].startswith("NODE target ["), node_lines
+
+
+def test_query_graph_text_keeps_queried_seed_at_its_minimum_budget():
+    """D0: the queried symbol must appear in the evidence body, not only the header."""
+    graph = _seed_starved_graph()
+
+    def render(budget):
+        return _query_graph_text(graph, "target", depth=1, token_budget=budget)
+
+    out = render(_minimum_budget(render))
+    header, _, body = out.partition("\n\n")
+    assert "target" in header, "fixture no longer selects the intended seed"
+    assert "NODE target [" in body, f"queried seed missing from evidence body:\n{out}"
+
+
+@pytest.mark.parametrize("budget", [20, 50])
+def test_reproduced_budgets_now_refuse_with_one_stable_minimum(budget):
+    """The shipped-CLI reproduction budgets are below one complete primary unit.
+
+    They previously returned truncated apparent success without the seed. They
+    must now refuse, and every refusal must report the same actionable minimum.
+    """
+    graph = _seed_starved_graph()
+    with pytest.raises(InsufficientBudgetError) as excinfo:
+        _query_graph_text(graph, "target", depth=1, token_budget=budget)
+    minimum = excinfo.value.required_minimum
+    assert minimum > budget
+
+    with pytest.raises(InsufficientBudgetError) as other:
+        _query_graph_text(graph, "target", depth=1, token_budget=1)
+    assert other.value.required_minimum == minimum, "minimum varies with requested budget"
+
+
+def test_minimum_budget_is_an_exact_stable_fixed_point():
+    """Below the minimum always refuses; at the minimum the response fits."""
+    graph = _seed_starved_graph()
+
+    def render(budget):
+        return _query_graph_text(graph, "target", depth=2, token_budget=budget)
+
+    minimum = _minimum_budget(render)
+    for budget in (1, minimum // 2, minimum - 1):
+        if budget < 1:
+            continue
+        with pytest.raises(InsufficientBudgetError) as excinfo:
+            render(budget)
+        assert excinfo.value.required_minimum == minimum, (budget, excinfo.value.required_minimum)
+
+    out = render(minimum)
+    assert len(out) <= minimum * 3, (len(out), minimum * 3)
+    assert "NODE target [" in out
+    assert "EDGE " in out
+
+
+@pytest.mark.parametrize("mode", ["bfs", "dfs"])
+def test_query_graph_text_seed_first_in_both_traversal_modes(mode):
+    graph = _seed_starved_graph()
+
+    def render(budget):
+        return _query_graph_text(graph, "target", mode=mode, depth=1, token_budget=budget)
+
+    out = render(_minimum_budget(render))
+    _, _, body = out.partition("\n\n")
+    node_lines = [line for line in body.splitlines() if line.startswith("NODE ")]
+    assert node_lines, f"mode={mode} produced no NODE lines"
+    assert node_lines[0].startswith("NODE target ["), node_lines
+
+
+def test_query_graph_text_seed_first_is_insertion_order_stable():
+    """Seed-first rendering must not reintroduce an ordering dependency."""
+
+    def build(order):
+        graph = nx.Graph()
+        graph.add_node(
+            "seed", label="target", source_file="seed.py", source_location="L1", community=0
+        )
+        for peer in order:
+            graph.add_node(
+                peer,
+                label=f"peer-{peer}",
+                source_file=f"{peer}.py",
+                source_location="L1",
+                community=0,
+            )
+            graph.add_edge("seed", peer, relation="calls", confidence="EXTRACTED")
+        return graph
+
+    first, second = build(["z", "a", "m"]), build(["m", "z", "a"])
+    first_min = _minimum_budget(
+        lambda b: _query_graph_text(first, "target", depth=1, token_budget=b)
+    )
+    second_min = _minimum_budget(
+        lambda b: _query_graph_text(second, "target", depth=1, token_budget=b)
+    )
+    assert first_min == second_min, (first_min, second_min)
+    shared = first_min
+    assert _query_graph_text(first, "target", depth=1, token_budget=shared) == _query_graph_text(
+        second, "target", depth=1, token_budget=shared
+    )
+
+
+# --- D0: evidence-unit atomicity and omission accounting ---
+
+
+def _edge_endpoint_labels(line: str) -> tuple[str, str]:
+    body = line[len("EDGE ") :]
+    return body.split(" --", 1)[0], body.rsplit("--> ", 1)[1]
+
+
+def test_reported_minimum_equals_first_viable_budget():
+    """The minimum must be the LESSER of the complete response and primary+notice.
+
+    Solving only the primary-plus-notice fixed point over-reported the minimum
+    whenever rendering everything was cheaper than rendering a truncated form.
+    """
+    for depth in (1, 2):
+        graph = _seed_starved_graph()
+
+        def render(budget, _depth=depth, _graph=graph):
+            return _query_graph_text(_graph, "target", depth=_depth, token_budget=budget)
+
+        # Scan only up to the reported minimum: every budget below it must
+        # refuse with that same value, and the minimum itself must succeed.
+        minimum = _minimum_budget(render)
+        reported = set()
+        for budget in range(1, minimum):
+            with pytest.raises(InsufficientBudgetError) as excinfo:
+                render(budget)
+            reported.add(excinfo.value.required_minimum)
+        assert reported in ({minimum}, set()), (depth, reported, minimum)
+        render(minimum)
+
+
+def test_complete_response_cheaper_than_truncated_is_not_refused():
+    """A budget that fits everything must never refuse on truncated-form cost."""
+    graph = _make_graph()
+    selected = {"n1", "n2", "n3", "n4"}
+    edges = [("n1", "n2")]
+    complete = _subgraph_to_text(graph, selected, edges, token_budget=4000)
+    exact = _estimate_tokens_for_budget(len(complete))
+    out = _subgraph_to_text(graph, selected, edges, token_budget=exact)
+    assert "truncated" not in out
+    assert len(out) <= exact * 3
+
+
+def test_no_relationship_is_emitted_without_both_endpoint_nodes():
+    """Expansion units are atomic: an EDGE cannot outlive its endpoint records."""
+    graph = _seed_starved_graph()
+    base = _minimum_budget(lambda b: _query_graph_text(graph, "target", depth=2, token_budget=b))
+    for budget in range(base, base + 90, 3):
+        try:
+            out = _query_graph_text(graph, "target", depth=2, token_budget=budget)
+        except InsufficientBudgetError:
+            continue
+        labels = {
+            line.split("NODE ", 1)[1].split(" [")[0]
+            for line in out.splitlines()
+            if line.startswith("NODE ")
+        }
+        for line in out.splitlines():
+            if not line.startswith("EDGE "):
+                continue
+            source, target = _edge_endpoint_labels(line)
+            assert source in labels, (budget, line, sorted(labels))
+            assert target in labels, (budget, line, sorted(labels))
+
+
+def test_omission_accounting_counts_keyed_records_not_bundles():
+    """Three parallel keyed records omitted must report three, not one bundle."""
+    graph = nx.MultiDiGraph()
+    graph.add_node("a", label="target", source_file="a.py", source_location="L1")
+    graph.add_node("b", label="bee", source_file="b.py", source_location="L1")
+    graph.add_node("c", label="cee", source_file="c.py", source_location="L1")
+    graph.add_edge("a", "b", key="k1", relation="r1", confidence="EXTRACTED")
+    for key, relation in (("k1", "p1"), ("k2", "p2"), ("k3", "p3")):
+        graph.add_edge("a", "c", key=key, relation=relation, confidence="EXTRACTED")
+
+    def render(budget):
+        return _query_graph_text(graph, "target", depth=1, token_budget=budget)
+
+    out = render(_minimum_budget(render))
+    assert "3 relationships omitted" in out, out
+
+
+def test_primary_edge_direction_is_preserved_on_directed_graphs():
+    graph = nx.DiGraph()
+    graph.add_node("a", label="target", source_file="a.py", source_location="L1")
+    graph.add_node("b", label="callee", source_file="b.py", source_location="L1")
+    graph.add_edge("a", "b", relation="calls", confidence="EXTRACTED")
+
+    def render(budget):
+        return _query_graph_text(graph, "target", depth=1, token_budget=budget)
+
+    out = render(_minimum_budget(render))
+    edges = [line for line in out.splitlines() if line.startswith("EDGE ")]
+    assert edges, out
+    source, target = _edge_endpoint_labels(edges[0])
+    assert (source, target) == ("target", "callee"), edges
+
+
+@pytest.mark.parametrize("seed_count", [1, 2, 3])
+def test_primary_unit_belongs_to_the_primary_seed(seed_count):
+    """With several seeds the primary unit must come from the FIRST seed.
+
+    Selecting the first rendered edge globally picked a secondary seed's
+    relationship and an unrelated node as its counterpart.
+    """
+    graph = nx.Graph()
+    for index in range(seed_count):
+        graph.add_node(
+            f"s{index}", label="target", source_file=f"s{index}.py", source_location="L1"
+        )
+        graph.add_node(
+            f"c{index}", label=f"counter{index}", source_file=f"c{index}.py", source_location="L1"
+        )
+        graph.add_edge(f"s{index}", f"c{index}", relation=f"rel{index}", confidence="EXTRACTED")
+
+    def render(budget):
+        return _query_graph_text(graph, "target", depth=1, token_budget=budget)
+
+    out = render(_minimum_budget(render))
+    node_lines = [line for line in out.splitlines() if line.startswith("NODE ")]
+    assert node_lines[0].startswith("NODE target ["), out
+    for line in out.splitlines():
+        if line.startswith("EDGE "):
+            source, target = _edge_endpoint_labels(line)
+            assert source in {node.split("NODE ", 1)[1].split(" [")[0] for node in node_lines}, out
+
+
+def _multi_seed_expansion_graph() -> nx.Graph:
+    """Two exact seeds where the primary has several competing expansions."""
+    graph = nx.Graph()
+    graph.add_node("p", label="target", source_file="p.py", source_location="L1")
+    graph.add_node("s2", label="target", source_file="s2.py", source_location="L1")
+    for node, relation in (("a", "primary"), ("b", "expand-1"), ("c", "expand-2")):
+        graph.add_node(node, label=node * 3, source_file=f"{node}.py", source_location="L1")
+        graph.add_edge("p", node, relation=relation, confidence="EXTRACTED")
+    graph.add_node("z", label="zzz", source_file="z.py", source_location="L1")
+    graph.add_edge("s2", "z", relation="secondary", confidence="EXTRACTED")
+    return graph
+
+
+def test_secondary_seeds_outrank_further_primary_expansion():
+    """Allocation order is policy: at most ONE extra primary expansion precedes
+    the selected secondary seeds.
+
+    Admitting every relationship expansion before secondary seeds let expansion
+    from one seed consume the packet before another selected seed appeared —
+    the original discovery failure, one level down.
+    """
+    graph = _multi_seed_expansion_graph()
+    checked = 0
+    for budget in range(1, 400, 5):
+        try:
+            out = _query_graph_text(graph, "target", depth=1, token_budget=budget)
+        except InsufficientBudgetError:
+            continue
+        lines = out.splitlines()
+        if not any(line.startswith("...") for line in lines):
+            continue  # only truncated responses constrain allocation order
+        second_seed_present = any(
+            line.startswith("NODE ") and "src=s2.py" in line for line in lines
+        )
+        primary_expansions = sum(
+            1 for line in lines if line.startswith("EDGE ") and "expand-" in line
+        )
+        checked += 1
+        if primary_expansions >= 2:
+            assert second_seed_present, (
+                f"budget={budget}: a second primary expansion was admitted while a "
+                f"selected secondary seed was still missing:\n{out}"
+            )
+    assert checked, "fixture never produced a truncated response"
+
+
+def _evidence_lines(out: str) -> frozenset[str]:
+    return frozenset(line for line in out.splitlines() if line.startswith(("NODE ", "EDGE ")))
+
+
+def test_admitted_evidence_is_monotonic_in_budget():
+    """Evidence present at budget N must still be present at N+1.
+
+    Allocation skipped a unit that did not fit and kept going, so a lower
+    priority secondary seed could appear at one budget and vanish at a larger
+    one once an earlier expansion became affordable. Raising a budget must never
+    remove evidence.
+    """
+    graph = _multi_seed_expansion_graph()
+    previous = None
+    checked = 0
+    for budget in range(1, 400):
+        try:
+            out = _query_graph_text(graph, "target", depth=1, token_budget=budget)
+        except InsufficientBudgetError:
+            continue
+        current = _evidence_lines(out)
+        if previous is not None:
+            lost = previous - current
+            assert not lost, f"budget={budget} dropped evidence present at a smaller budget: {lost}"
+            checked += 1
+        previous = current
+    assert checked, "fixture produced no comparable budget pairs"
+
+
+def test_admitted_evidence_is_a_prefix_of_the_priority_list():
+    """No lower-priority unit may appear while a higher-priority unit is omitted.
+
+    Priority here: the primary unit, then one further primary-seed expansion,
+    then the secondary seed. A secondary seed present while the single permitted
+    primary expansion is absent means allocation skipped rather than stopped.
+    """
+    graph = _multi_seed_expansion_graph()
+    checked = 0
+    for budget in range(1, 400):
+        try:
+            out = _query_graph_text(graph, "target", depth=1, token_budget=budget)
+        except InsufficientBudgetError:
+            continue
+        if not any(line.startswith("...") for line in out.splitlines()):
+            continue  # only truncated responses constrain the prefix
+        lines = out.splitlines()
+        secondary_present = any(line.startswith("NODE ") and "src=s2.py" in line for line in lines)
+        primary_expansion_present = any(
+            line.startswith("EDGE ") and "expand-" in line for line in lines
+        )
+        checked += 1
+        if secondary_present:
+            assert primary_expansion_present, (
+                f"budget={budget}: secondary seed admitted while the higher-priority "
+                f"primary expansion was omitted — admission is not a prefix:\n{out}"
+            )
+    assert checked, "fixture never produced a truncated response"
+
+
+# --- graph-state cleanliness, asserted on canonical bytes ---
+
+
+def test_query_leaves_canonical_graph_state_byte_identical():
+    """Snapshot canonical state, run real queries, recapture, compare bytes.
+
+    Naming the two known cache keys is implementation-coupled: a future cache
+    stored under a different graph-metadata key would pass that check while
+    still mutating graph payload. Recapturing the live graph and comparing
+    encoded bytes catches any such key.
+    """
+    from graphify.graph_state import encode_graph_state_bytes, graph_state_from_graph
+
+    graph = _seed_starved_graph()
+    before = encode_graph_state_bytes(graph_state_from_graph(graph))
+
+    for mode in ("bfs", "dfs"):
+        for budget in (200, 400, 4000):
+            _query_graph_text(graph, "target", mode=mode, depth=2, token_budget=budget)
+    _score_nodes(graph, ["target"])
+    _get_trigram_index(graph)
+    _find_node(graph, "target")
+
+    after = encode_graph_state_bytes(graph_state_from_graph(graph))
+    assert after == before, "a query mutated canonical graph state"
+
+
+def test_recapture_comparison_detects_any_graph_metadata_key():
+    """Control: prove the byte comparison above is not vacuous.
+
+    If this stops failing on an injected key, the regression proves nothing.
+    """
+    from graphify.graph_state import encode_graph_state_bytes, graph_state_from_graph
+
+    graph = _seed_starved_graph()
+    before = encode_graph_state_bytes(graph_state_from_graph(graph))
+    graph.graph["_some_future_cache"] = {"derived": True}
+    assert encode_graph_state_bytes(graph_state_from_graph(graph)) != before
+
+
+# --- D0 integrated budget-boundary matrix ---
+
+
+def _disconnected_seed_graph() -> nx.Graph:
+    graph = nx.Graph()
+    graph.add_node("lonely", label="target", source_file="lonely.py", source_location="L1")
+    for peer in ("x", "y", "z"):
+        graph.add_node(peer, label=f"other-{peer}", source_file=f"{peer}.py", source_location="L1")
+    graph.add_edge("x", "y", relation="calls", confidence="EXTRACTED", context="call")
+    return graph
+
+
+def _high_degree_seed_graph(fanout: int = 40) -> nx.Graph:
+    graph = nx.Graph()
+    graph.add_node("hub", label="target", source_file="hub.py", source_location="L1")
+    for index in range(fanout):
+        node = f"n{index}"
+        graph.add_node(node, label=f"leaf-{index}", source_file=f"{node}.py", source_location="L1")
+        graph.add_edge("hub", node, relation="calls", confidence="EXTRACTED", context="call")
+    return graph
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [_seed_starved_graph, _disconnected_seed_graph, _high_degree_seed_graph],
+    ids=["seed-starved", "disconnected-primary", "high-degree-primary"],
+)
+def test_budget_boundary_minimum_and_minimum_plus_one(factory):
+    """minimum-1 refuses; minimum and minimum+1 succeed, fit, and keep the seed."""
+    graph = factory()
+
+    def render(budget):
+        return _query_graph_text(graph, "target", depth=2, token_budget=budget)
+
+    minimum = _minimum_budget(render)
+    if minimum > 1:
+        with pytest.raises(InsufficientBudgetError) as excinfo:
+            render(minimum - 1)
+        assert excinfo.value.required_minimum == minimum
+
+    for budget in (minimum, minimum + 1):
+        out = render(budget)
+        assert len(out) <= budget * 3, (budget, len(out))
+        _, _, body = out.partition("\n\n")
+        assert "NODE target [" in body, (budget, out)
+
+
+@pytest.mark.parametrize("filter_kind", ["explicit", "inferred"])
+def test_budget_boundary_with_context_filtering(filter_kind):
+    """Context filtering must not break allocation or lose the queried seed."""
+    graph = _seed_starved_graph()
+    question = "who calls target" if filter_kind == "inferred" else "target"
+    filters = None if filter_kind == "inferred" else ["call"]
+
+    def render(budget):
+        return _query_graph_text(
+            graph, question, depth=2, token_budget=budget, context_filters=filters
+        )
+
+    minimum = _minimum_budget(render)
+    for budget in (minimum, minimum + 1, minimum + 40):
+        out = render(budget)
+        assert len(out) <= budget * 3, (filter_kind, budget, len(out))
+        _, _, body = out.partition("\n\n")
+        assert "NODE target [" in body, (filter_kind, budget, out)
+
+
+def test_relationship_between_two_selected_seeds_is_not_lost():
+    """Both endpoints selected as seeds must still yield their relationship.
+
+    Every seed starts the traversal already visited, so the frontier loop never
+    recorded an edge between two seeds and a real relationship disappeared from
+    the evidence exactly when the query matched both of its endpoints.
+    """
+    graph = nx.Graph()
+    graph.add_node("a", label="target", source_file="a.py", source_location="L1")
+    graph.add_node("b", label="target", source_file="b.py", source_location="L1")
+    graph.add_edge("a", "b", relation="calls", confidence="EXTRACTED")
+
+    def render(budget):
+        return _query_graph_text(graph, "target", depth=1, token_budget=budget)
+
+    out = render(_minimum_budget(render))
+    assert any(line.startswith("EDGE ") for line in out.splitlines()), out
+    assert "calls" in out, out

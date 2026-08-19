@@ -436,3 +436,142 @@ def test_force_guidance_matches_narrow_shrink_semantics() -> None:
 
     assert contradictions == []
     assert unclassified_extract_force == []
+
+
+def test_tracked_ignore_file_has_no_uncommitted_drift() -> None:
+    """The tracked ignore file must never carry uncommitted modifications.
+
+    Local private tooling appended private path names into the tracked ignore
+    file, which published the private taxonomy in GitHub-visible content and
+    dirtied the product delta. Because the same tooling marked that file
+    ``skip-worktree``, the modification was then invisible to ``git status`` and
+    ``git diff`` — the delta looked clean while it was not.
+
+    This compares the working file against its committed blob, so it detects any
+    unauthorised edit without naming a single private path here. It also fails
+    if the file is hidden behind ``skip-worktree``/``assume-unchanged``, since a
+    concealed file cannot be reviewed.
+    """
+    committed = subprocess.run(
+        ["git", "show", "HEAD:.gitignore"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout
+    working = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert working == committed, (
+        "the tracked ignore file has uncommitted modifications; local private "
+        "protection belongs in the untracked local git exclude file, never here"
+    )
+
+    flags = subprocess.run(
+        ["git", "ls-files", "-v", "--", ".gitignore"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.split()
+    assert flags and flags[0] == "H", (
+        f"the tracked ignore file is hidden from review (index flag {flags[:1]}); "
+        "skip-worktree/assume-unchanged conceals real product modifications"
+    )
+
+
+def _budget_guidance_surfaces() -> list[Path]:
+    """Every tracked text surface that could carry budget guidance.
+
+    Deliberately not a hand-picked list. The stale retry transcript also ships
+    inside generated skill artifacts under ``graphify/skills/`` and the
+    per-platform cores, none of which a four-file allow-list ever looked at.
+    ``tests/`` is excluded because the guard patterns necessarily appear here.
+    """
+    tracked = subprocess.run(
+        ["git", "ls-files"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.splitlines()
+    surfaces: list[Path] = []
+    for name in tracked:
+        if name.startswith("tests/"):
+            continue
+        path = ROOT / name
+        if path.is_file() and path.suffix.lower() in GUIDANCE_SUFFIXES:
+            surfaces.append(path)
+    return surfaces
+
+
+def test_budget_guidance_quotes_no_fixed_minimum() -> None:
+    """Documented insufficient-budget guidance must not hardcode a minimum.
+
+    The retry minimum is computed from the graph and the question, so it differs
+    per query. A transcript showing a concrete number (``--budget 112``) reads as
+    a constant, is wrong for every other corpus, and goes stale silently. The
+    guidance must direct readers to the value the command prints.
+    """
+    offenders: list[str] = []
+    # Anchored on the RETRY position, not on a trailing "or higher": a bare
+    # "retry with --budget 112" is the same stale-constant defect and slipped
+    # through a pattern that required the suffix. The failing invocation itself
+    # (``graphify query ... --budget 1``) is input, not guidance, so it is only
+    # flagged when it appears in a retry/minimum recommendation.
+    pattern = re.compile(
+        r"(?:retry\s+with\s+|use\s+|try\s+|minimum\s+(?:is\s+)?)--budget\s+\d+"
+        r"|--budget\s+\d+\s+or\s+higher"
+        r"|minimum\s+(?:required\s+)?budget\s+(?:is\s+)?\d+",
+        re.IGNORECASE,
+    )
+    # Every tracked text surface, not a hand-picked list: the same stale
+    # guidance also ships inside generated skill artifacts, which a four-file
+    # allow-list never inspected.
+    scanned = 0
+    for path in _budget_guidance_surfaces():
+        scanned += 1
+        # Match against WHITESPACE-NORMALIZED text. Scanning line by line missed
+        # a wrapped "retry with\n--budget 112" — the identical defect with a
+        # line break in the middle of it.
+        normalized = " ".join(path.read_text(encoding="utf-8", errors="replace").split())
+        found = pattern.search(normalized)
+        if found:
+            start = max(found.start() - 40, 0)
+            offenders.append(
+                f"{path.relative_to(ROOT)}: ...{normalized[start : found.end() + 40]}..."
+            )
+
+    assert scanned > 20, f"surface enumeration collapsed to {scanned} files"
+    assert offenders == [], (
+        "guidance hardcodes a budget minimum; the value is query-dependent and "
+        "must be shown as a placeholder. All tracked text surfaces are scanned, "
+        "generated skill artifacts included:\n" + "\n".join(offenders)
+    )
+
+
+def test_budget_guidance_defines_the_primary_record_including_no_relationship_case() -> None:
+    """The documented primary record must cover the disconnected-seed case.
+
+    Describing it only as "the symbol, its first relationship, and that
+    relationship's counterpart" is wrong for a queried symbol with no
+    relationships in the traversed subgraph: there the primary record is the
+    node alone. Leaving that unstated makes the refusal look like a bug.
+    """
+    raw = (ROOT / "docs" / "command-reference.md").read_text(encoding="utf-8")
+    # Collapse wrapping so the assertions test the prose, not the line breaks.
+    reference = " ".join(raw.split())
+
+    assert "### Query Budgets" in raw
+    # The connected definition.
+    assert "first canonical relationship" in reference
+    assert "counterpart" in reference
+    # The disconnected case must be stated explicitly, not left to inference.
+    assert "no relationships in the traversed subgraph" in reference, (
+        "command reference does not state what the primary record is when the "
+        "queried symbol has no relationships"
+    )
+    assert "the primary record is the symbol's node alone" in reference, (
+        "command reference does not say the disconnected primary record is the node alone"
+    )

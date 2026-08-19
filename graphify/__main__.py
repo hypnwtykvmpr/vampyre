@@ -4539,7 +4539,7 @@ def _main_dispatch() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
-        from graphify.serve import _query_graph_text
+        from graphify.serve import InsufficientBudgetError, _query_graph_text
         from graphify import querylog
 
         question = sys.argv[2]
@@ -4608,14 +4608,25 @@ def _main_dispatch() -> None:
 
         _t0 = _time.perf_counter()
         _mode = "dfs" if use_dfs else "bfs"
-        _result = _query_graph_text(
-            G,
-            question,
-            mode=_mode,
-            depth=2,
-            token_budget=budget,
-            context_filters=context_filters,
-        )
+        try:
+            _result = _query_graph_text(
+                G,
+                question,
+                mode=_mode,
+                depth=2,
+                token_budget=budget,
+                context_filters=context_filters,
+            )
+        except InsufficientBudgetError as exc:
+            # Compatibility event: prior releases returned truncated apparent
+            # success (exit 0) for a budget that could not hold one complete
+            # record. Refusing with an actionable retry budget is the fix.
+            print(
+                f"error: --budget {budget} is too small for one complete evidence record; "
+                f"retry with --budget {exc.required_minimum} or higher",
+                file=sys.stderr,
+            )
+            sys.exit(2)
         querylog.log_query(
             kind="query",
             question=question,

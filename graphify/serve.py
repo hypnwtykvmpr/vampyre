@@ -11,6 +11,7 @@ from collections import OrderedDict
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from weakref import WeakKeyDictionary
 
 import networkx as nx
 from graphify import paths as _paths
@@ -359,15 +360,26 @@ _SUBSTRING_MATCH_BONUS = 1.0
 _SOURCE_MATCH_BONUS = 0.5
 
 
+# Query-time derived caches are keyed by graph-object identity and held weakly,
+# never written into G.graph. Storing them in graph payload made a query mutate
+# graph state: the trigram postings hold array('i') values, which are not JSON
+# representable, so re-deriving GraphState from a queried graph raised
+# GraphStateError. Weak identity keys preserve the previous invalidation
+# behaviour exactly — a hot-reload that swaps in a fresh graph object gets a
+# fresh entry, and the superseded entry is collected with the old graph.
+_IDF_CACHE: WeakKeyDictionary = WeakKeyDictionary()
+_TRIGRAM_INDEX_CACHE: WeakKeyDictionary = WeakKeyDictionary()
+
+
 def _compute_idf(G: nx.Graph, terms: list[str]) -> dict[str, float]:
-    """IDF weights for query terms, cached in G.graph['_idf_cache'].
+    """IDF weights for query terms, cached per graph object outside graph state.
 
     Common terms like 'error' or 'exception' that match hundreds of nodes get
     low weights; rare identifiers like 'FooBarService' get high weights.
-    Cache is stored on the graph object itself so it auto-invalidates when
-    a hot-reload replaces G with a new object.
+    The cache is keyed by the graph object so it auto-invalidates when a
+    hot-reload replaces G with a new object.
     """
-    cache: dict[str, float] = G.graph.setdefault("_idf_cache", {})
+    cache: dict[str, float] = _IDF_CACHE.setdefault(G, {})
     N = G.number_of_nodes() or 1
     uncached = [t for t in terms if t not in cache]
     if uncached:
@@ -417,11 +429,12 @@ def _node_search_text(data: dict, nid: str) -> str:
 def _get_trigram_index(G: nx.Graph) -> dict:
     """Lazily build and cache a trigram -> node-position postings map on the graph.
 
-    Cached on `G.graph` so it auto-invalidates when a hot-reload swaps in a
-    fresh graph object, exactly like `_idf_cache`. `set_cache` memoizes per-trigram
-    id-sets across queries within one graph generation.
+    Keyed by graph-object identity outside graph state, so it auto-invalidates
+    when a hot-reload swaps in a fresh graph object, exactly like `_idf_cache`.
+    `set_cache` memoizes per-trigram id-sets across queries within one graph
+    generation.
     """
-    idx = G.graph.get("_trigram_index")
+    idx = _TRIGRAM_INDEX_CACHE.get(G)
     if idx is not None:
         return idx
     ids = list(G.nodes())
@@ -434,7 +447,7 @@ def _get_trigram_index(G: nx.Graph) -> dict:
                 postings[g] = bucket
             bucket.append(i)
     idx = {"ids": ids, "postings": postings, "set_cache": {}}
-    G.graph["_trigram_index"] = idx
+    _TRIGRAM_INDEX_CACHE[G] = idx
     return idx
 
 
@@ -707,7 +720,30 @@ def _bfs(G: nx.Graph, start_nodes: list[Any], depth: int) -> tuple[set[Any], lis
                     edges_seen.append((n, neighbor))
         visited.update(next_frontier)
         frontier = next_frontier
+    edges_seen.extend(_seed_pair_edges(G, start_nodes, edges_seen))
     return visited, edges_seen
+
+
+def _seed_pair_edges(G: nx.Graph, start_nodes: list[Any], edges_seen: list[tuple]) -> list[tuple]:
+    """Relationships whose endpoints are BOTH selected seeds.
+
+    Every seed begins the traversal already visited, so the frontier loop never
+    records an edge between two of them: a real relationship vanished from the
+    evidence precisely when a query selected both of its endpoints. Emitted in
+    canonical seed order so the addition stays deterministic.
+    """
+    known = set(edges_seen)
+    if not G.is_directed():
+        known |= {(v, u) for u, v in edges_seen}
+    ordered = sorted(set(start_nodes), key=stable_value_key)
+    extra: list[tuple] = []
+    for index, source in enumerate(ordered):
+        for target in ordered[index + 1 :]:
+            if G.has_edge(source, target) and (source, target) not in known:
+                extra.append((source, target))
+            if G.is_directed() and G.has_edge(target, source) and (target, source) not in known:
+                extra.append((target, source))
+    return extra
 
 
 def _dfs(G: nx.Graph, start_nodes: list[Any], depth: int) -> tuple[set[Any], list[tuple]]:
@@ -733,7 +769,34 @@ def _dfs(G: nx.Graph, start_nodes: list[Any], depth: int) -> tuple[set[Any], lis
             if neighbor not in visited:
                 stack.append((neighbor, d + 1))
                 edges_seen.append((node, neighbor))
+    edges_seen.extend(_seed_pair_edges(G, start_nodes, edges_seen))
     return visited, edges_seen
+
+
+class InsufficientBudgetError(ValueError):
+    """The token budget cannot hold one complete primary evidence unit.
+
+    Carries the deterministic minimum budget that would satisfy the request, so
+    callers can surface an actionable retry instead of a partial record or a
+    header-only apparent success.
+    """
+
+    def __init__(self, required_minimum: int) -> None:
+        self.required_minimum = required_minimum
+        super().__init__(
+            f"token budget too small for one complete evidence unit; "
+            f"minimum required is {required_minimum}"
+        )
+
+
+def _estimate_tokens_for_budget(character_count: int) -> int:
+    """Deterministic budget estimator: ceil(code points / 3).
+
+    This is the estimator the renderer budgets against. It is an estimate, not
+    an exact model tokenizer count, and every budget surface uses this one
+    function so guidance and enforcement cannot diverge.
+    """
+    return -(-max(character_count, 0) // 3)
 
 
 def _subgraph_to_text(
@@ -743,14 +806,27 @@ def _subgraph_to_text(
     token_budget: int = 2000,
     *,
     seeds: list[str] | None = None,
+    reserved_chars: int = 0,
 ) -> str:
-    """Render subgraph as text, cutting at token_budget (approx 3 chars/token).
+    """Render subgraph as text within token_budget (approx 3 chars/token).
 
     seeds: exact-match nodes rendered first before the degree-sorted expansion,
     so the queried symbol always appears at the top of the output.
+    reserved_chars: characters already spent by the caller (the header and its
+    blank-line separator), so the budget governs the COMPLETE response.
+
+    Raises InsufficientBudgetError when one complete primary unit cannot fit.
     """
     char_budget = token_budget * 3
     lines = []
+    # Evidence units are tracked by IDENTITY, not by rendered position. Two
+    # distinct records can render to identical text, so selecting the primary
+    # unit by scanning line prefixes picks the wrong record.
+    node_lines: list[tuple[Any, str]] = []
+    # (source, target, rendered line, keyed-record count). The record count comes
+    # from the relationship envelope, so omission accounting reports omitted
+    # KEYED RECORDS rather than rendered bundles.
+    edge_entries: list[tuple[Any, Any, str, int]] = []
     # Work-memory overlay (derived sidecar) stashed on the graph at load time.
     # Empty when no sidecar exists, so un-annotated output stays byte-identical.
     overlay = getattr(G, "graph", {}).get("_learning_overlay", {}) or {}
@@ -782,6 +858,7 @@ def _subgraph_to_text(
             f"{learning_suffix}]"
         )
         lines.append(line)
+        node_lines.append((nid, line))
     for u, v in edges:
         if u in nodes and v in nodes:
             # _bfs/_dfs collect edges via G.neighbors(n), which yields SUCCESSORS
@@ -815,19 +892,181 @@ def _subgraph_to_text(
                 f"{sanitize_label(G.nodes[v].get('label', v))}"
             )
             lines.append(line)
-    output = "\n".join(lines)
-    if len(output) > char_budget:
-        cut_at = output[:char_budget].rfind("\n")
-        cut_at = cut_at if cut_at > 0 else char_budget
-        total_nodes = sum(1 for label in lines if label.startswith("NODE "))
-        shown_nodes = output[:cut_at].count("\nNODE ") + (1 if output.startswith("NODE ") else 0)
-        cut_count = total_nodes - shown_nodes
-        output = (
-            output[:cut_at]
-            + f"\n... (truncated — {cut_count} more nodes cut by ~{token_budget}-token budget."
+            edge_entries.append((u, v, line, int(env["count"])))
+    # ---- budget allocation over atomic evidence units --------------------
+    # Allocation admits COMPLETE units. Line-level admission could emit a
+    # relationship whose endpoint node had been dropped, producing evidence that
+    # referenced a record not present in the response.
+    available = char_budget - reserved_chars
+    total_node_count = len(node_lines)
+    total_edge_records = sum(count for _, _, _, count in edge_entries)
+    rendered_node_ids = {nid for nid, _ in node_lines}
+
+    def _notice(cut_nodes: int, budget: int, cut_records: int = 0) -> str:
+        # The notice embeds the budget, so its own length varies with the budget
+        # being solved for. It is therefore a parameter, not a closure capture.
+        # Omitted KEYED RECORDS are reported too: counting only nodes let a
+        # budget silently drop relationship evidence with no accounting, and
+        # counting rendered bundles under-reported parallel-edge omissions.
+        edge_note = f" {cut_records} relationships omitted." if cut_records > 0 else ""
+        return (
+            f"... (truncated — {cut_nodes} more nodes cut by ~{budget}-token budget.{edge_note}"
             f" Narrow with context_filter=['call'] or use get_node for a specific symbol)"
         )
-    return output
+
+    def _render(node_ids: set, edge_idx: set, budget: int) -> str:
+        # Rendering order is independent of admission order: node lines keep
+        # their canonical order, then edge lines, so output stays byte-stable.
+        kept = [line for nid, line in node_lines if nid in node_ids]
+        kept += [edge_entries[i][2] for i in sorted(edge_idx)]
+        shown_records = sum(edge_entries[i][3] for i in edge_idx)
+        cut_nodes = total_node_count - len(node_ids & rendered_node_ids)
+        cut_records = total_edge_records - shown_records
+        if cut_nodes <= 0 and cut_records <= 0:
+            return "\n".join(kept)
+        return "\n".join(kept + [_notice(max(cut_nodes, 0), budget, max(cut_records, 0))])
+
+    # The primary unit: primary seed, the first canonical traversal relationship
+    # incident from it, and that relationship's actual counterpart node.
+    primary_seed = next((nid for nid in (seeds or []) if nid in rendered_node_ids), None)
+    if primary_seed is None:
+        primary_seed = node_lines[0][0] if node_lines else None
+
+    primary_nodes: set = set()
+    primary_edges: set = set()
+    if primary_seed is not None:
+        primary_nodes.add(primary_seed)
+        for index, (u, v, _, _) in enumerate(edge_entries):
+            if primary_seed not in (u, v):
+                continue
+            counterpart = v if u == primary_seed else u
+            if counterpart in rendered_node_ids:
+                primary_nodes.add(counterpart)
+            primary_edges.add(index)
+            break
+
+    # Expansion units are atomic: each carries its relationship plus every
+    # endpoint node not already guaranteed by an earlier unit.
+    #
+    # Allocation ORDER is policy, not an implementation detail. Emitting every
+    # relationship expansion before secondary seeds let expansion from one seed
+    # consume the packet before another selected seed appeared — the same
+    # discovery failure as the original seed omission, one level down.
+    def _unit_for_edge(index: int) -> tuple[set, set]:
+        source, target, _, _ = edge_entries[index]
+        return ({end for end in (source, target) if end in rendered_node_ids}, {index})
+
+    expansion_units: list[tuple[set, set]] = []
+    placed_edges = set(primary_edges)
+
+    # 2. one further expansion originating from the primary seed
+    for index, (u, v, _, _) in enumerate(edge_entries):
+        if index in placed_edges or primary_seed is None or primary_seed not in (u, v):
+            continue
+        expansion_units.append(_unit_for_edge(index))
+        placed_edges.add(index)
+        break
+
+    # 3. secondary seed node units, in the order the seeds were supplied
+    for nid in seeds or []:
+        if nid in rendered_node_ids and nid != primary_seed:
+            expansion_units.append(({nid}, set()))
+
+    # 4. remaining relationships in canonical traversal order
+    for index in range(len(edge_entries)):
+        if index in placed_edges:
+            continue
+        expansion_units.append(_unit_for_edge(index))
+        placed_edges.add(index)
+
+    # 5. remaining standalone nodes
+    for nid, _ in node_lines:
+        expansion_units.append(({nid}, set()))
+
+    # The true minimum is the cheaper of rendering everything (no notice needed)
+    # and the fixed point for the primary unit plus its notice. Solving only the
+    # latter over-reported the minimum whenever the whole response was cheaper
+    # than a truncated one.
+    full_chars = len("\n".join(line for _, line in node_lines))
+    if edge_entries:
+        full_chars += 1 + len("\n".join(entry[2] for entry in edge_entries))
+    full_budget = _estimate_tokens_for_budget(full_chars + reserved_chars)
+
+    def _primary_fixed_point() -> int:
+        guess = 1
+        for _ in range(8):
+            chars = len(_render(primary_nodes, primary_edges, guess)) + reserved_chars
+            candidate = _estimate_tokens_for_budget(chars)
+            if candidate == guess:
+                break
+            guess = candidate
+        return guess
+
+    minimum = full_budget if not node_lines else min(full_budget, _primary_fixed_point())
+    if not lines or token_budget < minimum:
+        raise InsufficientBudgetError(minimum)
+
+    # Complete-response fast path. It must precede greedy admission: a partial
+    # state carries a truncation notice that the complete response does not, so
+    # intermediate trials can be rejected on notice cost alone while the whole
+    # response would have fitted comfortably.
+    all_nodes = set(rendered_node_ids)
+    all_edges = set(range(len(edge_entries)))
+    complete = _render(all_nodes, all_edges, token_budget)
+    if len(complete) <= available:
+        return complete
+
+    # Admission tracks lengths incrementally. Re-rendering the whole response per
+    # trial made allocation quadratic in the number of evidence units, which is a
+    # real cost on large subgraphs, not merely a slow test.
+    node_len = {nid: len(line) for nid, line in node_lines}
+    edge_len = [len(entry[2]) for entry in edge_entries]
+
+    def _projected_length(node_chars, edge_chars, line_count, shown_records, node_count) -> int:
+        total = node_chars + edge_chars + max(line_count - 1, 0)
+        cut_nodes = total_node_count - node_count
+        cut_records = total_edge_records - shown_records
+        if cut_nodes > 0 or cut_records > 0:
+            notice = _notice(max(cut_nodes, 0), token_budget, max(cut_records, 0))
+            total += 1 + len(notice)
+        return total
+
+    admitted_nodes = set(primary_nodes)
+    admitted_edges = set(primary_edges)
+    node_chars = sum(node_len[nid] for nid in admitted_nodes)
+    edge_chars = sum(edge_len[i] for i in admitted_edges)
+    shown_records = sum(edge_entries[i][3] for i in admitted_edges)
+
+    # Admitted evidence is a PREFIX of the priority list: allocation stops at the
+    # first unit that does not fit rather than skipping it. Continuing past a
+    # rejected unit made admission non-monotonic — a lower-priority secondary
+    # seed could appear at one budget and vanish at a larger one once a
+    # higher-priority expansion became affordable.
+    for unit_nodes, unit_edges in expansion_units:
+        new_nodes = unit_nodes - admitted_nodes
+        new_edges = unit_edges - admitted_edges
+        if not new_nodes and not new_edges:
+            continue
+        trial_node_chars = node_chars + sum(node_len[nid] for nid in new_nodes)
+        trial_edge_chars = edge_chars + sum(edge_len[i] for i in new_edges)
+        trial_records = shown_records + sum(edge_entries[i][3] for i in new_edges)
+        trial_node_count = len(admitted_nodes) + len(new_nodes)
+        trial_lines = trial_node_count + len(admitted_edges) + len(new_edges)
+        if (
+            _projected_length(
+                trial_node_chars, trial_edge_chars, trial_lines, trial_records, trial_node_count
+            )
+            > available
+        ):
+            break
+        admitted_nodes |= new_nodes
+        admitted_edges |= new_edges
+        node_chars, edge_chars, shown_records = (
+            trial_node_chars,
+            trial_edge_chars,
+            trial_records,
+        )
+    return _render(admitted_nodes, admitted_edges, token_budget)
 
 
 def _query_graph_text(
@@ -881,7 +1120,22 @@ def _query_graph_text(
         header_parts.append(f"Context: {', '.join(resolved_filters)} ({filter_source})")
     header_parts.append(f"{len(nodes)} nodes found")
     header = " | ".join(header_parts) + "\n\n"
-    return header + _subgraph_to_text(traversal_graph, nodes, edges, token_budget)
+    # Seeds are rendered ahead of the degree-sorted expansion so the queried
+    # symbol cannot be cut from its own answer by high-degree neighbours at a
+    # small budget. _subgraph_to_text has supported this since it was written;
+    # omitting the argument here left the header naming a seed whose node
+    # evidence never appeared in the body.
+    # The header is part of the rendered response, so it counts against the
+    # budget. Excluding it let every query overrun its stated budget by the
+    # header size.
+    return header + _subgraph_to_text(
+        traversal_graph,
+        nodes,
+        edges,
+        token_budget,
+        seeds=start_nodes,
+        reserved_chars=len(header),
+    )
 
 
 def _find_node(G: nx.Graph, label: str) -> list[Any]:
@@ -1826,10 +2080,12 @@ def _build_server(
                 return "Could not generate questions."
         raise ValueError(f"Unknown resource: {uri_str}")
 
-    def _tool_error(code: str, message: str) -> types.CallToolResult:
+    def _tool_error(code: str, message: str, **fields: object) -> types.CallToolResult:
+        # Extra fields are structured, not prose: a caller must be able to read a
+        # retry budget programmatically rather than parse it out of a sentence.
         return types.CallToolResult(
             content=[types.TextContent(type="text", text=message)],
-            structuredContent={"code": code},
+            structuredContent={"code": code, **fields},
             isError=True,
         )
 
@@ -1852,6 +2108,16 @@ def _build_server(
             return _tool_error("graph_unavailable", "Graph is unavailable.")
         except _GitHubRequestFailed:
             return _tool_error("github_unavailable", "GitHub request failed.")
+        except InsufficientBudgetError as exc:
+            # Must precede the ValueError clause: InsufficientBudgetError is a
+            # ValueError subclass, and the generic invalid_arguments reply would
+            # discard the retry budget the caller needs to succeed.
+            return _tool_error(
+                "insufficient_budget",
+                f"token_budget is too small for one complete evidence record; "
+                f"retry with token_budget {exc.required_minimum} or higher.",
+                required_minimum=exc.required_minimum,
+            )
         except (KeyError, TypeError, ValueError):
             return _tool_error("invalid_arguments", "Tool arguments are invalid.")
         except Exception:

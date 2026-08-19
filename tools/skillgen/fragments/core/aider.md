@@ -1026,9 +1026,11 @@ else:
         subgraph_nodes.update(next_frontier)
         frontier = next_frontier
 
-# Token-budget aware output: rank by relevance, cut at budget (~4 chars/token)
+# Token-budget aware output: rank by relevance, admit COMPLETE records only.
+# ~3 chars/token matches graphify's own estimator. Never slice mid-record: a
+# partial NODE/EDGE line is not evidence.
 token_budget = BUDGET  # default 2000
-char_budget = token_budget * 4
+char_budget = token_budget * 3
 
 # Score each node by term overlap for ranked output
 def relevance(nid):
@@ -1046,10 +1048,23 @@ for u, v in subgraph_edges:
         _raw = G[u][v]; d = next(iter(_raw.values()), {}) if isinstance(G, nx.MultiGraph) else _raw
         lines.append(f'  EDGE {G.nodes[u].get(\"label\",u)} --{d.get(\"relation\",\"\")} [{d.get(\"confidence\",\"\")}]--> {G.nodes[v].get(\"label\",v)}')
 
-output = '\n'.join(lines)
-if len(output) > char_budget:
-    output = output[:char_budget] + f'\n... (truncated at ~{token_budget} token budget - use --budget N for more)'
-print(output)
+notice = f'... (truncated at ~{token_budget} token budget - use --budget N for more)'
+whole = '\n'.join(lines)
+if len(whole) <= char_budget:
+    print(whole)
+else:
+    admitted, used = [], 0
+    for line in lines:
+        projected = used + (1 if admitted else 0) + len(line)
+        if projected + 1 + len(notice) > char_budget:
+            break
+        admitted.append(line); used = projected
+    if len(admitted) < 2:
+        # Header-only output is apparent success with no evidence: refuse and
+        # name a budget that fits the header plus one complete record.
+        need = -(-(len(lines[0]) + 1 + len(lines[1]) + 1 + len(notice)) // 3) if len(lines) > 1 else 1
+        raise SystemExit(f'budget too small for one complete record; use --budget {need} or higher')
+    print('\n'.join(admitted) + '\n' + notice)
 "
 ```
 

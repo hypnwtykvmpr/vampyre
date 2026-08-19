@@ -215,6 +215,36 @@ def test_query_graph_refuses_unbounded_arguments(tmp_path, arguments):
     assert result["structuredContent"] == {"code": "invalid_arguments"}
 
 
+def test_query_graph_insufficient_budget_returns_numeric_retry_minimum(tmp_path):
+    """A budget too small for one complete record is a typed, actionable error.
+
+    The retry budget must be a structured numeric field: a caller has to read it
+    programmatically rather than parse it out of the prose message.
+    """
+    app = serve_mod._build_http_app(_graph_file(tmp_path), json_response=True)
+    with _client(app) as client:
+        headers = _init_session(client)
+        result = _call_tool_result(
+            client, headers, "query_graph", {"question": "alpha", "token_budget": 1}, rid=2
+        )
+        assert result["isError"] is True
+        structured = result["structuredContent"]
+        assert structured["code"] == "insufficient_budget", structured
+        minimum = structured["required_minimum"]
+        assert isinstance(minimum, int) and not isinstance(minimum, bool), structured
+        assert minimum > 1
+
+        # Retrying at the reported minimum must actually succeed.
+        retried = _call_tool_result(
+            client,
+            headers,
+            "query_graph",
+            {"question": "alpha", "token_budget": minimum},
+            rid=3,
+        )
+        assert retried.get("isError") is not True, retried
+
+
 def _project_with_graph(tmp_path, node_count: int) -> str:
     """Create ``<proj>/graphify-out/graph.json`` and return the project dir."""
     proj = tmp_path / "proj"

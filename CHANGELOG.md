@@ -2,6 +2,12 @@
 
 Full release notes with details on each version: [GitHub Releases](https://github.com/hypnwtykvmpr/vampyre/releases)
 
+## Unreleased
+
+- Fix: `query` now renders the symbol you asked about. Seeds were selected and named in the response header but never passed to the renderer, so the queried symbol competed with its own neighbours in a degree-sorted expansion and a realistic small budget dropped its node evidence entirely — the header named a seed whose source location and relationships never appeared in the body. Seeds are now rendered ahead of the expansion.
+- Breaking/Fix: budget truncation admits complete evidence records only. The renderer previously joined all output and sliced it at a character offset, which could split a `NODE` or `EDGE` record and present the fragment as evidence. **Compatibility event:** a `--budget` too small to hold one complete record previously returned truncated apparent success with exit `0`; it now fails with exit `2` and names the minimum retry budget. The MCP `query_graph` tool returns a typed `insufficient_budget` error carrying the same minimum instead of the generic `invalid_arguments` reply.
+- Fix: graph queries no longer mutate graph state. The trigram index and IDF cache were stored in `G.graph`, so running a query wrote derived data into graph payload; because the trigram postings hold `array('i')` values, which are not JSON representable, re-deriving graph state from a queried graph raised `GraphStateError`. Both caches now live outside graph state, keyed by graph-object identity, preserving the previous hot-reload invalidation.
+
 ## 0.9.5 (2026-08-11)
 
 - Release: publish Vampyre as an independent repository detached from its former fork network, with this repository as the canonical source for documentation, security policy, support, and releases. The release uses exact-tag uv installation, native Windows/macOS/Linux wheel smoke tests, OS-specific bundles, a deterministic self-graph archive, and SHA-256 checksums.

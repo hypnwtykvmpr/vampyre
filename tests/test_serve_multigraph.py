@@ -12,8 +12,10 @@ from __future__ import annotations
 import re
 
 import networkx as nx
+import pytest
 
 from graphify.serve import (
+    InsufficientBudgetError,
     _bfs,
     _neighbors_text,
     _query_graph_text,
@@ -428,3 +430,193 @@ def test_serve_simple_graph_query_cli_text_unchanged():
     assert "Traversal: BFS depth=2" in text
     assert not _CAPPED_MARKER.search(text)
     assert "calls" in text
+
+
+# ---------------------------------------------------------------------------
+# 4. D0 budget allocation on keyed multigraphs
+# ---------------------------------------------------------------------------
+
+
+def _minimum_budget(render) -> int:
+    try:
+        render(1)
+    except InsufficientBudgetError as excinfo:
+        return excinfo.required_minimum
+    return 1
+
+
+def test_keyed_multigraph_primary_unit_keeps_direction_and_endpoints():
+    """On a directed keyed multigraph the primary unit renders the primary seed,
+    a canonical incident relationship, and that relationship's real counterpart."""
+    graph = _multidigraph_hop(["calls", "imports", "uses"])
+
+    def render(budget):
+        return _query_graph_text(graph, "Alpha", mode="bfs", depth=1, token_budget=budget)
+
+    out = render(_minimum_budget(render))
+    node_labels = {
+        line.split("NODE ", 1)[1].split(" [")[0]
+        for line in out.splitlines()
+        if line.startswith("NODE ")
+    }
+    assert "Alpha" in node_labels, out
+    for line in out.splitlines():
+        if not line.startswith("EDGE "):
+            continue
+        body = line[len("EDGE ") :]
+        source, target = body.split(" --", 1)[0], body.rsplit("--> ", 1)[1]
+        assert source in node_labels, out
+        assert target in node_labels, out
+
+
+def _directed_seed_pair_graph() -> nx.MultiDiGraph:
+    """Two seeds with DISTINCT labels and relationships in BOTH directions.
+
+    Distinct labels matter because identical labels make any
+    ``source == "target"`` assertion vacuous — it holds whichever way the edge
+    renders. The simultaneous reverse record matters because the recovery helper
+    has a separate reverse-direction branch; a forward-only fixture leaves that
+    branch with no falsifier, so deleting it would break nothing.
+    """
+    graph = nx.MultiDiGraph()
+    graph.add_node("A", label="alpha-target", source_file="a.py", source_location="L1")
+    graph.add_node("B", label="beta-target", source_file="b.py", source_location="L2")
+    for key, relation in (("k1", "calls"), ("k2", "imports")):
+        graph.add_edge("A", "B", key=key, relation=relation, confidence="EXTRACTED")
+    graph.add_edge("B", "A", key="k3", relation="returns", confidence="EXTRACTED")
+    return graph
+
+
+def _edge_lines(out: str) -> list[str]:
+    """Rendered EDGE lines, in order, WITHOUT deduplication.
+
+    Keying by (source, target) is last-write-wins: a mutation that emits the
+    same relationship twice collapses into one entry and goes unnoticed. Callers
+    must assert against this list so duplicates are visible.
+    """
+    return [line for line in out.splitlines() if line.startswith("EDGE ")]
+
+
+def _edges_by_direction(out: str) -> dict[tuple[str, str], str]:
+    """Rendered EDGE lines keyed by direction, refusing duplicate directions."""
+    found: dict[tuple[str, str], str] = {}
+    for line in _edge_lines(out):
+        key = _edge_endpoints(line)
+        assert key not in found, f"duplicate rendered relationship for {key}:\n{out}"
+        found[key] = line
+    return found
+
+
+def _edge_endpoints(line: str) -> tuple[str, str]:
+    body = line[len("EDGE ") :]
+    return body.split(" --", 1)[0], body.rsplit("--> ", 1)[1]
+
+
+@pytest.mark.parametrize("mode", ["bfs", "dfs"])
+def test_directed_keyed_seed_pair_relationship_survives(mode):
+    """Both endpoints selected as seeds must still yield their keyed relationships.
+
+    Every seed begins the traversal already visited, so the frontier loop never
+    recorded an edge between two seeds: on a keyed multigraph every parallel
+    record between the pair disappeared at once.
+    """
+    graph = _directed_seed_pair_graph()
+    out = _query_graph_text(graph, "target", mode=mode, depth=1, token_budget=4000)
+
+    # EXACT line count first: the fixture has one bundle per direction, so any
+    # duplicate emission is a defect, not a cosmetic repeat.
+    lines = _edge_lines(out)
+    assert len(lines) == 2, (out, lines)
+    assert len(set(lines)) == 2, f"duplicate relationship lines emitted:\n{out}"
+
+    by_direction = _edges_by_direction(out)
+    forward = ("alpha-target", "beta-target")
+    reverse = ("beta-target", "alpha-target")
+
+    # BOTH directions must be recovered. A forward-only assertion leaves the
+    # helper's reverse-direction branch with no falsifier.
+    assert forward in by_direction, (out, sorted(by_direction))
+    assert reverse in by_direction, (out, sorted(by_direction))
+
+    # EXACT keyed multiplicity, not presence-only: the forward bundle carries
+    # exactly k1 and k2, and no other key.
+    forward_line = by_direction[forward]
+    assert "2 records" in forward_line, forward_line
+    assert sorted(re.findall(r"key=(\w+)", forward_line)) == ["k1", "k2"], forward_line
+    assert "calls" in forward_line and "imports" in forward_line, forward_line
+
+    # The reverse record carries exactly k3 and its own relation, with no
+    # bleed-through in either direction.
+    reverse_line = by_direction[reverse]
+    assert sorted(re.findall(r"key=(\w+)", reverse_line)) in ([], ["k3"]), reverse_line
+    assert "returns" in reverse_line, reverse_line
+    assert "returns" not in forward_line, forward_line
+    assert "calls" not in reverse_line and "imports" not in reverse_line, reverse_line
+
+
+@pytest.mark.parametrize("mode", ["bfs", "dfs"])
+def test_directed_keyed_seed_pair_survives_at_exact_minimum(mode):
+    """The recovered relationship must be present at the reported minimum budget,
+    not only at a generous one."""
+    graph = _directed_seed_pair_graph()
+
+    def render(budget):
+        return _query_graph_text(graph, "target", mode=mode, depth=1, token_budget=budget)
+
+    minimum = _minimum_budget(render)
+    out = render(minimum)
+    assert len(out) <= minimum * 3, (mode, minimum, len(out))
+    by_direction = _edges_by_direction(out)
+    assert by_direction, out
+    # At the exact minimum only the primary unit is guaranteed, so require the
+    # primary seed's own outgoing record rather than the whole pair.
+    assert ("alpha-target", "beta-target") in by_direction, (out, sorted(by_direction))
+
+
+def test_directed_seed_pair_direction_is_not_reversed():
+    """Control: the direction assertion must fail on a reversed fixture.
+
+    If this stops detecting a reversed edge, the direction assertions above are
+    proving nothing.
+    """
+    reversed_graph = nx.MultiDiGraph()
+    reversed_graph.add_node("A", label="alpha-target", source_file="a.py", source_location="L1")
+    reversed_graph.add_node("B", label="beta-target", source_file="b.py", source_location="L2")
+    reversed_graph.add_edge("B", "A", key="k1", relation="calls", confidence="EXTRACTED")
+
+    out = _query_graph_text(reversed_graph, "target", depth=1, token_budget=4000)
+    edges = [line for line in out.splitlines() if line.startswith("EDGE ")]
+    assert edges, out
+    assert _edge_endpoints(edges[0]) == ("beta-target", "alpha-target"), edges
+
+
+def test_directed_seed_pair_edges_are_order_independent():
+    """The recovered seed-pair relationship must not depend on insertion order."""
+
+    def build(order):
+        graph = nx.MultiDiGraph()
+        for node, label, src in order:
+            graph.add_node(node, label=label, source_file=src, source_location="L1")
+        graph.add_edge("A", "B", key="k1", relation="calls", confidence="EXTRACTED")
+        return graph
+
+    first = build([("A", "alpha-target", "a.py"), ("B", "beta-target", "b.py")])
+    second = build([("B", "beta-target", "b.py"), ("A", "alpha-target", "a.py")])
+    assert _query_graph_text(first, "target", depth=1, token_budget=4000) == _query_graph_text(
+        second, "target", depth=1, token_budget=4000
+    )
+
+
+def test_keyed_multigraph_budget_never_splits_a_parallel_bundle():
+    """A budget cut may drop a whole relationship bundle but must never emit a
+    partial record, and the response must stay inside the stated budget."""
+    graph = _multidigraph_hop(["calls", "imports", "uses", "extends"])
+    minimum = _minimum_budget(
+        lambda b: _query_graph_text(graph, "Alpha", mode="bfs", depth=1, token_budget=b)
+    )
+    for budget in range(minimum, minimum + 60, 4):
+        out = _query_graph_text(graph, "Alpha", mode="bfs", depth=1, token_budget=budget)
+        assert len(out) <= budget * 3, (budget, len(out))
+        for line in out.splitlines():
+            if line.startswith("EDGE "):
+                assert "-->" in line, (budget, line)

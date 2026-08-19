@@ -81,6 +81,37 @@ shrink.
 | `graphify diagnose multigraph` | Report same-endpoint relationship collapse risk. |
 | `graphify tree` | Generate an interactive file/symbol hierarchy. |
 
+### Query Budgets
+
+`graphify query --budget N` bounds the response. The queried symbol is rendered
+first, so it can never be crowded out of its own answer by higher-degree
+neighbours, and the budget admits **complete evidence records only** — a `NODE`
+or `EDGE` record is never split, and a relationship is never emitted without
+both of its endpoint nodes. When records are dropped, the truncation line
+reports how many nodes and keyed relationships were omitted.
+
+The primary record is the queried symbol together with its first canonical
+relationship and that relationship's counterpart node. When the queried symbol
+has no relationships in the traversed subgraph, the primary record is the
+symbol's node alone.
+
+A budget too small to hold that primary record is refused rather than answered
+partially. The reported minimum is computed from the actual graph and question,
+so it varies by query — use the value the command prints, not a fixed number:
+
+```console
+$ graphify query "extract" --budget 1
+error: --budget 1 is too small for one complete evidence record; retry with --budget N or higher
+$ echo $?
+2
+```
+
+Earlier releases returned a truncated apparent success with exit `0` for the
+same request. Scripts that check the exit status will now see `2` and can retry
+at the reported minimum. Over MCP the same condition returns
+`isError: true` with structured content
+`{"code": "insufficient_budget", "required_minimum": <int>}`.
+
 Query results can feed deterministic work memory:
 
 ```sh

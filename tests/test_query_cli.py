@@ -52,6 +52,42 @@ def test_query_cli_heuristic_context_filter(monkeypatch, tmp_path, capsys):
     assert "build" not in out
 
 
+def _run_query_cli(monkeypatch, graph_path, budget):
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(
+        mainmod.sys,
+        "argv",
+        ["graphify", "query", "extract", "--graph", str(graph_path), "--budget", str(budget)],
+    )
+    mainmod.main()
+
+
+def test_query_cli_refuses_budget_below_one_record_with_actionable_retry(
+    monkeypatch, tmp_path, capsys
+):
+    """Compatibility event: a budget too small used to return truncated apparent
+    success with exit 0. It must now fail loudly and name a usable retry budget."""
+    import re
+
+    import pytest
+
+    graph_path = _write_graph(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        _run_query_cli(monkeypatch, graph_path, budget=1)
+    assert excinfo.value.code == 2
+
+    err = capsys.readouterr().err
+    match = re.search(r"--budget (\d+) or higher", err)
+    assert match, err
+    minimum = int(match.group(1))
+    assert minimum > 1
+
+    # Retrying at the reported budget must succeed and render the queried symbol.
+    _run_query_cli(monkeypatch, graph_path, budget=minimum)
+    out = capsys.readouterr().out
+    assert "NODE extract [" in out, out
+
+
 def test_query_cli_rejects_oversized_graph(monkeypatch, tmp_path, capsys):
     """#F4: query CLI must refuse to parse a graph.json that exceeds the cap."""
     import pytest
