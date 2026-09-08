@@ -91,7 +91,7 @@ dev = [
     "bandit>=1.9.4",
     "build>=1.5.0",
     # Starlette >=1.3 TestClient uses httpx2; keep strict HTTP tests warning-free.
-    "httpx2>=2.9.1,<3",
+    "httpx2>=2.12.0,<3",
     "nuitka>=4.1",
     "patchelf>=0.17.2.4 ; sys_platform != 'win32'",
     "pip-audit>=2.10.0",
